@@ -11,7 +11,10 @@ mod:
   point to an empty model, and hidden `create:hz_*` blocks hold the real
   models, which the native mod draws turning every frame;
 - blocks get the templates and shapes Create gives them (a thin shaft, a
-  cogwheel's disc, a crank on any face).
+  cogwheel's disc, a crank on any face);
+- the water wheel's OBJ model (`models/block/water_wheel/`), which the
+  native mod reads at runtime, is taken from the jar when the carried
+  content lacks it.
 
 Usage (Python 3.9+):
 
@@ -85,11 +88,11 @@ ROTATING = {
 DIRECTIONAL = {
     "creative_motor": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
     "hand_crank": {"template": "minecraft:lightning_rod", "shape": CRANK, "turns": "create:block/axis"},
-    "water_wheel": {
-        "template": "minecraft:lightning_rod",
-        "shape": box(0, 0, 0, 16, 16, 16),
-        "turns": "block/spruce_planks",
-    },
+    # Its own model is a static frame; the wheel itself is an OBJ model the
+    # native mod draws turning.
+    "water_wheel": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
+    # The casing stays in the chunk mesh; the propeller is a partial.
+    "encased_fan": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
 }
 
 # Machines with item slots: mod block entities need a template that has a
@@ -100,6 +103,9 @@ DIRECTIONAL = {
 CONTAINERS = {
     "depot": {"template": "minecraft:enchanting_table"},
     "millstone": {"template": "minecraft:enchanting_table"},
+    # BasinBlock's `facing` (where it pours out) needs a template property:
+    # it always faces down, into its own output inventory.
+    "basin": {"template": "minecraft:enchanting_table", "model": "create:block/basin/block"},
 }
 
 # NeoForge's convention tags the recipes name and Horizon has no copy of
@@ -109,13 +115,22 @@ CONVENTION_TAGS = {
     "ingots/gold": ["minecraft:gold_ingot"],
     "ingots/copper": ["minecraft:copper_ingot"],
     "ingots/netherite": ["minecraft:netherite_ingot"],
+    "nuggets/iron": ["minecraft:iron_nugget"],
+    "nuggets/gold": ["minecraft:gold_nugget"],
 }
 
 # Horizontal kinetic blocks: a grindstone has a horizontal `facing`, is
 # placed facing the player, needs no support and hides no face next to it (Create's
 # press is open underneath). The native mod stops its menu.
+# AllShapes.MECHANICAL_PROCESSOR_SHAPE: a full block with a 8x8 hole down
+# its middle.
+PROCESSOR = [box(0, 0, 0, 4, 16, 16), box(12, 0, 0, 16, 16, 16), box(4, 0, 0, 12, 16, 4), box(4, 0, 12, 12, 16, 16)]
+
 HORIZONTAL = {
-    "mechanical_press": {"template": "minecraft:grindstone", "shape": box(0, 0, 0, 16, 16, 16)},
+    "mechanical_press": {"template": "minecraft:grindstone", "shapes": [box(0, 0, 0, 16, 16, 16)]},
+    # The mixer has no state of its own: a grindstone hosts it as it does
+    # the press (its menu is stopped), whatever way it faces.
+    "mechanical_mixer": {"template": "minecraft:grindstone", "shapes": PROCESSOR},
 }
 
 # AllPartialModels the renderers draw: hidden blocks holding each model
@@ -125,7 +140,21 @@ PARTIALS = {
     "hand_crank_handle": "create:block/hand_crank/handle",
     "press_head": "create:block/mechanical_press/head",
     "millstone_inner": "create:block/millstone/inner",
+    "encased_fan_inner": "create:block/encased_fan/propeller",
+    "cogwheel_shaftless": "create:block/cogwheel_shaftless",
+    "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
+    "mechanical_mixer_head": "create:block/mechanical_mixer/head",
 }
+
+# AllPartialModels.WATER_WHEEL, an OBJ model (`neoforge:obj`) with its
+# materials and texture parents: read by the native mod at runtime.
+OBJ_FILES = [
+    "assets/create/models/block/water_wheel/wheel.json",
+    "assets/create/models/block/water_wheel/textures.json",
+    "assets/create/models/block/water_wheel/water_wheel.obj",
+    "assets/create/models/block/water_wheel/water_wheel.mtl",
+    "assets/create/models/block/large_wheels.json",
+]
 
 
 def read_json(path):
@@ -210,7 +239,7 @@ def fit(content):
         decl["default_state"] = {"face": "floor"}
         decl["shapes"] = {
             "property": "facing",
-            "values": {f: [spec["shape"]] for f in ["north", "south", "west", "east"]},
+            "values": {f: spec["shapes"] for f in ["north", "south", "west", "east"]},
         }
         write_json(blocks / f"{name}.json", decl)
 
@@ -221,6 +250,8 @@ def fit(content):
         decl.pop("shapes", None)
         decl.setdefault("properties", {})["light"] = 0
         write_json(blocks / f"{name}.json", decl)
+        if "model" in spec:
+            write_json(states / f"{name}.json", {"variants": {"": {"model": spec["model"]}}})
 
     # Horizon reads `data/<ns>/recipe/*.json` only, not its subfolders, where
     # vanilla reads them all (`create:pressing/iron_ingot`): bring each up as
@@ -253,6 +284,27 @@ def fit(content):
         write_json(lang, names)
 
 
+def take_obj_models(jar, out):
+    """Copies the OBJ model files the carried content lacks from the
+    player's jar (for local use only, as the rest of the content)."""
+    import zipfile
+    missing = [f for f in OBJ_FILES if not (out / f).exists()]
+    if not missing:
+        return
+    if jar is None:
+        print(f"warning: no water wheel model in the content ({', '.join(missing)}); give --jar", file=sys.stderr)
+        return
+    with zipfile.ZipFile(jar) as z:
+        names = set(z.namelist())
+        for f in missing:
+            if f not in names:
+                print(f"warning: {f} is not in {jar.name}", file=sys.stderr)
+                continue
+            target = out / f
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(z.read(f))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--jar", type=Path, help="the player's Create jar (create-1.21.1-6.0.10.jar)")
@@ -273,6 +325,7 @@ def main():
             shutil.rmtree(out)
         shutil.copytree(carried, out)
     fit(out)
+    take_obj_models(args.jar.resolve() if args.jar else None, out)
     print(out)
     return 0
 

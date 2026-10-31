@@ -36,9 +36,42 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    slots: hoppers, breaking and saving work as for any container; items placed from the top, falling on it, given
    back to the player), the press over a depot or over items on the ground (`PressingBehaviour`'s 240-tick cycle,
    `create:pressing` recipes, head animation), the millstone (`create:milling`, items thrown on it, outputs to an
-   empty hand), the water wheel (flow score from the fluid's flow around it, 8 RPM, 32 su). Part 2: encased fan
-   processing, mechanical mixer and basin, value boxes (the scroll UI), the wrench; the water wheel's own model
-   (an OBJ mesh: needs an OBJ loader in the mod) and its planks material.
+   empty hand), the water wheel (flow score from the fluid's flow around it, 8 RPM, 32 su).
+   Part 2 (**compiled and unit-tested only, not yet checked in the game**):
+   - Encased fan (`fan.rs`, `AirCurrent`): 2 su, shaft behind it; its current's reach from its speed (3 to 20
+     blocks), stopped by full blocks and reaching into partial ones (`findMaxDepth`), passing `create:fan_transparent`
+     blocks; segments of splashing (water), haunting (soul fire, lit soul campfire), smoking (fire, lit campfire)
+     and blasting (lava), by Create's priorities; item entities in it pushed along and processed after 150 ticks
+     per 16 items (`create:splashing`, `create:haunting`, vanilla smoking, smelting/blasting, items without a
+     smelting result burnt unless fire resistant); a depot's held item in it (or a block below a horizontal
+     current) processed the same way. Rebuilt every 30 ticks and when its speed changes. The propeller partial
+     turns at five times the speed (80 to 1280). Not yet: pushing mobs and players, burning and hurting them,
+     haunting horses, the air particles and sound, crafting remainders of the results, chutes and nozzles.
+   - Mechanical mixer and basin: the mixer (4 su, a small cog, needs 30 RPM) runs `MechanicalMixerBlockEntity`'s
+     40-tick cycle with its `processingTicks` (`log2(512 / speed) * 15 + 1` at the bottom) over a basin two below;
+     the basin is a mod block entity with 9 input and 9 output slots (hoppers in and out, items thrown in, an empty
+     hand takes all). `create:mixing` recipes with items only and no heat (andesite alloy from iron or zinc
+     nuggets...), most ingredients first, results rolled into the output slots (all must fit), mixing again while
+     another batch is there. Pole and head partials go down and up, the head whisking at the head's speed.
+     Skipped and noted: fluids (dough, mud, chocolate, tea, honey, lava, cardboard pulp: fluid ingredients or
+     results), heat (no blaze burner yet: brass and the other heated recipes), shapeless crafting recipes in the
+     mixer (`allowShapelessInMixer`), potion brewing, the basin's filter slot, pouring out sideways (spouts: the
+     template has no `facing`, so it keeps its outputs), its fluid tanks and their rendering. Basins draw their
+     items as `BasinRenderer` places them (no ingredient spin yet).
+   - Value boxes: the creative motor's speed (`ScrollValueBehaviour`, `MotorValueBox` on its sides): looking at
+     the box shows its value over the hotbar, the mouse wheel changes it (Create 0.5's steps: 1, 4, 16, 64; never
+     0), sent on the mod channel `create:values` and checked by the server (reach, game mode, range). Create 6
+     opens a value board on a held right click instead (engine gap below). Right-click stepping is kept.
+   - Wrench (`IWrenchable`): turns shafts, cogwheels, gearboxes (about the clicked face), motors, cranks, water
+     wheels, fans (a quarter turn off the face's axis) and presses (from above or below); sneaking takes ours into
+     the inventory (not in creative), a block entity's items dropped. Through `native_use_item_on`, and through
+     `native_right_click_block` for blocks whose template has a use of its own (press, mixer, millstone, depot,
+     basin), which would take the click first. Not yet: sounds, the wrench's own render and attack on minecarts.
+   - Water wheel model (`obj.rs`): an OBJ/MTL loader reads `wheel.json` (its `model`, `flip_v`, texture parents),
+     `water_wheel.obj` and `.mtl` from the game's resources (the content mod made from the player's jar) at
+     runtime, client side, and draws it turned with `rotateToFaceVertical` and spun with the network, in spruce
+     (the default material: oak planks and log swapped for spruce's). The block's own model (its frame) stays in
+     the chunk mesh. Not yet: other materials (right-clicking planks), the large water wheel.
 4. **Logistics**: belts (their own model and item transport), chutes, funnels, tunnels, mechanical arm,
    deployer, item vaults, fluid pipes and tanks.
 5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions) — need
@@ -49,6 +82,19 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    compatibility with other mods.
 
 ## Engine gaps to raise upstream (as hook point requests)
+
+- A mod-drawn screen outside a container menu, with a free cursor: Create 6's value settings board (hold right
+  click on a value box, pick a value with the mouse) has nowhere to open. The value box takes the mouse wheel
+  instead (`native_wheel`, as Create 0.5 did).
+- Block placement by a template: blocks are placed as their template places itself (a lightning rod faces the
+  clicked face; Create's fan faces away from the player), until a mod can answer `getStateForPlacement`.
+- Basins with a `facing` (pouring sideways onto belts and depots) need a template with a hopper's facing and a
+  block entity; none has both. Basin and depot shapes stay the enchanting table's (12/16 high), so items rest on
+  top instead of inside.
+- Container insertion rules: hoppers fill a basin's input slots as any container's, not as `BasinInventory`
+  (one slot per item kind).
+- Pushing and hurting mobs and players from a native mod's server tick (the fan's current): `native_push_mob`
+  reaches mobs only, players not at all.
 
 - Draw hook for mod block entities (today: a mixin into `transient_block_geometry`), and a per-state "hide from
   the chunk mesh" flag (today: blank blockstate models plus hidden `hz_*` blocks holding the real models).

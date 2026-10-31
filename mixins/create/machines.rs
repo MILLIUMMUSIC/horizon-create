@@ -3,13 +3,22 @@
 // block entities with Horizon's own item slots, so hoppers and breaking work
 // as for any container; the press's work on a depot or on items on the
 // ground (PressingBehaviour, BeltPressingCallbacks); the water wheel's flow
-// (WaterWheelBlockEntity). The rules are in processing.rs and kinetics.rs.
+// (WaterWheelBlockEntity); the basin (BasinBlockEntity) and the mixer's work
+// in it (MechanicalMixerBlockEntity, BasinRecipe); the encased fan's air
+// current over items on the ground and on depots (AirCurrent, FanProcessing).
+// The rules are in processing.rs, fan.rs and kinetics.rs.
 
 use super::Game;
-use super::create_kinetics::{Dir, Kind, Pos};
+use super::create_fan::{
+    AirCurrent, FAN_BLOCK_CHECK_RATE, FanLevel, FanType, Fluid, Obstacle, Processing,
+    aligned_distance_to_face, entity_can_process, entity_decrement, fan_type_at, push,
+    transported_step,
+};
+use super::create_kinetics::{Axis, Dir, Kind, Pos};
 use super::create_processing::{
-    PRESS_CYCLE, PressMode, PressStep, Recipe, ingredient_json, millstone_speed, parse_recipe,
-    roll_results, water_wheel_flow_score,
+    BASIN_SLOTS, BasinRecipe, MixStep, PRESS_CYCLE, PressMode, PressStep, Recipe,
+    apply_processing_on, basin_insert_slot, basin_take, ingredient_json, millstone_speed,
+    multiplied_output, parse_basin_recipe, parse_recipe, roll_results, water_wheel_flow_score,
 };
 use horizon_client::containers::{ModBlockEntity, ModContainer};
 use horizon_client::crafting::Ingredient;
@@ -19,12 +28,28 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 pub(super) const DEPOTS: &str = "create:depots";
-const DEPOT: &str = "create:depot";
+pub(super) const DEPOT: &str = "create:depot";
 const MILLSTONE: &str = "create:millstone";
+pub(super) const BASIN: &str = "create:basin";
 /// DepotBehaviour: the held item, then `processingOutputBuffer`.
 const DEPOT_SLOTS: usize = 9;
 /// MillstoneBlockEntity: `inputInv`, then `outputInv`.
 const MILLSTONE_SLOTS: usize = 10;
+/// BasinBlockEntity: `inputInventory`, then `outputInventory`.
+const BASIN_ALL_SLOTS: usize = 2 * BASIN_SLOTS;
+/// `BasinBlockEntity.recipeBackupCheck`: 20 lazy ticks of 10.
+const BASIN_BACKUP_CHECK: i32 = 200;
+
+/// An encased fan's air current on the server, with its rebuild timer
+/// (`airCurrentUpdateCooldown`) and the speed it was built for.
+#[derive(Default)]
+struct Fan {
+    current: AirCurrent,
+    cooldown: i32,
+    speed: f32,
+}
+
+type BasinRecipes = Vec<(BasinRecipe, Vec<Option<Ingredient>>)>;
 
 #[derive(Default)]
 struct Machines {
@@ -35,6 +60,15 @@ struct Machines {
     /// Depot changes for the level's tick end.
     pending: Vec<(String, Pos, Option<Vec<(String, u32)>>)>,
     random: u64,
+    /// `create:mixing` recipes, most ingredients first, with theirs read.
+    basin_recipes: Option<std::sync::Arc<BasinRecipes>>,
+    /// Each mixer's `currentRecipe`, by id.
+    mixing: HashMap<(String, Pos), String>,
+    /// What each basin held last tick (`contentsChanged`).
+    basins: HashMap<(String, Pos), Vec<(String, u32)>>,
+    fans: HashMap<(String, Pos), Fan>,
+    /// Item entities' `CreateData.Processing`, by dimension and entity id.
+    processing: HashMap<(String, u32), Processing>,
 }
 
 static MACHINES: Mutex<Option<Machines>> = Mutex::new(None);
@@ -67,14 +101,14 @@ pub(super) fn reset() {
 
 /// `native_block_entity`: the depot's and millstone's block entities.
 pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>) {
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
 
 /// `native_block_entity_ticks`.
 pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
-    if block == DEPOT || block == MILLSTONE {
+    if block == DEPOT || block == MILLSTONE || block == BASIN {
         *ticks = true;
     }
 }
@@ -85,6 +119,9 @@ pub(super) fn block_entity_container(block: &str, container: &mut Option<ModCont
     let (slots, inputs, outputs): (usize, Vec<usize>, Vec<usize>) = match block {
         DEPOT => (DEPOT_SLOTS, vec![0], (0..DEPOT_SLOTS).collect()),
         MILLSTONE => (MILLSTONE_SLOTS, vec![0], (1..MILLSTONE_SLOTS).collect()),
+        // The output inventory forbids insertion; both are taken from
+        // (`CombinedInvWrapper`).
+        BASIN => (BASIN_ALL_SLOTS, (0..BASIN_SLOTS).collect(), (0..BASIN_ALL_SLOTS).collect()),
         _ => return,
     };
     let all: Vec<usize> = (0..slots).collect();
@@ -232,6 +269,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
     match entity.id.as_str() {
         DEPOT => depot_tick(game, pos, entity),
         MILLSTONE => millstone_tick(game, pos, entity),
+        BASIN => basin_tick(game, pos, entity),
         _ => {}
     }
 }
@@ -645,6 +683,26 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
             }
             true
         }
+        Some(BASIN) => {
+            // BasinBlock.useItemOn: an empty hand takes every item, and the
+            // basin counts as emptied (`onEmptied`). Fluid items and others
+            // pass to the default (here: nothing, the template's menu stays shut).
+            if game.held().is_none() {
+                let taken = game.native_with_mod_block_entity(pos, |be| {
+                    be.items.iter_mut().filter_map(Option::take).collect::<Vec<_>>()
+                });
+                for s in taken.unwrap_or_default() {
+                    game.give_or_drop(s);
+                }
+                let above = [pos[0], pos[1] + 2, pos[2]];
+                super::create_glue::with_kinetics(game, |k, _| {
+                    if let Some(m) = k.mixing_mut(above) {
+                        m.basin_removed();
+                    }
+                });
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -688,7 +746,7 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                 && game.world.loaded(p[0], p[2])
                 && registry
                     .state(game.world.block(p[0], p[1], p[2]))
-                    .is_none_or(|s| s.name != DEPOT)
+                    .is_none_or(|s| s.name != DEPOT && s.name != BASIN)
         })
         .map(|(_, p)| *p)
         .collect();
@@ -777,7 +835,8 @@ pub(super) fn from_server(data: &[u8]) {
 }
 
 /// `DepotRenderer.renderItemsOf`: the held item lying on top, the outputs
-/// around it, an eighth of a turn apart.
+/// around it, an eighth of a turn apart. Basins, told on the same channel,
+/// draw as `BasinRenderer`.
 pub(super) fn draw_depots(
     game: &Game<'_>,
     camera: glam::DVec3,
@@ -788,6 +847,16 @@ pub(super) fn draw_depots(
         return;
     };
     for (pos, slots) in view {
+        let basin = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1], pos[2]))
+            .is_some_and(|s| s.name == BASIN);
+        if basin {
+            draw_basin(game, camera, *pos, slots, out);
+            continue;
+        }
         let centre = glam::DVec3::new(
             f64::from(pos[0]) + 0.5,
             f64::from(pos[1]) + 15.0 / 16.0,
@@ -829,5 +898,600 @@ pub(super) fn draw_depots(
                 out,
             );
         }
+    }
+}
+
+// ---- The basin and the mixer ---------------------------------------------------
+
+/// `BasinBlockEntity.tick` (and `lazyTick`'s recipe backup check): items
+/// falling in go to the input inventory, and a change of contents (or,
+/// while it holds anything, every 200 ticks) has the mixer above look again.
+fn basin_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
+    if entity.items.len() < BASIN_ALL_SLOTS {
+        entity.items.resize(BASIN_ALL_SLOTS, None);
+    }
+    // BasinBlock.updateEntityAfterFallOn into `inputInventory`.
+    take_landed(game, pos, 0.75, |game, stack| {
+        basin_insert(game, &mut entity.items[..BASIN_SLOTS], stack)
+    });
+    let view = depot_view(&entity.items);
+    let empty = entity.items.iter().all(Option::is_none);
+    let mut backup = get_int(&entity.nbt, "Backup") - 1;
+    let changed = {
+        let mut guard = machines();
+        let m = guard.get_or_insert_with(Machines::default);
+        let key = (game.dim.id().to_owned(), pos);
+        m.basins.insert(key, view.clone()) != Some(view)
+    };
+    let check = changed || (backup <= 0 && !empty);
+    if backup <= 0 {
+        backup = BASIN_BACKUP_CHECK;
+    }
+    put_int(&mut entity.nbt, "Backup", backup);
+    if check {
+        // getOperator().basinChecker.scheduleUpdate()
+        let above = [pos[0], pos[1] + 2, pos[2]];
+        super::create_glue::with_kinetics(game, |k, _| {
+            if let Some(m) = k.mixing_mut(above) {
+                m.needs_update = true;
+            }
+        });
+    }
+    note_depot(game, pos, &entity.items);
+}
+
+/// `ItemHandlerHelper.insertItem` into a `BasinInventory`: an item already
+/// in it only stacks onto its slot, a new one takes the first empty slot.
+fn basin_insert(game: &Game<'_>, slots: &mut [Option<ItemStack>], mut stack: ItemStack) -> Option<ItemStack> {
+    let target = basin_insert_slot(
+        slots.len(),
+        |i| slots[i].as_ref().is_some_and(|s| s.same_item_same_components(&stack)),
+        |i| slots[i].is_none(),
+    )?;
+    // SmartInventory's stack size: 64, or the item's own.
+    let max = max_stack(game, &stack).min(64);
+    match &mut slots[target] {
+        Some(s) => {
+            let moved = max.saturating_sub(s.count).min(stack.count);
+            s.count += moved;
+            stack.count -= moved;
+        }
+        None => {
+            let moved = stack.count.min(max);
+            let mut put = stack.clone();
+            put.count = moved;
+            slots[target] = Some(put);
+            stack.count -= moved;
+        }
+    }
+    (stack.count > 0).then_some(stack)
+}
+
+/// The supported `create:mixing` recipes (items only, no heat), most
+/// ingredients first (`getMatchingRecipes`' sort).
+fn basin_recipes(game: &Game<'_>) -> std::sync::Arc<BasinRecipes> {
+    if let Some(r) = machines().as_ref().and_then(|m| m.basin_recipes.clone()) {
+        return r;
+    }
+    let mut list: BasinRecipes = game
+        .recipes()
+        .custom
+        .get("create:mixing")
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter_map(|r| parse_basin_recipe(&r.id, &r.json))
+        .filter(BasinRecipe::supported)
+        .map(|r| {
+            let ingredients = r
+                .ingredients
+                .iter()
+                .map(|choices| {
+                    let json = serde_json::Value::Array(
+                        choices.iter().cloned().map(serde_json::Value::String).collect(),
+                    );
+                    ingredient(game, &json)
+                })
+                .collect();
+            (r, ingredients)
+        })
+        .filter(|(_, i): &(BasinRecipe, Vec<Option<Ingredient>>)| i.iter().all(Option::is_some))
+        .collect();
+    list.sort_by_key(|(r, _)| std::cmp::Reverse(r.ingredients.len()));
+    let list = std::sync::Arc::new(list);
+    machines().get_or_insert_with(Machines::default).basin_recipes = Some(list.clone());
+    list
+}
+
+/// `BasinRecipe.apply` on a basin's 18 slots: one item for each ingredient
+/// (from either inventory, as the basin's item capability offers both), the
+/// rolled results into the output inventory, all or nothing. With `test`,
+/// only whether it would (`BasinRecipe.match`).
+fn basin_apply(
+    game: &Game<'_>,
+    items: &mut [Option<ItemStack>],
+    recipe: &(BasinRecipe, Vec<Option<Ingredient>>),
+    test: bool,
+) -> bool {
+    let (r, ingredients) = recipe;
+    let counts: Vec<u32> = items.iter().map(|s| s.as_ref().map_or(0, |s| s.count)).collect();
+    let Some(taken) = basin_take(ingredients.len(), &counts, |i, slot| {
+        items[slot]
+            .as_ref()
+            .is_some_and(|s| ingredients[i].as_ref().is_some_and(|ing| ing.test(s)))
+    }) else {
+        return false;
+    };
+    let outputs = roll(&r.as_recipe());
+    // acceptOutputs, simulated: every result must fit.
+    let mut simulated = items.to_vec();
+    for o in &outputs {
+        if insert_stacked(game, &mut simulated, BASIN_SLOTS..BASIN_ALL_SLOTS, o.clone()).is_some() {
+            return false;
+        }
+    }
+    if test {
+        return true;
+    }
+    for (slot, n) in taken.into_iter().enumerate() {
+        if n == 0 {
+            continue;
+        }
+        if let Some(s) = items[slot].as_mut() {
+            s.count -= n;
+            if s.count == 0 {
+                items[slot] = None;
+            }
+        }
+    }
+    for o in outputs {
+        let _ = insert_stacked(game, items, BASIN_SLOTS..BASIN_ALL_SLOTS, o);
+    }
+    true
+}
+
+/// The basin's slots two below the mixer at `pos`, if there is one.
+fn basin_below(game: &mut Game<'_>, pos: Pos) -> Option<(Pos, Vec<Option<ItemStack>>)> {
+    let at = [pos[0], pos[1] - 2, pos[2]];
+    let is_basin = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(at[0], at[1], at[2]))
+        .is_some_and(|s| s.name == BASIN);
+    if !is_basin {
+        return None;
+    }
+    let mut items = game.native_with_mod_block_entity(at, |be| be.items.clone())?;
+    items.resize(BASIN_ALL_SLOTS, None);
+    Some((at, items))
+}
+
+/// What a mixer's tick asks of the basin below, once the kinetics' lock is
+/// released: `updateBasin` and `applyBasinRecipe`.
+pub(super) fn mixer_world_step(game: &mut Game<'_>, pos: Pos, step: MixStep) {
+    let key = (game.dim.id().to_owned(), pos);
+    match step {
+        MixStep::CheckBasin => {
+            let Some((_, mut items)) = basin_below(game, pos) else {
+                return;
+            };
+            if items.iter().all(Option::is_none) {
+                return;
+            }
+            let recipes = basin_recipes(game);
+            let Some((r, _)) = recipes.iter().find(|r| basin_apply(game, &mut items, r, true)) else {
+                return;
+            };
+            let duration = r.processing_time;
+            machines()
+                .get_or_insert_with(Machines::default)
+                .mixing
+                .insert(key, r.id.clone());
+            super::create_glue::with_kinetics(game, |k, _| {
+                if let Some(m) = k.mixing_mut(pos) {
+                    m.start(duration);
+                }
+            });
+        }
+        MixStep::Apply => {
+            let Some(id) = machines().as_ref().and_then(|m| m.mixing.get(&key).cloned()) else {
+                return;
+            };
+            let recipes = basin_recipes(game);
+            let Some(recipe) = recipes.iter().find(|(r, _)| r.id == id) else {
+                return;
+            };
+            let Some((at, mut items)) = basin_below(game, pos) else {
+                return;
+            };
+            if !basin_apply(game, &mut items, recipe, false) {
+                return;
+            }
+            // Continue mixing while the basin still holds another batch.
+            let again = basin_apply(game, &mut items.clone(), recipe, true);
+            game.native_with_mod_block_entity(at, |be| be.items = items);
+            if again {
+                super::create_glue::with_kinetics(game, |k, _| {
+                    if let Some(m) = k.mixing_mut(pos) {
+                        m.continue_mixing();
+                    }
+                });
+            }
+        }
+        MixStep::Idle => {}
+    }
+}
+
+/// `BasinRenderer`: the basin's items in the bowl. Create places every
+/// stack at the same angle (`anglePartition * itemCount`, the count of all
+/// of them), so they lie together a little off the middle; lone ones in it.
+fn draw_basin(
+    game: &Game<'_>,
+    camera: glam::DVec3,
+    pos: Pos,
+    slots: &[(String, u32)],
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+    if (corner + glam::DVec3::splat(0.5)).distance_squared(camera) > 64.0 * 64.0 {
+        return;
+    }
+    let stacks: Vec<&(String, u32)> = slots.iter().filter(|(id, n)| *n > 0 && !id.is_empty()).collect();
+    if stacks.is_empty() {
+        return;
+    }
+    // No fluids yet: the level is its lowest.
+    let level = 0.125f32;
+    let count = stacks.len() as f32;
+    let base = if stacks.len() == 1 {
+        glam::Vec3::new(0.0, level, 0.0)
+    } else {
+        glam::Vec3::new(0.125, level, 0.0)
+    };
+    let angle = 360.0 / count * count;
+    let p = super::create_kinetics::rotate_vec(base.to_array(), angle, Axis::Y);
+    let light = game.world.light(pos[0], pos[1], pos[2]);
+    let origin = (corner - camera).as_vec3();
+    for (i, (id, n)) in stacks.into_iter().enumerate() {
+        let m = glam::Mat4::from_translation(origin + glam::Vec3::new(0.5, 0.2, 0.5))
+            * glam::Mat4::from_translation(glam::Vec3::from_array(p))
+            * glam::Mat4::from_rotation_y((angle + 35.0).to_radians())
+            * glam::Mat4::from_rotation_x(65f32.to_radians());
+        let stack = ItemStack::new(id, *n);
+        let centre = (corner + glam::DVec3::splat(0.5)).to_array();
+        let owner = super::item_draw::owner_at(centre, 0.0, BASIN);
+        let state = game.resolve_item(
+            &stack,
+            horizon_assets::item_model::DisplayContext::Ground,
+            Some(&owner),
+            pos[0] ^ pos[2] ^ i as i32,
+        );
+        game.submit_item_world(&state, m, horizon_client::block_entity_render::vertex_light(light), out);
+    }
+}
+
+// ---- The encased fan ------------------------------------------------------------
+
+/// The level in place, as an air current sees it.
+struct FanWorld<'a, 'g> {
+    game: &'a Game<'g>,
+}
+
+fn core_axis(a: Axis) -> horizon_core::geometry::Axis {
+    match a {
+        Axis::X => horizon_core::geometry::Axis::X,
+        Axis::Y => horizon_core::geometry::Axis::Y,
+        Axis::Z => horizon_core::geometry::Axis::Z,
+    }
+}
+
+impl FanLevel for FanWorld<'_, '_> {
+    fn is_loaded(&self, pos: Pos) -> bool {
+        let w = &self.game.world;
+        w.loaded(pos[0], pos[2]) && pos[1] >= w.shape.min_y && pos[1] < w.shape.max_y()
+    }
+    fn obstacle(&self, pos: Pos) -> Obstacle {
+        let state = self.game.world.block(pos[0], pos[1], pos[2]);
+        let name = self.game.res.facts().get(state).name.clone();
+        // AllBlockTags.FAN_TRANSPARENT, from Create's data.
+        if self.game.block_in_tag("create:fan_transparent", &name) {
+            return Obstacle::Pass;
+        }
+        let shape = self.game.block_collision_shape(pos);
+        if shape.is_empty() {
+            Obstacle::Pass
+        } else if shape.is_block() {
+            Obstacle::Full
+        } else {
+            Obstacle::Partial
+        }
+    }
+    fn shape_min(&self, pos: Pos, axis: Axis, first: f64, second: f64) -> f64 {
+        self.game.block_collision_shape(pos).min_at(core_axis(axis), first, second)
+    }
+    fn shape_max(&self, pos: Pos, axis: Axis, first: f64, second: f64) -> f64 {
+        self.game.block_collision_shape(pos).max_at(core_axis(axis), first, second)
+    }
+    fn fan_type(&self, pos: Pos) -> Option<FanType> {
+        let registry = self.game.pack.assets.registry;
+        let state = registry.state(self.game.world.block(pos[0], pos[1], pos[2]))?;
+        let fluid = horizon_world::fluid::FluidState::from_block(state)
+            .ok()
+            .and_then(|f| {
+                use horizon_world::fluid::FluidKind as K;
+                match f.kind() {
+                    K::Water | K::FlowingWater => Some(Fluid::Water),
+                    K::Lava | K::FlowingLava => Some(Fluid::Lava),
+                    K::Empty => None,
+                }
+            });
+        let prop = |k: &str| state.properties.get(k).map(String::as_str);
+        fan_type_at(&state.name, &prop, fluid)
+    }
+}
+
+/// The type's `canProcess` of `stack`.
+fn fan_can_process(game: &Game<'_>, kind: FanType, stack: &ItemStack) -> bool {
+    let recipes = game.recipes();
+    match kind {
+        FanType::Splashing | FanType::Haunting => find_recipe(game, kind.id(), stack).is_some(),
+        FanType::Smoking => recipes.cook("minecraft:smoking", stack).is_some(),
+        FanType::Blasting => {
+            recipes.cook("minecraft:smelting", stack).is_some()
+                || recipes.cook("minecraft:blasting", stack).is_some()
+                || !game.items().get(&stack.item).is_some_and(|i| i.fire_resistant)
+        }
+    }
+}
+
+/// The type's `process` of `stack`: none when there is nothing to do, an
+/// empty list when the item burns away.
+fn fan_process(game: &Game<'_>, kind: FanType, stack: &ItemStack) -> Option<Vec<ItemStack>> {
+    let max = |id: &str| game.items().get(id).map_or(64, |i| i.max_stack);
+    let stacks = |list: Vec<(String, u32)>| list.into_iter().map(|(id, n)| ItemStack::new(&id, n)).collect();
+    let cooked = |c: &horizon_client::crafting::Cooking| {
+        stacks(multiplied_output(stack.count, &c.result.item, c.result.count, max(&c.result.item)))
+    };
+    let recipes = game.recipes();
+    match kind {
+        FanType::Splashing | FanType::Haunting => {
+            let recipe = find_recipe(game, kind.id(), stack)?;
+            let list = apply_processing_on(
+                stack.count,
+                || {
+                    let mut guard = machines();
+                    let m = guard.get_or_insert_with(Machines::default);
+                    roll_results(&recipe, || m.next_float())
+                },
+                max,
+            );
+            Some(stacks(list))
+        }
+        FanType::Smoking => recipes.cook("minecraft:smoking", stack).map(cooked),
+        FanType::Blasting => {
+            let smoking = recipes.cook("minecraft:smoking", stack);
+            let smelting = recipes
+                .cook("minecraft:smelting", stack)
+                .or_else(|| recipes.cook("minecraft:blasting", stack));
+            if let Some(s) = smelting
+                && smoking.is_none_or(|k| k.result.item != s.result.item)
+            {
+                return Some(cooked(s));
+            }
+            Some(Vec::new())
+        }
+    }
+}
+
+fn fan_code(kind: Option<FanType>) -> i32 {
+    kind.map_or(0, |k| FanType::SORTED.iter().position(|t| *t == k).unwrap_or(0) as i32 + 1)
+}
+
+fn fan_from_code(code: i32) -> Option<FanType> {
+    usize::try_from(code - 1).ok().and_then(|i| FanType::SORTED.get(i).copied())
+}
+
+/// A stack's identity, to start a depot's timer over for a new item.
+fn stack_mark(stack: &ItemStack) -> i32 {
+    let mut h: u32 = 0x811C_9DC5;
+    for b in stack.item.bytes().chain(stack.count.to_le_bytes()) {
+        h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
+    }
+    h as i32
+}
+
+/// `AirCurrent.tickAffectedHandlers` on the depot at `pos`:
+/// `FanProcessing.applyProcessing(TransportedItemStack)` on its held item,
+/// the results held and buffered as `DepotBehaviour.applyToAllItems` does.
+fn fan_on_depot(game: &mut Game<'_>, pos: Pos, kind: FanType) {
+    let Some(Some((held, nbt))) = game.native_with_mod_block_entity(pos, |be| {
+        be.items.first().cloned().flatten().map(|h| (h, be.nbt.clone()))
+    }) else {
+        return;
+    };
+    let mark = stack_mark(&held);
+    let (mut by, mut time) = if get_int(&nbt, "FanItem") == mark {
+        (fan_from_code(get_int(&nbt, "FanType")), get_int(&nbt, "FanTime"))
+    } else {
+        (None, 0)
+    };
+    let process = transported_step(&mut by, &mut time, kind, held.count, || {
+        fan_can_process(game, kind, &held)
+    });
+    let results = if process { fan_process(game, kind, &held) } else { None };
+    let mut drops = Vec::new();
+    let max = |s: &ItemStack| max_stack(game, s);
+    let maxes: Vec<u32> = results.iter().flatten().map(max).collect();
+    game.native_with_mod_block_entity(pos, |be| {
+        if be.items.len() < DEPOT_SLOTS {
+            be.items.resize(DEPOT_SLOTS, None);
+        }
+        match results {
+            Some(list) => {
+                // TransportedResult.convertTo: the held item goes, the first
+                // result is held, the others go to the output buffer.
+                be.items[0] = None;
+                for (out, max) in list.into_iter().zip(maxes) {
+                    if be.items[0].is_none() {
+                        be.items[0] = Some(out);
+                        continue;
+                    }
+                    let mut left = Some(out);
+                    for slot in be.items[1..].iter_mut() {
+                        let Some(o) = left.as_mut() else { break };
+                        match slot {
+                            Some(s) if s.same_item_same_components(o) && s.count < max => {
+                                let moved = (max - s.count).min(o.count);
+                                s.count += moved;
+                                o.count -= moved;
+                                if o.count == 0 {
+                                    left = None;
+                                }
+                            }
+                            None => *slot = left.take(),
+                            _ => {}
+                        }
+                    }
+                    drops.extend(left);
+                }
+                for k in ["FanType", "FanTime", "FanItem"] {
+                    be.nbt.remove(&JavaString::from(k));
+                }
+            }
+            None => {
+                put_int(&mut be.nbt, "FanType", fan_code(by));
+                put_int(&mut be.nbt, "FanTime", time);
+                put_int(&mut be.nbt, "FanItem", mark);
+            }
+        }
+    });
+    let c = pos.map(|v| f64::from(v) + 0.5);
+    for d in drops {
+        game.spawn_item(d, [c[0], c[1] + 0.5, c[2]], [0.0, 0.1, 0.0], 10);
+    }
+}
+
+/// `EncasedFanBlockEntity.tick` and `AirCurrent.tick` on the server, for
+/// every fan of `dimension` (`fans`: position, facing, speed): the current
+/// rebuilt every 30 ticks and when the speed changes, items in it pushed and
+/// processed, depots in it processed.
+pub(super) fn fan_tick(game: &mut Game<'_>, dimension: &str, fans: &[(Pos, Dir, f32)]) {
+    let mut states = {
+        let mut guard = machines();
+        let m = guard.get_or_insert_with(Machines::default);
+        m.fans.retain(|(d, p), _| d != dimension || fans.iter().any(|f| f.0 == *p));
+        let keys: Vec<(String, Pos)> = m.fans.keys().filter(|(d, _)| d == dimension).cloned().collect();
+        keys.into_iter()
+            .filter_map(|k| m.fans.remove_entry(&k))
+            .collect::<HashMap<_, _>>()
+    };
+    let mut processing = {
+        let mut guard = machines();
+        let m = guard.get_or_insert_with(Machines::default);
+        let alive: std::collections::HashSet<u32> = game.dropped.iter().map(|d| d.id).collect();
+        m.processing.retain(|(d, id), _| d != dimension || alive.contains(id));
+        let keys: Vec<(String, u32)> = m.processing.keys().filter(|(d, _)| d == dimension).cloned().collect();
+        keys.into_iter()
+            .filter_map(|k| m.processing.remove_entry(&k))
+            .collect::<HashMap<_, _>>()
+    };
+    for &(pos, facing, speed) in fans {
+        let fan = states.entry((dimension.to_owned(), pos)).or_default();
+        fan.cooldown -= 1;
+        if fan.cooldown < 0 || fan.speed != speed || fan.current.direction != Some(facing) {
+            fan.cooldown = FAN_BLOCK_CHECK_RATE;
+            fan.speed = speed;
+            fan.current.rebuild(&FanWorld { game }, pos, facing, speed);
+        }
+        if speed == 0.0 || fan.current.max_distance <= 0.0 {
+            continue;
+        }
+        let current = fan.current.clone();
+        fan_items(game, dimension, pos, facing, speed, &current, &mut processing);
+        for (spot, segment) in current.handler_spots(pos) {
+            let is_depot = game
+                .pack
+                .assets
+                .registry
+                .state(game.world.block(spot[0], spot[1], spot[2]))
+                .is_some_and(|s| s.name == DEPOT);
+            if !is_depot {
+                continue;
+            }
+            let here = FanWorld { game }.fan_type(spot);
+            if let Some(kind) = here.or(segment) {
+                fan_on_depot(game, spot, kind);
+            }
+        }
+    }
+    let mut guard = machines();
+    let m = guard.get_or_insert_with(Machines::default);
+    m.fans.extend(states);
+    m.processing.extend(processing);
+}
+
+/// `AirCurrent.tickAffectedEntities` for the item entities in the current
+/// (other entities aren't pushed or hurt yet).
+fn fan_items(
+    game: &mut Game<'_>,
+    dimension: &str,
+    pos: Pos,
+    facing: Dir,
+    speed: f32,
+    current: &AirCurrent,
+    processing: &mut HashMap<(String, u32), Processing>,
+) {
+    let flow = if current.pushing { facing } else { facing.opposite() };
+    let centre = pos.map(|v| f64::from(v) + 0.5);
+    let mut spawned = Vec::new();
+    for i in 0..game.dropped.len() {
+        let d = &game.dropped[i];
+        if d.stack.count == 0 {
+            continue;
+        }
+        let p = [d.position.x, d.position.y, d.position.z];
+        // ItemEntity: 0.25 wide and high.
+        let bounds = [p[0] - 0.125, p[1], p[2] - 0.125, p[0] + 0.125, p[1] + 0.25, p[2] + 0.125];
+        if !current.touches(bounds) {
+            continue;
+        }
+        let distance_old = ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2) + (p[2] - centre[2]).powi(2)).sqrt();
+        let v = d.velocity;
+        let v = push([v.x, v.y, v.z], flow, speed, distance_old, current.max_distance);
+        game.dropped[i].velocity = horizon_core::geometry::Vec3::new(v[0], v[1], v[2]);
+        let distance = aligned_distance_to_face(p, pos, facing);
+        let Some(kind) = current.type_at(distance as f32) else {
+            continue;
+        };
+        let stack = game.dropped[i].stack.clone();
+        let key = (dimension.to_owned(), game.dropped[i].id);
+        let mut state = processing.get(&key).copied();
+        if !entity_can_process(state, kind, || fan_can_process(game, kind, &stack)) {
+            continue;
+        }
+        let left = entity_decrement(&mut state, kind, stack.count);
+        if let Some(s) = state {
+            processing.insert(key.clone(), s);
+        }
+        if left != 0 {
+            continue;
+        }
+        // FanProcessing.applyProcessing(ItemEntity)
+        let Some(mut results) = fan_process(game, kind, &stack) else {
+            continue;
+        };
+        processing.remove(&key);
+        if results.is_empty() {
+            game.dropped[i].stack.count = 0;
+            continue;
+        }
+        game.dropped[i].stack = results.remove(0);
+        for r in results {
+            spawned.push((r, p, v));
+        }
+    }
+    game.dropped.retain(|d| d.stack.count > 0);
+    for (r, p, v) in spawned {
+        game.spawn_item(r, p, v, 10);
     }
 }

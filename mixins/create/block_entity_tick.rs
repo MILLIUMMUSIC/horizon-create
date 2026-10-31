@@ -1,4 +1,4 @@
-// A depot's or millstone's server tick.
+// A depot's, millstone's or basin's server tick.
 fn create_block_entity_tick(
     game: &mut crate::game::Game<'_>,
     pos: [i32; 3],
