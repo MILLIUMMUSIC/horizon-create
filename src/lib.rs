@@ -8,6 +8,8 @@ pub mod create_belt;
 pub mod create_chute;
 #[path = "../mixins/create/fan.rs"]
 pub mod create_fan;
+#[path = "../mixins/create/fluids.rs"]
+pub mod create_fluids;
 #[path = "../mixins/create/funnel.rs"]
 pub mod create_funnel;
 #[path = "../mixins/create/kinetics.rs"]

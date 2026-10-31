@@ -52,6 +52,18 @@ name = "create_processing"
 source = "processing.rs"
 
 [[module]]
+id = "fluids"
+file = "crates/horizon-client/src/game.rs"
+name = "create_fluids"
+source = "fluids.rs"
+
+[[module]]
+id = "fluid_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_fluid_glue"
+source = "fluid_glue.rs"
+
+[[module]]
 id = "machines"
 file = "crates/horizon-client/src/game.rs"
 name = "create_machines"

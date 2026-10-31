@@ -227,6 +227,8 @@ impl Kind {
             Kind::HandCrank(f) => Kind::HandCrank(turn_facing(f)),
             Kind::WaterWheel(f) => Kind::WaterWheel(turn_facing(f)),
             Kind::EncasedFan(f) => Kind::EncasedFan(turn_facing(f)),
+            // PumpBlock.getRotatedBlockState: turned round, whatever the face.
+            Kind::MechanicalPump(f) => Kind::MechanicalPump(f.opposite()),
             // No property to turn (millstone, mixer), or a press's side.
             k => k,
         }
@@ -241,7 +243,8 @@ impl Kind {
             | Kind::HandCrank(f)
             | Kind::MechanicalPress(f)
             | Kind::WaterWheel(f)
-            | Kind::EncasedFan(f) => Some(("facing", f.name())),
+            | Kind::EncasedFan(f)
+            | Kind::MechanicalPump(f) => Some(("facing", f.name())),
             Kind::Millstone | Kind::MechanicalMixer | Kind::Belt(_) => None,
         }
     }
@@ -359,6 +362,9 @@ pub enum Kind {
     WaterWheel(Dir),
     /// `EncasedFanBlock`: the way its air blows out (its shaft is behind).
     EncasedFan(Dir),
+    /// `PumpBlock`: the way it pushes (`FACING`); a small cog about that
+    /// axis, no shafts (fluids.rs moves the fluid).
+    MechanicalPump(Dir),
     /// `MechanicalMixerBlock`: a small cog about Y, no shafts.
     MechanicalMixer,
     /// `BeltBlock`: a segment of a mechanical belt (belt.rs).
@@ -384,6 +390,7 @@ impl Kind {
             "create:millstone" => Some(Kind::Millstone),
             "create:water_wheel" => facing().map(Kind::WaterWheel),
             "create:encased_fan" => facing().map(Kind::EncasedFan),
+            "create:mechanical_pump" => facing().map(Kind::MechanicalPump),
             "create:mechanical_mixer" => Some(Kind::MechanicalMixer),
             _ => None,
         }
@@ -400,6 +407,7 @@ impl Kind {
             Kind::Millstone => "create:millstone",
             Kind::WaterWheel(_) => "create:water_wheel",
             Kind::EncasedFan(_) => "create:encased_fan",
+            Kind::MechanicalPump(_) => "create:mechanical_pump",
             Kind::MechanicalMixer => "create:mechanical_mixer",
             Kind::Belt(b) => b.block().map_or("create:belt", |(name, _)| name),
         }
@@ -412,7 +420,8 @@ impl Kind {
             | Kind::HandCrank(f)
             | Kind::MechanicalPress(f)
             | Kind::WaterWheel(f)
-            | Kind::EncasedFan(f) => f.axis(),
+            | Kind::EncasedFan(f)
+            | Kind::MechanicalPump(f) => f.axis(),
             Kind::Millstone | Kind::MechanicalMixer => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
         }
@@ -427,13 +436,17 @@ impl Kind {
             Kind::MechanicalPress(f) | Kind::WaterWheel(f) => face.axis() == f.axis(),
             Kind::Millstone => face == Dir::Down,
             Kind::EncasedFan(f) => face == f.opposite(),
+            Kind::MechanicalPump(_) => false,
             Kind::MechanicalMixer => false,
             Kind::Belt(b) => b.has_shaft_towards(face),
         }
     }
     /// `ICogWheel.isSmallCog`: the mixer is an `ICogWheel` too.
     pub fn is_small_cog(self) -> bool {
-        matches!(self, Kind::Cogwheel(_) | Kind::MechanicalMixer)
+        matches!(
+            self,
+            Kind::Cogwheel(_) | Kind::MechanicalMixer | Kind::MechanicalPump(_)
+        )
     }
     /// `ICogWheel.isLargeCog`.
     pub fn is_large_cog(self) -> bool {
@@ -445,6 +458,7 @@ impl Kind {
             Kind::MechanicalPress(_) => 8.0,
             Kind::Millstone => 4.0,
             Kind::EncasedFan(_) => 2.0,
+            Kind::MechanicalPump(_) => 4.0,
             Kind::MechanicalMixer => 4.0,
             _ => 0.0,
         }
@@ -1707,7 +1721,8 @@ fn kind_key(k: Kind) -> String {
         | Kind::HandCrank(f)
         | Kind::MechanicalPress(f)
         | Kind::WaterWheel(f)
-        | Kind::EncasedFan(f) => f.name(),
+        | Kind::EncasedFan(f)
+        | Kind::MechanicalPump(f) => f.name(),
         Kind::Millstone | Kind::MechanicalMixer => "",
         Kind::Belt(b) => {
             let face = b.block().map_or("floor", |(_, face)| face);
@@ -1820,6 +1835,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::Millstone => (7, 0),
         Kind::WaterWheel(d) => (8, dir(d)),
         Kind::EncasedFan(d) => (9, dir(d)),
+        Kind::MechanicalPump(d) => (12, dir(d)),
         Kind::MechanicalMixer => (10, 0),
         Kind::Belt(b) => {
             let slope = Slope::ALL.iter().position(|s| *s == b.slope).unwrap_or(0) as u8;
@@ -1843,6 +1859,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         7 => Kind::Millstone,
         8 => Kind::WaterWheel(dir?),
         9 => Kind::EncasedFan(dir?),
+        12 => Kind::MechanicalPump(dir?),
         10 => Kind::MechanicalMixer,
         11 => Kind::Belt(BeltState {
             facing: Dir::ALL.get(usize::from(state & 7)).copied()?,
@@ -2527,6 +2544,37 @@ mod tests {
         r.place([0, 64, 0], Kind::MechanicalMixer);
         r.ticks(2);
         assert_eq!(r.speed([0, 64, 0]), 0.0);
+    }
+
+    #[test]
+    fn a_pump_is_driven_as_a_cogwheel_about_its_facing() {
+        let mut r = Rig::new();
+        r.place([0, 63, 0], Kind::CreativeMotor(Dir::Up));
+        r.place([0, 64, 0], Kind::Cogwheel(Axis::Y));
+        r.place([1, 64, 0], Kind::MechanicalPump(Dir::Up));
+        r.ticks(2);
+        assert_eq!(r.speed([1, 64, 0]), -16.0);
+        let (_, stress, _, _) = r.k.stats(&r.world, [1, 64, 0]).unwrap();
+        assert_eq!(stress, 4.0 * 16.0);
+        // No shaft: a motor at its back doesn't turn it.
+        let mut r = Rig::new();
+        r.place([0, 63, 0], Kind::CreativeMotor(Dir::Up));
+        r.place([0, 64, 0], Kind::MechanicalPump(Dir::Up));
+        r.ticks(2);
+        assert_eq!(r.speed([0, 64, 0]), 0.0);
+        // The wrench turns it round, and it is saved.
+        assert_eq!(
+            Kind::MechanicalPump(Dir::Up).wrenched(Dir::North),
+            Kind::MechanicalPump(Dir::Down)
+        );
+        assert_eq!(
+            parse_kind_key(&kind_key(Kind::MechanicalPump(Dir::West))),
+            Some(Kind::MechanicalPump(Dir::West))
+        );
+        assert_eq!(
+            kind_from_code(12, Dir::East as u8),
+            Some(Kind::MechanicalPump(Dir::East))
+        );
     }
 
     #[test]

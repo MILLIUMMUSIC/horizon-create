@@ -110,7 +110,8 @@ fn our_states(game: &Game<'_>) -> HashSet<u32> {
                 s.name.starts_with("create:")
                     && (Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str))
                         .is_some()
-                        || super::create_logistics::is_ours(&s.name))
+                        || super::create_logistics::is_ours(&s.name)
+                        || super::create_fluid_glue::is_ours(&s.name))
             })
         })
         .collect()
@@ -165,7 +166,9 @@ pub(super) fn block_changed(
     let Some(s) = guard.as_mut() else {
         return;
     };
-    if s.states.contains(&old.0) || s.states.contains(&new.0) {
+    let ours = s.states.contains(&old.0) || s.states.contains(&new.0);
+    super::create_fluid_glue::block_changed(level_dimension_id(dimension), [pos.x, pos.y, pos.z], ours);
+    if ours {
         s.pending
             .push((level_dimension_id(dimension).to_owned(), [pos.x, pos.y, pos.z]));
     }
@@ -194,6 +197,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut belts: Vec<(Pos, BeltState, f32)> = Vec::new();
     let mut removed_belts: Vec<(Pos, BeltState)> = Vec::new();
     let mut changed_here: Vec<Pos> = Vec::new();
+    let mut pumps: Vec<(Pos, Dir, f32)> = Vec::new();
     let save_now;
     {
         let mut guard = server();
@@ -315,6 +319,12 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             {
                 belts.push((p, b, kinetics.speed_of(&level, p)));
             }
+            // Mechanical pumps, for the fluids' tick.
+            if let Some(Kind::MechanicalPump(f)) = kinetics.get(p).map(|e| e.kind)
+                && level.is_loaded(p)
+            {
+                pumps.push((p, f, kinetics.speed_of(&level, p)));
+            }
         }
         let code = dim_code(dimension);
         let updates = kinetics.take_dirty(&level);
@@ -339,6 +349,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     }
     if save_now {
         super::create_logistics::save_all();
+        super::create_fluid_glue::save_all();
     }
     super::create_logistics::belts_removed(game, &removed_belts);
     super::create_logistics::changed(game, dimension, &changed_here);
@@ -357,6 +368,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_machines::fan_tick(game, dimension, &fans);
     super::create_logistics::belts_tick(game, dimension, &belts, full_update);
     super::create_logistics::funnels_tick(game, dimension);
+    super::create_fluid_glue::level_tick(game, dimension, &pumps);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
     if messages.is_empty() && depots.is_empty() {
         return;
@@ -439,7 +451,11 @@ pub(super) fn right_click(
             return;
         }
     }
-    if super::create_machines::right_click(game, pos, face) || super::create_logistics::right_click(game, pos) {
+    // Buckets on tanks and basins first: the basin's own click takes any.
+    if super::create_fluid_glue::right_click(game, pos)
+        || super::create_machines::right_click(game, pos, face)
+        || super::create_logistics::right_click(game, pos)
+    {
         *canceled = true;
         return;
     }
@@ -691,6 +707,10 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
         phase,
         WorldPhase::WorldCloseFinal | WorldPhase::WorldCloseFailed
     ));
+    super::create_fluid_glue::world_phase(matches!(
+        phase,
+        WorldPhase::WorldCloseFinal | WorldPhase::WorldCloseFailed
+    ));
     let mut guard = server();
     match phase {
         WorldPhase::WorldOpenReady | WorldPhase::WorldOpenFailed => *guard = None,
@@ -709,6 +729,10 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
 pub(super) fn from_server(channel: &str, data: &[u8]) {
     if channel == super::create_machines::DEPOTS {
         super::create_machines::from_server(data);
+        return;
+    }
+    if channel == super::create_fluid_glue::FLUIDS {
+        super::create_fluid_glue::from_server(data);
         return;
     }
     if channel == super::create_logistics::BELTS {
@@ -865,6 +889,10 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             want.push(("create:hz_part_shaft_half", None, rotate_to_face(back), f.axis(), standard, 0.0));
             let spin = fan_angle(view.speed, time);
             want.push(("create:hz_part_encased_fan_inner", None, rotate_to_face(back), f.axis(), spin, 0.0));
+        }
+        Kind::MechanicalPump(f) => {
+            // PumpRenderer: its cog, turned to face its way.
+            want.push(("create:hz_part_mechanical_pump_cog", None, rotate_to_face(f), f.axis(), standard, 0.0));
         }
         Kind::MechanicalMixer => {
             // MechanicalMixerRenderer: its cog, then the pole and the head
@@ -1040,6 +1068,7 @@ fn shift_uv(
 fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
     super::create_machines::draw_depots(game, camera, out);
     super::create_logistics::draw_belts(game, camera, out);
+    super::create_fluid_glue::draw(game, camera, out);
 }
 
 /// `WaterWheelBlockEntity.material`'s default, spruce planks, as
