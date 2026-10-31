@@ -112,6 +112,9 @@ CONTAINERS = {
     # ChuteBlock's `facing` and `shape` need template properties: chutes are
     # straight (facing down), drawn as the plain one.
     "chute": {"template": "minecraft:enchanting_table", "model": "create:block/chute/block"},
+    # ArmBlock's `ceiling` needs a template property: arms stand on the floor.
+    # The block keeps its base model; the native mod draws the cog and body.
+    "mechanical_arm": {"template": "minecraft:enchanting_table", "model": "create:block/mechanical_arm/block"},
 }
 
 # NeoForge's convention tags the recipes name and Horizon has no copy of
@@ -150,6 +153,18 @@ PARTIALS = {
     "cogwheel_shaftless": "create:block/cogwheel_shaftless",
     "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
     "mechanical_mixer_head": "create:block/mechanical_mixer/head",
+    # ArmRenderer's and DeployerRenderer's partials.
+    "arm_cog": "create:block/mechanical_arm/cog",
+    "arm_base": "create:block/mechanical_arm/base",
+    "arm_lower_body": "create:block/mechanical_arm/lower_body",
+    "arm_upper_body": "create:block/mechanical_arm/upper_body",
+    "arm_claw_base": "create:block/mechanical_arm/claw_base",
+    "arm_upper_claw_grip": "create:block/mechanical_arm/upper_claw_grip",
+    "arm_lower_claw_grip": "create:block/mechanical_arm/lower_claw_grip",
+    "deployer_pole": "create:block/deployer/pole",
+    "deployer_hand_pointing": "create:block/deployer/hand_pointing",
+    "deployer_hand_punching": "create:block/deployer/hand_punching",
+    "deployer_hand_holding": "create:block/deployer/hand_holding",
     # BeltRenderer's partials.
     "belt_pulley": "create:block/belt_pulley",
     "belt_start": "create:block/belt/start",
@@ -186,6 +201,16 @@ FUNNEL_SHAPES = {
     "up": [box(2, 0, 2, 14, 8, 14), box(1, 1, 1, 15, 8, 15), box(0, 4, 0, 16, 10, 16)],
     "down": [box(2, 8, 2, 14, 16, 14), box(1, 8, 1, 15, 15, 15), box(0, 6, 0, 16, 12, 16)],
 }
+
+# The deployer: a lightning rod's template (six facings, no use of its own), a
+# block per `axis_along_first` (no template has it); the item places the
+# first, the native mod picks the right one. AllShapes.CASING_12PX.
+DEPLOYERS = {"deployer": "false", "hz_deployer_along": "true"}
+CASING_12PX = box(0, 0, 0, 16, 12, 16)
+
+# The item vault: a barrel's template (a block entity for its slots, a full
+# block, a `facing` holding its horizontal axis: east for X, south for Z).
+VAULT_TURNS = {"east": 90, "west": 90, "north": 0, "south": 0, "up": 0, "down": 0}
 
 # AllPartialModels.WATER_WHEEL, an OBJ model (`neoforge:obj`) with its
 # materials and texture parents: read by the native mod at runtime.
@@ -397,12 +422,53 @@ def fit_logistics(content, names):
                 variants[f"facing={props['facing']}"] = model
         write_json(states / f"{name}.json", {"variants": variants})
 
+    fit_arms(content, names)
+
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
     share_block_tags(content, {
         **{name: "create:belt" for name in BELT_PARTS if name != "belt"},
         **{name: "create:andesite_funnel" for name in FUNNELS if name != "andesite_funnel"},
+        **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
     })
+
+
+def fit_arms(content, names):
+    """The item vault, and the deployer's blocks (the arm is a container)."""
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    decl = read_json(blocks / "item_vault.json") if (blocks / "item_vault.json").exists() else {}
+    decl["template"] = "minecraft:barrel"
+    decl.pop("default_state", None)
+    decl.pop("shapes", None)
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "item_vault.json", decl)
+    write_json(states / "item_vault.json", {"variants": {
+        f"facing={f}": ({"model": "create:block/item_vault", "y": y} if y else {"model": "create:block/item_vault"})
+        for f, y in VAULT_TURNS.items()
+    }})
+    original = read_json(states / "deployer.json") if (states / "deployer.json").exists() else None
+    base = read_json(blocks / "deployer.json") if (blocks / "deployer.json").exists() else {}
+    for name, along in DEPLOYERS.items():
+        decl = dict(base)
+        decl["template"] = "minecraft:lightning_rod"
+        decl.pop("default_state", None)
+        decl["shapes"] = {"property": "facing", "values": {f: [facing_box(f, CASING_12PX)] for f in FACINGS}}
+        decl.setdefault("properties", {})["light"] = 0
+        if name != "deployer":
+            decl["item"] = False
+            names[f"block.create.{name}"] = names.get("block.create.deployer", "Deployer")
+            write_json(loot_tables / f"{name}.json", loot(name, ["create:deployer"]))
+        write_json(blocks / f"{name}.json", decl)
+        if original is None:
+            continue
+        variants = {}
+        for key, model in original.get("variants", {}).items():
+            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            if props.get("axis_along_first") == along and "facing" in props:
+                variants[f"facing={props['facing']}"] = model
+        write_json(states / f"{name}.json", {"variants": variants})
 
 
 def share_block_tags(content, bases):

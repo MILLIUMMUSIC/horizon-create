@@ -1,5 +1,57 @@
 # Validation
 
+## Milestone 4, arm and deployer
+
+Ported in a cloud session on Linux (x86_64), Rust 1.99.1, Python 3.12, against the pinned Horizon (`aa27eca`) and
+horizon-mixins (`3f99a5c`). **Compiled and unit-tested only: nothing of this part has been run in the game yet**
+(the cloud has no Minecraft resources and no Create jar).
+
+| Check | How | Result |
+|---|---|---|
+| Rule modules (all of `src/lib.rs`, now with `vault.rs`, `arm.rs`, `deployer.rs`) | `cargo fmt --all --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` | 101 tests pass (26 new), no warnings |
+| The bundle applies and the game compiles | `tools/horizon.py check --no-audio` (Linux: the container has no ALSA, so the server build without audio; nothing of the mod is behind that feature) | Pass, no warnings |
+| `prepare_content.py`'s new `fit_arms` | Run on a scratch tree with Create 6.0.10's generated `deployer.json` blockstate | Both deployer blocks get their `facing` variants, the extra one a 26.3-format loot table dropping the deployer |
+| `tools/horizon.py build`, the content mod from the jar, the game | Not run | — |
+
+What the unit tests cover: vaults joining along their axis, the 3×width length cap, crossing axes, a 2×2 vault and its
+slot order, splitting when a block goes and forming again (`ConnectivityHandler`); the arm's full cycle (search,
+move, collect, search outputs, deposit), its move time (`speed / 1024` a tick), not taking what no output can take,
+a stopped or redstone-locked arm, funnels being deposit-only, the 5-block range, `ArmAngleTarget`'s base angle and
+reach, backing up to rest before reaching out, points saved relative to the arm; the deployer's cycle timings
+(`getTimerSpeed`, 1000 out, activation, 1000 back, 500), the overflow, the hand offset, its rotation axis,
+placement (`axis_along_first` by neighbouring shafts), the wrench, `BeltDeployerCallbacks`, reading deploying
+recipes; the arm and deployer as kinetic blocks (a cog drives the arm, the deployer's shaft follows
+`axis_along_first`, saved and synced kinds).
+
+Not checked yet (every in-game check, for the Mac pass):
+
+- Content: the vault, arm and both deployer blocks load with their models (the vault turned east–west by `facing`,
+  the deployer's twelve variants), the eleven new `hz_part_*` partials bake (the arm's are modelled around the origin,
+  some with negative coordinates), each drops itself (the extra deployer block drops a deployer) with the right tool.
+- Vault: placing one (its axis from the player, or from a lone vault beside it), hoppers into and out of one block,
+  a line of three joining into one vault and a 2×2×2 one; funnels, chutes and arms filling and emptying the whole
+  vault; breaking a block of a multiblock (its items drop, the rest joins again); the wrench from above (it leaves its
+  vault and turns); right clicks don't open the barrel template's menu; saving and reloading.
+- Arm: the arm item's selection (a click on a depot, belt, basin, chute, deployer, millstone or collecting funnel:
+  "Extract from" / "Deposit to" over the hotbar, a second click switches; funnels only deposit); placing it takes
+  the selection (out of range ones dropped with a message); driven by a cog beside it, 2 su; carrying items from a
+  depot to a depot, a belt to a basin, a millstone's outputs to a chute, into a deployer's hand; round-robin
+  between outputs; the belt item it reaches for waiting; an empty hand taking the held item back; the arm's base,
+  lower and upper arm, claw and grips drawn and moving as `ArmRenderer` does (backing up to rest halfway), its held
+  item in the claw, the cog turning; saving and reloading mid-move; a second player seeing it move.
+- Deployer: placed facing away from the player (sneaking: towards), `axis_along_first` by a shaft beside it, its
+  shaft turning; right click on its front swaps hands, the wrench on its front switches punch/use, elsewhere turns
+  it or its shaft; using: placing a held block two blocks out (or against the block there), not when that block is
+  already there; punching: breaking the block in front over several cycles with the held tool, its drops in the
+  deployer, then taken by a funnel or arm; a deploying recipe on a depot under it (e.g. an axe on exposed chiseled
+  copper, an `item_application` such as andesite casing) and on a belt passing under it, one item per cycle, the
+  held item used or kept as the recipe says; the pole and hand (pointing, holding, punching) drawn going out and
+  back with its held item; its state saved beside the world (`data/create_deployers_*.txt`) and its items dropped
+  when it is broken.
+- Regressions: belts, chutes and funnels into chests, depots and other inventories (their insertion and extraction
+  now look for vaults and deployers first); presses over belts and depots (a deployer is looked for when no press is
+  there).
+
 ## Milestone 4, part 1
 
 Ported in a cloud session on Linux (x86_64), then built, fixed and checked on macOS (Apple M5), Rust 1.99.1,

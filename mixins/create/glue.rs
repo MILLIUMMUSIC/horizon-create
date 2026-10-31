@@ -174,6 +174,7 @@ pub(super) fn block_changed(
 /// `native_place_block`: a player placed a block in their dimension.
 pub(super) fn placed(game: &Game<'_>, pos: [i32; 3]) {
     super::create_logistics::placed(game, pos);
+    super::create_arms::placed(game, pos);
     if kind_at(game, pos).is_none() {
         return;
     }
@@ -357,6 +358,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_machines::fan_tick(game, dimension, &fans);
     super::create_logistics::belts_tick(game, dimension, &belts, full_update);
     super::create_logistics::funnels_tick(game, dimension);
+    super::create_arms::level_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
     if messages.is_empty() && depots.is_empty() {
         return;
@@ -409,6 +411,10 @@ pub(super) fn right_click(
     face: [i32; 3],
     canceled: &mut bool,
 ) {
+    if super::create_arms::right_click(game, pos, face) {
+        *canceled = true;
+        return;
+    }
     let holding_wrench = game.held().is_some_and(|s| &*s.item == WRENCH);
     if holding_wrench {
         let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
@@ -427,7 +433,9 @@ pub(super) fn right_click(
             Some(Kind::MechanicalPress(_) | Kind::MechanicalMixer | Kind::Millstone)
         ) || name == super::create_machines::DEPOT
             || name == super::create_machines::BASIN
-            || name == super::create_logistics::CHUTE;
+            || name == super::create_logistics::CHUTE
+            || name == super::create_arms::VAULT
+            || name == super::create_arms::ARM;
         if own_use {
             *canceled = true;
             wrench(game, pos, face, sneaking);
@@ -508,7 +516,7 @@ pub(super) fn use_item_on(
     face: [i32; 3],
     claimed: &mut bool,
 ) {
-    if super::create_logistics::use_connector(game, stack, pos) {
+    if super::create_logistics::use_connector(game, stack, pos) || super::create_arms::use_item_on(game, stack, pos) {
         *claimed = true;
         return;
     }
@@ -535,12 +543,13 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     if matches!(kind, Some(Kind::Belt(_))) {
         return true;
     }
-    if !sneaking && super::create_logistics::wrench_funnel(game, pos) {
+    if !sneaking && (super::create_logistics::wrench_funnel(game, pos) || super::create_arms::wrench(game, pos, face)) {
         return true;
     }
     let machine = name == super::create_machines::DEPOT
         || name == super::create_machines::BASIN
-        || super::create_logistics::is_ours(&name);
+        || super::create_logistics::is_ours(&name)
+        || super::create_arms::is_ours(&name);
     if kind.is_none() && !machine {
         return false;
     }
@@ -687,10 +696,9 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
 pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
     use super::native_lifecycle::WorldPhase;
     super::create_machines::reset();
-    super::create_logistics::world_phase(matches!(
-        phase,
-        WorldPhase::WorldCloseFinal | WorldPhase::WorldCloseFailed
-    ));
+    let closing = matches!(phase, WorldPhase::WorldCloseFinal | WorldPhase::WorldCloseFailed);
+    super::create_logistics::world_phase(closing);
+    super::create_arms::world_phase(closing);
     let mut guard = server();
     match phase {
         WorldPhase::WorldOpenReady | WorldPhase::WorldOpenFailed => *guard = None,
@@ -713,6 +721,10 @@ pub(super) fn from_server(channel: &str, data: &[u8]) {
     }
     if channel == super::create_logistics::BELTS {
         super::create_logistics::from_server(data);
+        return;
+    }
+    if channel == super::create_arms::ARMS {
+        super::create_arms::from_server(data);
         return;
     }
     if channel != CHANNEL {
@@ -913,6 +925,13 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                 want.push(("create:hz_part_belt_pulley", None, orient, b.rotation_axis(), standard, 0.0));
             }
         }
+        // ArmRenderer: its cog (the body is create_arms').
+        Kind::MechanicalArm => want.push(("create:hz_part_arm_cog", None, id, Axis::Y, standard, 0.0)),
+        // DeployerRenderer: a shaft along its axis (pole and hand: create_arms).
+        Kind::Deployer(..) => {
+            let a = view.kind.rotation_axis();
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+        }
     }
     scrolls.resize(want.len(), None);
     want.into_iter()
@@ -1040,6 +1059,7 @@ fn shift_uv(
 fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
     super::create_machines::draw_depots(game, camera, out);
     super::create_logistics::draw_belts(game, camera, out);
+    super::create_arms::draw(game, camera, out);
 }
 
 /// `WaterWheelBlockEntity.material`'s default, spruce planks, as

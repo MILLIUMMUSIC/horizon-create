@@ -58,7 +58,8 @@ Adding a block:
 
 Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 `create:depots` (D1: items held by depots, basins, millstones),
-`create:values` (client → server value box changes, checked by the server).
+`create:values` (client → server value box changes, checked by the server),
+`create:arms` (A1: arm angles and held items, deployer cycles; `arms.rs`).
 
 Recipes: `prepare_content.py` flattens subfolders (`pressing/x` →
 `pressing.x`, Horizon reads only the top folder); `machines.rs` reads

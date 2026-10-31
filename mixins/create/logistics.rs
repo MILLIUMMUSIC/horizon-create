@@ -155,7 +155,7 @@ impl BeltLevel for World<'_, '_> {
     }
 }
 
-fn core_dir(d: Dir) -> horizon_core::geometry::Direction {
+pub(super) fn core_dir(d: Dir) -> horizon_core::geometry::Direction {
     use horizon_core::geometry::Direction as D;
     match d {
         Dir::Down => D::Down,
@@ -188,7 +188,7 @@ fn mod_outputs(id: &str) -> Vec<usize> {
 /// block entities but chutes, belts.
 fn has_inventory(game: &Game<'_>, pos: Pos) -> bool {
     use horizon_client::containers::BlockEntity as B;
-    if belt_at(game, pos).is_some_and(BeltState::can_transport_objects) {
+    if belt_at(game, pos).is_some_and(BeltState::can_transport_objects) || super::create_arms::has_inventory(game, pos) {
         return true;
     }
     match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
@@ -201,6 +201,10 @@ fn has_inventory(game: &Game<'_>, pos: Pos) -> bool {
 /// `stack` into the inventory at `pos` through its side `face`: what is
 /// left (all of it when there is none).
 fn insert_into(game: &mut Game<'_>, pos: Pos, face: Dir, stack: ItemStack) -> Option<ItemStack> {
+    // A whole vault, or a deployer's hand.
+    if let Some(left) = super::create_arms::insert_into(game, pos, &stack) {
+        return left;
+    }
     if belt_at(game, pos).is_some() {
         return insert_on_belt_segment(game, pos, stack);
     }
@@ -228,6 +232,9 @@ fn insert_on_belt_segment(game: &Game<'_>, pos: Pos, stack: ItemStack) -> Option
 /// `pos` (chests and mod block entities' output slots).
 fn extract_from(game: &mut Game<'_>, pos: Pos, max: u32) -> Option<ItemStack> {
     use horizon_client::containers::BlockEntity as B;
+    if let Some(taken) = super::create_arms::extract_from(game, pos, max) {
+        return taken;
+    }
     // ItemHandlerBeltSegment.extractItem: the item over the segment.
     if belt_at(game, pos).is_some() {
         return with_belt_segment(game, pos, |inv, _, index| inv.extract_at(index, max, false)).flatten();
@@ -290,7 +297,8 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
         item: &Transported<ItemStack>,
     ) -> Option<(ProcessingResult, Option<Conversion<ItemStack>>)> {
         let press = [pos[0], pos[1] + 2, pos[2]];
-        let hold = super::create_machines::press_received(self.game, press, &item.stack)?;
+        let hold = super::create_machines::press_received(self.game, press, &item.stack)
+            .or_else(|| super::create_arms::deployer_received(self.game, press, &item.stack))?;
         Some((if hold { ProcessingResult::Hold } else { ProcessingResult::Pass }, None))
     }
     fn held(
@@ -299,13 +307,17 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
         item: &Transported<ItemStack>,
     ) -> Option<(ProcessingResult, Option<Conversion<ItemStack>>)> {
         let press = [pos[0], pos[1] + 2, pos[2]];
-        let (hold, pressed) = super::create_machines::press_held(self.game, press, &item.stack)?;
+        // BeltPressingCallbacks lock their results; BeltDeployerCallbacks
+        // set `locked` and then clear it again.
+        let (hold, pressed, locked) = match super::create_machines::press_held(self.game, press, &item.stack) {
+            Some((hold, pressed)) => (hold, pressed, true),
+            None => {
+                let (hold, pressed) = super::create_arms::deployer_held(self.game, press, &item.stack)?;
+                (hold, pressed, false)
+            }
+        };
         let result = if hold { ProcessingResult::Hold } else { ProcessingResult::Pass };
-        Some((result, pressed.map(|(outputs, held)| Conversion {
-            outputs,
-            held,
-            locked: true,
-        })))
+        Some((result, pressed.map(|(outputs, held)| Conversion { outputs, held, locked })))
     }
     fn processing_blocked(&self, pos: Pos) -> bool {
         let above = [pos[0], pos[1] + 1, pos[2]];
@@ -993,6 +1005,8 @@ pub(super) fn wrench_funnel(game: &mut Game<'_>, pos: Pos) -> bool {
 pub(super) fn item_of(name: &str) -> &str {
     if name == super::create_funnel::COLLECTING_FUNNEL {
         super::create_funnel::EXTRACTING_FUNNEL
+    } else if name == super::create_kinetics::DEPLOYER_ALONG {
+        super::create_kinetics::DEPLOYER
     } else {
         name
     }
@@ -1192,7 +1206,7 @@ fn chute_item(be: &ModBlockEntity) -> Chute<ItemStack> {
     Chute { item, position }
 }
 
-fn set_chute_item(be: &mut ModBlockEntity, item: Option<ItemStack>, position: f32) {
+pub(super) fn set_chute_item(be: &mut ModBlockEntity, item: Option<ItemStack>, position: f32) {
     if be.items.is_empty() {
         be.items.push(None);
     }
