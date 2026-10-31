@@ -1,19 +1,35 @@
 # Validation
 
-## Milestone 3, part 2: compiled and unit-tested only
+## Milestone 3, part 2
 
-The encased fan, the mixer and basin, the creative motor's value box, the wrench and the water wheel's OBJ model
-were ported in a cloud session on Linux (x86_64), Rust 1.99.1 and Python 3.12, against the same pinned Horizon
-(`aa27eca`) and horizon-mixins (`3f99a5c`). There were no prepared Minecraft resources and no Create jar there, so
-**none of it has been run in the game**: everything below "Seen in the game" is from milestones 1 to 3 part 1.
+Ported in a cloud session on Linux (x86_64), then checked on macOS (Apple M5), Rust 1.99.1, Python 3.12, against
+the same pinned Horizon (`aa27eca`) and horizon-mixins (`3f99a5c`).
 
 | Check | How | Result |
 |---|---|---|
-| Rule modules (`kinetics.rs`, `processing.rs`, `fan.rs`, `obj.rs`) | `cargo fmt --all --check`, `cargo clippy --all-targets --locked -D warnings`, `cargo test --locked` | 54 tests pass, no warnings |
-| The bundle applies and the game compiles | `tools/horizon.py check` and `build` (Python 3.12) | Pass, no warnings (`check` and the `fast` build, Linux x86_64) |
-| `prepare_content.py` | Run on a stub carried folder (placeholder files, no Create assets) and a stub jar | New blocks, holders, shapes and the basin's blockstate written; OBJ files copied from the jar when missing |
+| Rule modules (`kinetics.rs`, `processing.rs`, `fan.rs`, `obj.rs`) | `cargo fmt --all --check`, `cargo clippy --all-targets --locked -D warnings`, `cargo test --locked` | 54 tests pass, no warnings (Linux and macOS) |
+| The bundle applies and the game compiles | `tools/horizon.py check` and `build` (Python 3.12) | Pass, no warnings (Linux and macOS) |
+| Content mod from Create 6.0.10's jar | `tools/prepare_content.py --jar` | Pass; the water wheel's OBJ, MTL and `wheel.json` are in it |
+| In the game (offscreen, `horizon-ctl`, macOS) | Rigs built with commands, screenshots, `/data get block` | See below |
 
-To check in the game (macOS session): see the pull request's list.
+Seen in the game:
+
+- Encased fan behind a creative motor at 16 RPM: the current finds water and lava in front of it. 2 raw iron on a
+  depot behind lava became 2 iron ingots; 4 gravel on a depot behind water became 1 flint (the recipe's 25 % flint
+  and 12.5 % nugget rolls), after about 7.5 s.
+- Mechanical mixer driven by a cogwheel beside it (it has no shaft, as in Create) at 32 RPM, over a basin:
+  2 andesite and 2 iron nuggets dropped into the basin became 2 andesite alloy in its output slots. Pole, head,
+  casing and the basin are drawn.
+- Creative motor's value box: "Rotation Speed / Scroll to change" over the crosshair; the mouse wheel steps
+  16 → 20 → 24, and ⟲ renders in Horizon's font.
+- Wrench: a click on a shaft's south face turns its axis x → y; sneak + click in survival picks it up into the
+  inventory.
+- Water wheel: its frame and OBJ wheel drawn in spruce.
+
+Not checked yet: the wrench on motors, fans and the press, and dropping a depot's or basin's items; the fan pushing
+items on the ground, pulling, slabs in the current, smoking and haunting; the water wheel turning from real flow
+with the OBJ model; a LAN guest changing a value box; regressions of the press, millstone and crank beyond what the
+scene above touched.
 
 ## Milestones 1 to 3, part 1
 
