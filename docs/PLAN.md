@@ -109,3 +109,11 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   gets nothing. Worked around by reading `Game::recipes()` directly.
 - Block shapes can only be keyed by a template property: a template with none (the enchanting table that hosts the
   depot and millstone block entities) keeps its own shape.
+- **No shared item, fluid or energy handlers between mods.** NeoForge's capabilities (`Capabilities.Item.BLOCK`,
+  fluids, energy) are how Create talks to Mekanism, AE2 and others. Horizon has only a block entity's fixed
+  container slots (hoppers and other mods can use them: this is how the depot, millstone and basin are reached
+  today); fluids and energy have nothing. Horizon's `docs/native-hooks-neoforge.md` proposes a
+  `block_capability(pos, kind, side, out)` hook, not built as of `aa27eca`. Plan: keep each machine's inventory
+  and tank access behind one small trait in the port, so moving to that hook (or contributing it upstream) touches
+  one place; until then, a shared registry module with the proposal's signature is the fallback if another
+  ported mod (Mekanism, AE2) must reach Create's fluids.
