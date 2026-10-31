@@ -8,7 +8,8 @@ and textures come from **your own Create jar** as a content mod.
 
 Status: **milestones 1, 2 and 3 (part 1): kinetics, their visuals, and the first machines**, checked in the game.
 **Milestone 3 part 2** (encased fan, mixer and basin, the creative motor's value box, the wrench, the water wheel's
-OBJ model) is ported, unit-tested and compiles into the game, but **has not been run in the game yet**. See
+OBJ model) is checked in the game in part (see VALIDATION.md for what was seen). **Milestone 4 part 1** (mechanical belt, chute,
+andesite funnel) is ported, unit-tested and compiles into the game, but **has not been run in the game yet**. See
 [docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next, and [VALIDATION.md](VALIDATION.md) for what was
 checked how.
 
@@ -28,11 +29,15 @@ checked how.
 | `MechanicalMixerBlockEntity`, `BasinBlockEntity`, `BasinRecipe`, `MechanicalMixerRenderer`, `BasinRenderer` (not yet run in the game) | `processing.rs` (cycle, recipe matching, tested), `machines.rs` (basin block entity), `glue.rs` (cog, pole, head) |
 | `ScrollValueBehaviour` on the creative motor, `IWrenchable` (not yet run in the game) | `kinetics.rs` (value box, steps, wrench turns, tested), `glue.rs` (mouse wheel, `create:values` channel, wrench) |
 | `WaterWheelRenderer` with NeoForge's OBJ loader (not yet run in the game) | `mixins/create/obj.rs` (OBJ/MTL parsing, tested) and `glue.rs` (the wheel in spruce, turned with `rotateToFaceVertical`) |
+| `BeltBlock`, `BeltBlockEntity`, `BeltInventory`, `TransportedItemStack`, `BeltHelper`, `BeltConnectorItem`, `BeltRenderer` (not yet run in the game) | `mixins/create/belt.rs` (chain, movement, items, connector, tested), `logistics.rs` (items in the world, saving, drawing), `glue.rs` (the belt's partials with the scrolling texture) |
+| `ChuteBlockEntity` (falling items only), `FunnelBlockEntity`/`BeltFunnelInteractionHandler` for the andesite funnel (not yet run in the game) | `mixins/create/chute.rs`, `funnel.rs` (rules, tested), `logistics.rs` |
 
 Hand crank: right click to turn it (10 ticks per click, as in Create). Creative motor: look at the value box on one
 of its sides and turn the mouse wheel (Create 6 opens a value board there, which Horizon can't show yet); right click
 still steps its speed 16 → 32 → 64 → 128 → 256 → −256 …. Wrench: right click turns our blocks, sneak + right click
-picks them up. The mixer needs at least 30 RPM (a creative motor's default 16 is too slow).
+picks them up. The mixer needs at least 30 RPM (a creative motor's default 16 is too slow). Belt connector: right
+click a shaft, then another one in line with it (same axis, horizontal or one up per block); an empty hand takes
+items off a belt. Andesite funnel: placed normally it extracts, placed sneaking (or wrenched) it collects.
 
 ## Layout
 
@@ -43,6 +48,9 @@ mixins/create/
   processing.rs        pressing and mixing cycles, processing and basin recipes, millstone and water wheel rules
   fan.rs               the encased fan's air current and fan processing rules, no Horizon types
   obj.rs               OBJ/MTL model parsing (the water wheel's), no Horizon types
+  belt.rs              the mechanical belt: chain, movement, items, belt funnels, connector, no Horizon types
+  chute.rs, funnel.rs  the chute's falling item and the andesite funnel's modes, no Horizon types
+  logistics.rs         Horizon's side of belts, chutes and funnels: items in the world, saving, drawing
   machines.rs          Horizon's side of the machines: depot, millstone and basin block entities, press, mixer
                        and fan work, water wheel flow
   glue.rs              Horizon's side: hooks, per-dimension state, network messages, drawing

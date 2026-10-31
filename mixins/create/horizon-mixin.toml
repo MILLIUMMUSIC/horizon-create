@@ -10,6 +10,24 @@ priority = 100
 horizon_revision = "aa27eca326db26e999d4e59d7899576016764b1e"
 
 [[module]]
+id = "belt"
+file = "crates/horizon-client/src/game.rs"
+name = "create_belt"
+source = "belt.rs"
+
+[[module]]
+id = "chute"
+file = "crates/horizon-client/src/game.rs"
+name = "create_chute"
+source = "chute.rs"
+
+[[module]]
+id = "funnel"
+file = "crates/horizon-client/src/game.rs"
+name = "create_funnel"
+source = "funnel.rs"
+
+[[module]]
 id = "fan"
 file = "crates/horizon-client/src/game.rs"
 name = "create_fan"
@@ -38,6 +56,12 @@ id = "machines"
 file = "crates/horizon-client/src/game.rs"
 name = "create_machines"
 source = "machines.rs"
+
+[[module]]
+id = "logistics"
+file = "crates/horizon-client/src/game.rs"
+name = "create_logistics"
+source = "logistics.rs"
 
 [[module]]
 id = "glue"

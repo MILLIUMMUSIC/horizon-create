@@ -1,5 +1,40 @@
 # Validation
 
+## Milestone 4, part 1
+
+Ported in a cloud session on Linux (x86_64), then built, fixed and checked on macOS (Apple M5), Rust 1.99.1,
+Python 3.12, against the pinned Horizon (`aa27eca`) and horizon-mixins (`3f99a5c`).
+
+| Check | How | Result |
+|---|---|---|
+| Rule modules (`kinetics.rs`, `processing.rs`, `fan.rs`, `obj.rs`, `belt.rs`, `chute.rs`, `funnel.rs`) | `cargo fmt --all --check`, `cargo clippy --all-targets --locked -D warnings`, `cargo test --locked` | 75 tests pass, no warnings |
+| The bundle applies and the game compiles | `tools/horizon.py check` (Linux) and `build` (macOS) | Pass, no warnings |
+| Content mod from Create 6.0.10's jar | `tools/prepare_content.py --jar` | Pass: belt part blocks, chute, both funnel blocks, loot tables |
+| In the game (offscreen, `horizon-ctl`, macOS) | Rigs built with commands, screenshots and frame differences, `/data get block` | See below |
+
+Seen in the game:
+
+- Belt connector: shaft, then a shaft 6 blocks along: a belt of start, 5 middles and end; used up in survival. A
+  sloped belt (one up per block) is made and drawn diagonally.
+- Items dropped on it lie flat, move apart at the belt's speed, stop at a wall or are thrown off the end; the
+  belt texture scrolls (23 % of its pixels change between frames, the floor's none). Belt into depot and into a
+  chute over a chest hand items over. Belt items are back after closing and reopening the world. An empty hand
+  takes a segment's items.
+- A press over the belt presses a stack of 3 iron ingots into 3 iron sheets, one per cycle. A fan through a lit
+  campfire smokes 2 raw beef waiting at the belt's end.
+- Breaking a segment in survival with a pickaxe: the connector drops, the chain becomes air with shafts at both
+  ends, its items drop.
+- Chute: items fall through three chutes and wait in the lowest over stone (as in Create).
+- Andesite funnel on a chest extracts its items.
+
+Fixed on the Mac: breaking a belt left the start pulley as air (the chain was removed over several ticks and the
+controller broke itself first; now the chain is walked at once, as `onRemove` does); belt parts dropped nothing
+(loot tables in 1.21.1's format, and the parts missing from `mineable/*`); a press on a belt let the rest of a
+stack pass after the first item (its results were not locked, as `BeltPressingCallbacks` does).
+
+Not checked yet: belt funnels, a funnel collecting, a fan pushing items, the far pulley driving a shaft beyond
+it, hoppers into chutes, a second player.
+
 ## Milestone 3, part 2
 
 Ported in a cloud session on Linux (x86_64), then checked on macOS (Apple M5), Rust 1.99.1, Python 3.12, against

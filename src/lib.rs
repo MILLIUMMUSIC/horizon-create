@@ -2,8 +2,14 @@
 // injected side by side under `crate::game` (horizon-mixin.toml), so each
 // reaches the other as `super::create_*` in both places.
 
+#[path = "../mixins/create/belt.rs"]
+pub mod create_belt;
+#[path = "../mixins/create/chute.rs"]
+pub mod create_chute;
 #[path = "../mixins/create/fan.rs"]
 pub mod create_fan;
+#[path = "../mixins/create/funnel.rs"]
+pub mod create_funnel;
 #[path = "../mixins/create/kinetics.rs"]
 pub mod create_kinetics;
 #[path = "../mixins/create/obj.rs"]

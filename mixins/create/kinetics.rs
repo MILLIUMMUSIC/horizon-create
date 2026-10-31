@@ -8,6 +8,7 @@
 // entities live in `Kinetics`, keyed by position, one per dimension (as
 // TorquePropagator keeps one network map per level).
 
+use super::create_belt::{BeltState, Part, Slope};
 use super::create_processing::{
     MixStep, Mixing, PressMode, PressStep, Pressing, water_wheel_speed,
 };
@@ -241,7 +242,7 @@ impl Kind {
             | Kind::MechanicalPress(f)
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f) => Some(("facing", f.name())),
-            Kind::Millstone | Kind::MechanicalMixer => None,
+            Kind::Millstone | Kind::MechanicalMixer | Kind::Belt(_) => None,
         }
     }
 }
@@ -360,6 +361,8 @@ pub enum Kind {
     EncasedFan(Dir),
     /// `MechanicalMixerBlock`: a small cog about Y, no shafts.
     MechanicalMixer,
+    /// `BeltBlock`: a segment of a mechanical belt (belt.rs).
+    Belt(BeltState),
 }
 
 impl Kind {
@@ -367,6 +370,9 @@ impl Kind {
     pub fn from_block<'a>(name: &str, prop: impl Fn(&str) -> Option<&'a str>) -> Option<Kind> {
         let axis = || prop("axis").and_then(Axis::parse);
         let facing = || prop("facing").and_then(Dir::parse);
+        if let Some(b) = BeltState::from_block(name, &prop) {
+            return Some(Kind::Belt(b));
+        }
         match name {
             "create:shaft" => axis().map(Kind::Shaft),
             "create:cogwheel" => axis().map(Kind::Cogwheel),
@@ -395,6 +401,7 @@ impl Kind {
             Kind::WaterWheel(_) => "create:water_wheel",
             Kind::EncasedFan(_) => "create:encased_fan",
             Kind::MechanicalMixer => "create:mechanical_mixer",
+            Kind::Belt(b) => b.block().map_or("create:belt", |(name, _)| name),
         }
     }
     /// `IRotate.getRotationAxis`.
@@ -407,6 +414,7 @@ impl Kind {
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f) => f.axis(),
             Kind::Millstone | Kind::MechanicalMixer => Axis::Y,
+            Kind::Belt(b) => b.rotation_axis(),
         }
     }
     /// `IRotate.hasShaftTowards`.
@@ -420,6 +428,7 @@ impl Kind {
             Kind::Millstone => face == Dir::Down,
             Kind::EncasedFan(f) => face == f.opposite(),
             Kind::MechanicalMixer => false,
+            Kind::Belt(b) => b.has_shaft_towards(face),
         }
     }
     /// `ICogWheel.isSmallCog`: the mixer is an `ICogWheel` too.
@@ -1070,6 +1079,13 @@ impl Kinetics {
             && kt.has_shaft_towards(direction.opposite());
         let connected_by_gears = kf.is_small_cog() && kt.is_small_cog();
 
+        // BeltBlockEntity.propagateRotationTo: segments of one belt.
+        if let (Kind::Belt(a), Kind::Belt(b)) = (kf, kt)
+            && !connected_by_axis
+        {
+            return if a.same_chain(from, b, to) { 1.0 } else { 0.0 };
+        }
+
         // Axis <-> Axis
         if connected_by_axis {
             let mut axis_modifier = self.axis_modifier(to, direction.opposite());
@@ -1308,7 +1324,12 @@ impl Kinetics {
                 out.push(relative);
             }
         }
-        if !kind.is_small_cog() {
+        // canPropagateDiagonally: small cogs, and sloped belts.
+        let diagonal = match kind {
+            Kind::Belt(b) => b.propagates_diagonally(),
+            k => k.is_small_cog(),
+        };
+        if !diagonal {
             return out;
         }
         let axis = kind.rotation_axis();
@@ -1688,6 +1709,10 @@ fn kind_key(k: Kind) -> String {
         | Kind::WaterWheel(f)
         | Kind::EncasedFan(f) => f.name(),
         Kind::Millstone | Kind::MechanicalMixer => "",
+        Kind::Belt(b) => {
+            let face = b.block().map_or("floor", |(_, face)| face);
+            return format!("{}[{};{face}]", k.block(), b.facing.name());
+        }
     };
     format!("{}[{}]", k.block(), state)
 }
@@ -1695,8 +1720,10 @@ fn kind_key(k: Kind) -> String {
 fn parse_kind_key(s: &str) -> Option<Kind> {
     let (block, rest) = s.split_once('[')?;
     let state = rest.strip_suffix(']')?;
+    let (first, second) = state.split_once(';').unwrap_or((state, ""));
     Kind::from_block(block, |key| match key {
-        "axis" | "facing" => Some(state),
+        "axis" | "facing" => Some(first),
+        "face" => Some(second),
         _ => None,
     })
 }
@@ -1794,6 +1821,11 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::WaterWheel(d) => (8, dir(d)),
         Kind::EncasedFan(d) => (9, dir(d)),
         Kind::MechanicalMixer => (10, 0),
+        Kind::Belt(b) => {
+            let slope = Slope::ALL.iter().position(|s| *s == b.slope).unwrap_or(0) as u8;
+            let part = Part::ALL.iter().position(|p| *p == b.part).unwrap_or(0) as u8;
+            (11, dir(b.facing) | slope << 3 | part << 6)
+        }
     }
 }
 
@@ -1812,6 +1844,11 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         8 => Kind::WaterWheel(dir?),
         9 => Kind::EncasedFan(dir?),
         10 => Kind::MechanicalMixer,
+        11 => Kind::Belt(BeltState {
+            facing: Dir::ALL.get(usize::from(state & 7)).copied()?,
+            slope: Slope::ALL.get(usize::from(state >> 3 & 7)).copied()?,
+            part: Part::ALL[usize::from(state >> 6)],
+        }),
         _ => return None,
     })
 }
@@ -2058,6 +2095,55 @@ mod tests {
         r.place([-1, 64, 0], Kind::Shaft(Axis::X));
         r.ticks(2);
         assert_eq!(r.speed([-1, 64, 0]), -16.0);
+    }
+
+    #[test]
+    fn a_belt_turns_with_its_pulleys() {
+        use super::super::create_belt::{BeltState, Part, Slope};
+        let belt = |part, slope| {
+            Kind::Belt(BeltState {
+                facing: Dir::South,
+                slope,
+                part,
+            })
+        };
+        let mut r = Rig::new();
+        // Motor -> shaft -> belt start at z 0, belt along +z to z 3, shaft out.
+        r.place([-2, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.place([-1, 64, 0], Kind::Shaft(Axis::X));
+        r.place([0, 64, 0], belt(Part::Start, Slope::Horizontal));
+        r.place([0, 64, 1], belt(Part::Middle, Slope::Horizontal));
+        r.place([0, 64, 2], belt(Part::Middle, Slope::Horizontal));
+        r.place([0, 64, 3], belt(Part::End, Slope::Horizontal));
+        r.place([1, 64, 3], Kind::Shaft(Axis::X));
+        // A parallel belt beside it isn't driven.
+        r.place([1, 64, 1], belt(Part::Middle, Slope::Horizontal));
+        r.ticks(3);
+        for z in 0..4 {
+            assert_eq!(r.speed([0, 64, z]), 16.0, "segment {z}");
+        }
+        assert_eq!(r.speed([1, 64, 3]), 16.0);
+        assert_eq!(r.speed([1, 64, 1]), 0.0);
+        // A sloped belt reaches its diagonal neighbours.
+        let mut r = Rig::new();
+        r.place([-2, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.place([-1, 64, 0], Kind::Shaft(Axis::X));
+        r.place([0, 64, 0], belt(Part::Start, Slope::Upward));
+        r.place([0, 65, 1], belt(Part::Middle, Slope::Upward));
+        r.place([0, 66, 2], belt(Part::End, Slope::Upward));
+        r.ticks(3);
+        assert_eq!(r.speed([0, 66, 2]), 16.0);
+        // Saved and loaded with its state.
+        let saved = r.k.save();
+        let loaded = Kinetics::load(&saved);
+        assert_eq!(
+            loaded.get([0, 65, 1]).map(|e| e.kind),
+            Some(belt(Part::Middle, Slope::Upward))
+        );
+        // And sent to clients.
+        let k = belt(Part::Pulley, Slope::Downward);
+        let (tag, state) = kind_code(k);
+        assert_eq!(kind_from_code(tag, state), Some(k));
     }
 
     #[test]

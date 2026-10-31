@@ -101,14 +101,15 @@ pub(super) fn reset() {
 
 /// `native_block_entity`: the depot's and millstone's block entities.
 pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>) {
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN) {
+    let chute = block == super::create_logistics::CHUTE;
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || chute) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
 
 /// `native_block_entity_ticks`.
 pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
-    if block == DEPOT || block == MILLSTONE || block == BASIN {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == super::create_logistics::CHUTE {
         *ticks = true;
     }
 }
@@ -122,6 +123,8 @@ pub(super) fn block_entity_container(block: &str, container: &mut Option<ModCont
         // The output inventory forbids insertion; both are taken from
         // (`CombinedInvWrapper`).
         BASIN => (BASIN_ALL_SLOTS, (0..BASIN_SLOTS).collect(), (0..BASIN_ALL_SLOTS).collect()),
+        // ChuteItemHandler: its one item.
+        super::create_logistics::CHUTE => (1, vec![0], vec![0]),
         _ => return,
     };
     let all: Vec<usize> = (0..slots).collect();
@@ -253,8 +256,18 @@ fn depot_view(items: &[Option<ItemStack>]) -> Vec<(String, u32)> {
         .collect()
 }
 
+/// One slot as clients are told it.
+pub(super) fn stack_view(stack: Option<&ItemStack>) -> (String, u32) {
+    stack.map_or((String::new(), 0), |s| (s.item.to_string(), s.count))
+}
+
 fn note_depot(game: &Game<'_>, pos: Pos, items: &[Option<ItemStack>]) {
-    let view = depot_view(items);
+    note_view(game, pos, depot_view(items));
+}
+
+/// What clients see of the block entity at `pos` (a depot, basin or
+/// chute), on the depots' channel when it changed.
+pub(super) fn note_view(game: &Game<'_>, pos: Pos, view: Vec<(String, u32)>) {
     let dim = game.dim.id().to_owned();
     let mut guard = machines();
     let m = guard.get_or_insert_with(Machines::default);
@@ -270,13 +283,14 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         DEPOT => depot_tick(game, pos, entity),
         MILLSTONE => millstone_tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
+        super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {}
     }
 }
 
 /// `ItemEntity`s resting on the block at `pos` (`updateEntityAfterFallOn`):
 /// their stacks go in through `accept`, which gives back what it left.
-fn take_landed(
+pub(super) fn take_landed(
     game: &mut Game<'_>,
     pos: Pos,
     top: f64,
@@ -337,88 +351,102 @@ fn depot_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     note_depot(game, pos, &entity.items);
 }
 
+/// The press at `press_pos`: its speed and pressing state.
+fn press_at(game: &Game<'_>, press_pos: Pos) -> Option<(f32, super::create_processing::Pressing)> {
+    super::create_glue::with_kinetics(game, |k, level| {
+        let e = k.get(press_pos)?;
+        matches!(e.kind, Kind::MechanicalPress(_)).then(|| (k.speed_of(level, press_pos), e.pressing))
+    })
+}
+
+/// `BeltPressingCallbacks.onItemReceived` of the press at `press_pos` for
+/// `held` (on a depot or a belt below it): none when there is no press,
+/// else whether it holds the item (`HOLD`, or `PASS`).
+pub(super) fn press_received(game: &Game<'_>, press_pos: Pos, held: &ItemStack) -> Option<bool> {
+    let (speed, pressing) = press_at(game, press_pos)?;
+    Some(if speed == 0.0 {
+        false
+    } else if pressing.running {
+        true
+    } else if find_recipe(game, "create:pressing", held).is_some() {
+        super::create_glue::with_kinetics(game, |k, _| {
+            if let Some(p) = k.pressing_mut(press_pos) {
+                p.start(PressMode::Belt);
+            }
+        });
+        true
+    } else {
+        false
+    })
+}
+
+/// What the press made of one held item: its results, and what is left
+/// of the held stack.
+pub(super) type Pressed = (Vec<ItemStack>, Option<ItemStack>);
+
+/// `BeltPressingCallbacks.whenItemHeld`: none when there is no press, else
+/// whether it still holds the item and, at the cycle's middle, what it
+/// pressed (`bulkPressing` off: one item at a time).
+pub(super) fn press_held(game: &Game<'_>, press_pos: Pos, held: &ItemStack) -> Option<(bool, Option<Pressed>)> {
+    let (speed, pressing) = press_at(game, press_pos)?;
+    if speed == 0.0 || !pressing.running {
+        return Some((false, None));
+    }
+    if pressing.running_ticks != PRESS_CYCLE / 2 {
+        return Some((true, None));
+    }
+    let Some(recipe) = find_recipe(game, "create:pressing", held) else {
+        return Some((false, None));
+    };
+    let results = roll(&recipe);
+    let left = (held.count > 1).then(|| {
+        let mut l = held.clone();
+        l.count -= 1;
+        l
+    });
+    Some((true, Some((results, left))))
+}
+
 fn process_on_depot(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     let Some(held) = entity.items[0].clone() else {
         put_bool(&mut entity.nbt, "Locked", false);
         return;
     };
     let press_pos = [pos[0], pos[1] + 2, pos[2]];
-    let Some((speed, pressing)) = super::create_glue::with_kinetics(game, |k, level| {
-        let e = k.get(press_pos)?;
-        matches!(e.kind, Kind::MechanicalPress(_)).then(|| (k.speed_of(level, press_pos), e.pressing))
-    }) else {
-        if std::env::var_os("CREATE_DEBUG").is_some() {
-            eprintln!("create: depot {pos:?} has no press at {press_pos:?}");
-        }
-        put_bool(&mut entity.nbt, "Locked", false);
-        return;
-    };
     let locked = get_bool(&entity.nbt, "Locked");
-    if std::env::var_os("CREATE_DEBUG").is_some() {
-        let recipe = find_recipe(game, "create:pressing", &held).map(|r| r.id);
-        let n = game.recipes().custom.get("create:pressing").map_or(0, Vec::len);
-        eprintln!(
-            "create: depot {pos:?} held {} x{} press speed {speed} running {} ticks {} locked {locked} recipe {recipe:?} of {n}",
-            held.item, held.count, pressing.running, pressing.running_ticks
-        );
-    }
     // BeltProcessingBehaviour.isBlocked: the space above must be free.
     let above = game.world.block(pos[0], pos[1] + 1, pos[2]);
     if !locked && !game.world.is_air(above) {
         return;
     }
-    // ProcessingResult: Some(true) HOLD, Some(false) PASS.
+    // ProcessingResult: true HOLD, false PASS.
     let hold = if !locked {
-        // BeltPressingCallbacks.onItemReceived
-        if speed == 0.0 {
-            false
-        } else if pressing.running {
-            true
-        } else if find_recipe(game, "create:pressing", &held).is_some() {
-            super::create_glue::with_kinetics(game, |k, _| {
-                if let Some(p) = k.pressing_mut(press_pos) {
-                    p.start(PressMode::Belt);
-                }
-            });
-            true
-        } else {
-            false
-        }
+        press_received(game, press_pos, &held)
     } else {
-        // BeltPressingCallbacks.whenItemHeld
-        if speed == 0.0 || !pressing.running {
-            false
-        } else if pressing.running_ticks != PRESS_CYCLE / 2 {
-            true
-        } else if let Some(recipe) = find_recipe(game, "create:pressing", &held) {
-            // bulkPressing is off: one item at a time.
-            let results = roll(&recipe);
-            let mut rest = results.into_iter();
-            if held.count == 1 {
-                // TransportedResult.convertTo: the first result is held.
-                entity.items[0] = rest.next();
-            } else {
-                // convertToAndLeaveHeld: the rest stay held.
-                let mut left = held.clone();
-                left.count -= 1;
-                entity.items[0] = Some(left);
-            }
-            for out in rest {
-                if entity.items[0].is_none() {
-                    entity.items[0] = Some(out);
-                    continue;
-                }
-                if let Some(drop) = insert_stacked(game, &mut entity.items, 1..DEPOT_SLOTS, out) {
-                    let c = pos.map(|v| f64::from(v) + 0.5);
-                    game.spawn_item(drop, [c[0], c[1] + 0.5, c[2]], [0.0, 0.1, 0.0], 10);
+        press_held(game, press_pos, &held).map(|(hold, pressed)| {
+            if let Some((results, left)) = pressed {
+                let mut rest = results.into_iter();
+                // TransportedResult.convertTo: the first result is held;
+                // convertToAndLeaveHeld: the rest of the stack stays held.
+                entity.items[0] = match left {
+                    Some(l) => Some(l),
+                    None => rest.next(),
+                };
+                for out in rest {
+                    if entity.items[0].is_none() {
+                        entity.items[0] = Some(out);
+                        continue;
+                    }
+                    if let Some(drop) = insert_stacked(game, &mut entity.items, 1..DEPOT_SLOTS, out) {
+                        let c = pos.map(|v| f64::from(v) + 0.5);
+                        game.spawn_item(drop, [c[0], c[1] + 0.5, c[2]], [0.0, 0.1, 0.0], 10);
+                    }
                 }
             }
-            true
-        } else {
-            false
-        }
+            hold
+        })
     };
-    put_bool(&mut entity.nbt, "Locked", hold);
+    put_bool(&mut entity.nbt, "Locked", hold.unwrap_or(false));
 }
 
 /// `MillstoneBlockEntity.tick` (and `process`).
@@ -489,7 +517,7 @@ pub(super) fn press_world_step(game: &mut Game<'_>, pos: Pos, step: PressStep, m
         .assets
         .registry
         .state(game.world.block(pos[0], pos[1] - 2, pos[2]))
-        .is_some_and(|s| s.name == DEPOT);
+        .is_some_and(|s| s.name == DEPOT || super::create_logistics::is_belt(&s.name));
     match step {
         PressStep::ScanWorld => {
             // A depot two below takes the work (TransportedItemStackHandlerBehaviour).
@@ -746,7 +774,7 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                 && game.world.loaded(p[0], p[2])
                 && registry
                     .state(game.world.block(p[0], p[1], p[2]))
-                    .is_none_or(|s| s.name != DEPOT && s.name != BASIN)
+                    .is_none_or(|s| s.name != DEPOT && s.name != BASIN && s.name != super::create_logistics::CHUTE)
         })
         .map(|(_, p)| *p)
         .collect();
@@ -855,6 +883,16 @@ pub(super) fn draw_depots(
             .is_some_and(|s| s.name == BASIN);
         if basin {
             draw_basin(game, camera, *pos, slots, out);
+            continue;
+        }
+        let chute = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1], pos[2]))
+            .is_some_and(|s| s.name == super::create_logistics::CHUTE);
+        if chute {
+            super::create_logistics::draw_chute(game, camera, *pos, slots, out);
             continue;
         }
         let centre = glam::DVec3::new(
@@ -1371,6 +1409,30 @@ fn fan_on_depot(game: &mut Game<'_>, pos: Pos, kind: FanType) {
     }
 }
 
+/// `TransportedItemStackHandlerBehaviour.handleProcessingOnAllItems` on the
+/// belt segment at `pos` (`FanProcessing.applyProcessing` on each item
+/// within .51 of its middle): results come in its place.
+fn fan_on_belt(game: &mut Game<'_>, pos: Pos, kind: FanType) {
+    let game: &Game<'_> = game;
+    super::create_logistics::with_belt_segment(game, pos, |inv, _, index| {
+        inv.apply_to_each_within(index as f32 + 0.5, 0.51, |t| {
+            let stack = t.stack.clone();
+            let process = transported_step(&mut t.processed_by, &mut t.processing_time, kind, stack.count, || {
+                fan_can_process(game, kind, &stack)
+            });
+            if !process {
+                return None;
+            }
+            let outputs = fan_process(game, kind, &stack)?;
+            Some(super::create_belt::Conversion {
+                outputs,
+                held: None,
+                locked: false,
+            })
+        });
+    });
+}
+
 /// `EncasedFanBlockEntity.tick` and `AirCurrent.tick` on the server, for
 /// every fan of `dimension` (`fans`: position, facing, speed): the current
 /// rebuilt every 30 ticks and when the speed changes, items in it pushed and
@@ -1409,18 +1471,24 @@ pub(super) fn fan_tick(game: &mut Game<'_>, dimension: &str, fans: &[(Pos, Dir, 
         let current = fan.current.clone();
         fan_items(game, dimension, pos, facing, speed, &current, &mut processing);
         for (spot, segment) in current.handler_spots(pos) {
-            let is_depot = game
+            let name = game
                 .pack
                 .assets
                 .registry
                 .state(game.world.block(spot[0], spot[1], spot[2]))
-                .is_some_and(|s| s.name == DEPOT);
-            if !is_depot {
+                .map(|s| s.name.clone());
+            let is_depot = name.as_deref() == Some(DEPOT);
+            let is_belt = name.as_deref().is_some_and(super::create_logistics::is_belt);
+            if !is_depot && !is_belt {
                 continue;
             }
             let here = FanWorld { game }.fan_type(spot);
             if let Some(kind) = here.or(segment) {
-                fan_on_depot(game, spot, kind);
+                if is_depot {
+                    fan_on_depot(game, spot, kind);
+                } else {
+                    fan_on_belt(game, spot, kind);
+                }
             }
         }
     }
