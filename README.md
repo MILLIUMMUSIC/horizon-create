@@ -6,7 +6,11 @@ Java, so Create's code is ported to Rust and built into the game as a **native m
 [horizon-mixins](https://github.com/horizon-rust/horizon-mixins) bundle), and its blocks, items, recipes, models
 and textures come from **your own Create jar** as a content mod.
 
-Status: **milestones 1, 2 and 3 (part 1): kinetics, their visuals, and the first machines.** See [docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next.
+Status: **milestones 1, 2 and 3 (part 1): kinetics, their visuals, and the first machines**, checked in the game.
+**Milestone 3 part 2** (encased fan, mixer and basin, the creative motor's value box, the wrench, the water wheel's
+OBJ model) is ported, unit-tested and compiles into the game, but **has not been run in the game yet**. See
+[docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next, and [VALIDATION.md](VALIDATION.md) for what was
+checked how.
 
 ## What is in milestone 1
 
@@ -20,18 +24,27 @@ Status: **milestones 1, 2 and 3 (part 1): kinetics, their visuals, and the first
 | `GearboxRenderer`, `CreativeMotorRenderer`, `HandCrankRenderer`, `MechanicalPressRenderer` | Partial models (`shaft_half`, crank handle, press head) turned with `CachedBuffers.rotateToFace` |
 | Engineer's goggles overlay | Stress impact, generator capacity, network stress, overstressed, beside the crosshair |
 | `DepotBehaviour`, `PressingBehaviour`, `MillstoneBlockEntity`, `WaterWheelBlockEntity`, processing recipes | `mixins/create/processing.rs` (rules, tested) and `machines.rs` (Horizon block entities with item slots, rendering of held items) |
+| `AirCurrent`, `FanProcessing`, the fan processing types, `EncasedFanRenderer` (not yet run in the game) | `mixins/create/fan.rs` (rules, tested), `machines.rs` (items and depots in the current), `glue.rs` (propeller) |
+| `MechanicalMixerBlockEntity`, `BasinBlockEntity`, `BasinRecipe`, `MechanicalMixerRenderer`, `BasinRenderer` (not yet run in the game) | `processing.rs` (cycle, recipe matching, tested), `machines.rs` (basin block entity), `glue.rs` (cog, pole, head) |
+| `ScrollValueBehaviour` on the creative motor, `IWrenchable` (not yet run in the game) | `kinetics.rs` (value box, steps, wrench turns, tested), `glue.rs` (mouse wheel, `create:values` channel, wrench) |
+| `WaterWheelRenderer` with NeoForge's OBJ loader (not yet run in the game) | `mixins/create/obj.rs` (OBJ/MTL parsing, tested) and `glue.rs` (the wheel in spruce, turned with `rotateToFaceVertical`) |
 
-Hand crank: right click to turn it (10 ticks per click, as in Create). Creative motor: right click steps its speed
-16 → 32 → 64 → 128 → 256 → −256 … (Create's scroll value box comes later).
+Hand crank: right click to turn it (10 ticks per click, as in Create). Creative motor: look at the value box on one
+of its sides and turn the mouse wheel (Create 6 opens a value board there, which Horizon can't show yet); right click
+still steps its speed 16 → 32 → 64 → 128 → 256 → −256 …. Wrench: right click turns our blocks, sneak + right click
+picks them up. The mixer needs at least 30 RPM (a creative motor's default 16 is too slow).
 
 ## Layout
 
 ```text
 mixins/create/
   horizon-mixin.toml   the bundle: modules and injections, pinned to Horizon Nightly 2026-10-31 (aa27eca)
-  kinetics.rs          Create's kinetic rules, no Horizon types
-  processing.rs        pressing cycle, processing recipes, millstone and water wheel rules, no Horizon types
-  machines.rs          Horizon's side of the machines: block entities, depot and press work, water wheel flow
+  kinetics.rs          Create's kinetic rules, the wrench's turns, the motor's value box, no Horizon types
+  processing.rs        pressing and mixing cycles, processing and basin recipes, millstone and water wheel rules
+  fan.rs               the encased fan's air current and fan processing rules, no Horizon types
+  obj.rs               OBJ/MTL model parsing (the water wheel's), no Horizon types
+  machines.rs          Horizon's side of the machines: depot, millstone and basin block entities, press, mixer
+                       and fan work, water wheel flow
   glue.rs              Horizon's side: hooks, per-dimension state, network messages, drawing
   *.rs                 one small helper per injection
 src/lib.rs             the rule modules as a library, for `cargo test`
@@ -71,5 +84,6 @@ Mods) and this repository's `mixins/create` in `horizon-native-mods/`; the launc
 
 Code: MIT. The Rust port follows Create's code, which is MIT (© The Create Team). Create's **assets are All Rights
 Reserved**: none are in this repository, and `prepare_content.py` reads them from the player's own jar, for local use
-only, like Horizon reads Minecraft's from the player's own game. Build tooling is adapted from the MIT-licensed
+only, like Horizon reads Minecraft's from the player's own game (the water wheel's OBJ model included, which the
+native mod reads from the content mod at runtime). Build tooling is adapted from the MIT-licensed
 Horizon native mod template. Not affiliated with the Create team, Horizon, Mojang or Microsoft.

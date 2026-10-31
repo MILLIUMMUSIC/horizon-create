@@ -8,7 +8,9 @@
 // entities live in `Kinetics`, keyed by position, one per dimension (as
 // TorquePropagator keeps one network map per level).
 
-use super::create_processing::{PressMode, PressStep, Pressing, water_wheel_speed};
+use super::create_processing::{
+    MixStep, Mixing, PressMode, PressStep, Pressing, water_wheel_speed,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 pub type Pos = [i32; 3];
@@ -140,6 +142,178 @@ impl Dir {
     }
 }
 
+impl Dir {
+    /// `Direction.getClockWise(axis)`: a quarter turn about `axis`; a
+    /// direction along it stays.
+    pub fn clockwise(self, axis: Axis) -> Dir {
+        use Dir::*;
+        match (axis, self) {
+            // getClockWiseX
+            (Axis::X, Down) => South,
+            (Axis::X, Up) => North,
+            (Axis::X, North) => Down,
+            (Axis::X, South) => Up,
+            // getClockWise
+            (Axis::Y, North) => East,
+            (Axis::Y, East) => South,
+            (Axis::Y, South) => West,
+            (Axis::Y, West) => North,
+            // getClockWiseZ
+            (Axis::Z, Down) => West,
+            (Axis::Z, Up) => East,
+            (Axis::Z, West) => Up,
+            (Axis::Z, East) => Down,
+            (_, d) => d,
+        }
+    }
+    /// `Direction.get(POSITIVE, axis)` (`VoxelShaper.axisAsFace`).
+    pub fn positive_of(axis: Axis) -> Dir {
+        match axis {
+            Axis::X => Dir::East,
+            Axis::Y => Dir::Up,
+            Axis::Z => Dir::South,
+        }
+    }
+    /// `AngleHelper.horizontalAngle`.
+    pub fn horizontal_angle(self) -> f32 {
+        match self {
+            Dir::South | Dir::Up | Dir::Down => 0.0,
+            Dir::West => -90.0,
+            Dir::North => 180.0,
+            Dir::East => -270.0,
+        }
+    }
+    /// `AngleHelper.verticalAngle`.
+    pub fn vertical_angle(self) -> f32 {
+        match self {
+            Dir::Up => -90.0,
+            Dir::Down => 90.0,
+            _ => 0.0,
+        }
+    }
+}
+
+impl Kind {
+    /// `IWrenchable.getRotatedBlockState`: the block after a wrench's click
+    /// on its face `face` (`onWrenched`).
+    pub fn wrenched(self, face: Dir) -> Kind {
+        let turn_axis = |a: Axis| Dir::positive_of(a).clockwise(face.axis()).axis();
+        // DirectionalKineticBlock.FACING: turned about the face until it
+        // leaves the face's axis; along it, it stays.
+        let turn_facing = |f: Dir| {
+            if f.axis() == face.axis() {
+                return f;
+            }
+            let mut f = f;
+            loop {
+                f = f.clockwise(face.axis());
+                if f.axis() != face.axis() {
+                    return f;
+                }
+            }
+        };
+        match self {
+            // RotatedPillarKineticBlock.AXIS
+            Kind::Shaft(a) => Kind::Shaft(turn_axis(a)),
+            Kind::Cogwheel(a) => Kind::Cogwheel(turn_axis(a)),
+            Kind::LargeCogwheel(a) => Kind::LargeCogwheel(turn_axis(a)),
+            Kind::Gearbox(a) => Kind::Gearbox(turn_axis(a)),
+            // HorizontalKineticBlock.HORIZONTAL_FACING: only from above or below.
+            Kind::MechanicalPress(f) if face.axis() == Axis::Y => {
+                Kind::MechanicalPress(f.clockwise(Axis::Y))
+            }
+            Kind::CreativeMotor(f) => Kind::CreativeMotor(turn_facing(f)),
+            Kind::HandCrank(f) => Kind::HandCrank(turn_facing(f)),
+            Kind::WaterWheel(f) => Kind::WaterWheel(turn_facing(f)),
+            Kind::EncasedFan(f) => Kind::EncasedFan(turn_facing(f)),
+            // No property to turn (millstone, mixer), or a press's side.
+            k => k,
+        }
+    }
+    /// The block state property a wrench changes, and its value.
+    pub fn state_property(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Kind::Shaft(a) | Kind::Cogwheel(a) | Kind::LargeCogwheel(a) | Kind::Gearbox(a) => {
+                Some(("axis", a.name()))
+            }
+            Kind::CreativeMotor(f)
+            | Kind::HandCrank(f)
+            | Kind::MechanicalPress(f)
+            | Kind::WaterWheel(f)
+            | Kind::EncasedFan(f) => Some(("facing", f.name())),
+            Kind::Millstone | Kind::MechanicalMixer => None,
+        }
+    }
+}
+
+/// `VecHelper.rotate(v, deg, axis)`.
+pub fn rotate_vec(v: [f32; 3], deg: f32, axis: Axis) -> [f32; 3] {
+    if deg == 0.0 {
+        return v;
+    }
+    let (sin, cos) = deg.to_radians().sin_cos();
+    let [x, y, z] = v;
+    match axis {
+        Axis::X => [x, y * cos - z * sin, z * cos + y * sin],
+        Axis::Y => [x * cos + z * sin, y, z * cos - x * sin],
+        Axis::Z => [x * cos - y * sin, y, z * cos + x * sin],
+    }
+}
+
+/// `VecHelper.rotateCentered`: about the block's centre.
+pub fn rotate_centered(v: [f32; 3], deg: f32, axis: Axis) -> [f32; 3] {
+    let r = rotate_vec(v.map(|c| c - 0.5), deg, axis);
+    r.map(|c| c + 0.5)
+}
+
+/// `ValueBoxTransform.getScale`: the value box's size, half a block.
+const VALUE_BOX_SCALE: f32 = 0.5;
+
+/// `CreativeMotorBlockEntity.MotorValueBox` (a `ValueBoxTransform.Sided`)
+/// on the motor facing `facing`, looked at from `side`: the box's centre in
+/// the block, none on a side without one (`isSideActive`).
+pub fn motor_value_box(facing: Dir, side: Dir) -> Option<[f32; 3]> {
+    if facing.axis() != Axis::Y && side == Dir::Down {
+        return None;
+    }
+    if side.axis() == facing.axis() {
+        return None;
+    }
+    // getSouthLocation: voxelSpace(8, 8, 12.5), turned to the side.
+    let south = [0.5, 0.5, 12.5 / 16.0];
+    let v = rotate_centered(south, side.horizontal_angle(), Axis::Y);
+    let v = rotate_centered(v, side.vertical_angle(), Axis::X);
+    let n = facing.normal();
+    Some([0, 1, 2].map(|i| v[i] - n[i] as f32 / 16.0))
+}
+
+/// `ValueBoxTransform.testHit`: whether a click at `local` (in the block,
+/// 0 to 1) on `side` is on the motor's value box.
+pub fn hits_motor_value_box(facing: Dir, side: Dir, local: [f32; 3]) -> bool {
+    motor_value_box(facing, side).is_some_and(|c| {
+        let d = [0, 1, 2].map(|i| local[i] - c[i]);
+        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < VALUE_BOX_SCALE / 2.0
+    })
+}
+
+/// One wheel step of the creative motor's scroll value: Create 0.5's
+/// `CreativeMotorTileEntity.step` (steps of 1, 4, 16 and 64 as the speed
+/// grows, never 0), within `between(-256, 256)`. Create 6 sets it on a
+/// value board instead, which Horizon can't open (docs/PLAN.md).
+pub fn motor_scroll_step(current: i32, forward: bool) -> i32 {
+    let mut step = 1;
+    let magnitude = current.abs() - if forward == (current > 0) { 0 } else { 1 };
+    for threshold in [4, 32, 128] {
+        if magnitude >= threshold {
+            step *= 4;
+        }
+    }
+    let delta = if forward { step } else { -step };
+    let step = if current + delta == 0 { step + 1 } else { step };
+    let max = MAX_ROTATION_SPEED as i32;
+    (current + if forward { step } else { -step }).clamp(-max, max)
+}
+
 fn sub(a: Pos, b: Pos) -> Pos {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
@@ -182,6 +356,10 @@ pub enum Kind {
     Millstone,
     /// `WaterWheelBlock`: the way it faces (its axis).
     WaterWheel(Dir),
+    /// `EncasedFanBlock`: the way its air blows out (its shaft is behind).
+    EncasedFan(Dir),
+    /// `MechanicalMixerBlock`: a small cog about Y, no shafts.
+    MechanicalMixer,
 }
 
 impl Kind {
@@ -199,6 +377,8 @@ impl Kind {
             "create:mechanical_press" => facing().map(Kind::MechanicalPress),
             "create:millstone" => Some(Kind::Millstone),
             "create:water_wheel" => facing().map(Kind::WaterWheel),
+            "create:encased_fan" => facing().map(Kind::EncasedFan),
+            "create:mechanical_mixer" => Some(Kind::MechanicalMixer),
             _ => None,
         }
     }
@@ -213,6 +393,8 @@ impl Kind {
             Kind::MechanicalPress(_) => "create:mechanical_press",
             Kind::Millstone => "create:millstone",
             Kind::WaterWheel(_) => "create:water_wheel",
+            Kind::EncasedFan(_) => "create:encased_fan",
+            Kind::MechanicalMixer => "create:mechanical_mixer",
         }
     }
     /// `IRotate.getRotationAxis`.
@@ -222,8 +404,9 @@ impl Kind {
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
             | Kind::MechanicalPress(f)
-            | Kind::WaterWheel(f) => f.axis(),
-            Kind::Millstone => Axis::Y,
+            | Kind::WaterWheel(f)
+            | Kind::EncasedFan(f) => f.axis(),
+            Kind::Millstone | Kind::MechanicalMixer => Axis::Y,
         }
     }
     /// `IRotate.hasShaftTowards`.
@@ -235,11 +418,13 @@ impl Kind {
             Kind::HandCrank(f) => face == f.opposite(),
             Kind::MechanicalPress(f) | Kind::WaterWheel(f) => face.axis() == f.axis(),
             Kind::Millstone => face == Dir::Down,
+            Kind::EncasedFan(f) => face == f.opposite(),
+            Kind::MechanicalMixer => false,
         }
     }
-    /// `ICogWheel.isSmallCog`.
+    /// `ICogWheel.isSmallCog`: the mixer is an `ICogWheel` too.
     pub fn is_small_cog(self) -> bool {
-        matches!(self, Kind::Cogwheel(_))
+        matches!(self, Kind::Cogwheel(_) | Kind::MechanicalMixer)
     }
     /// `ICogWheel.isLargeCog`.
     pub fn is_large_cog(self) -> bool {
@@ -250,6 +435,8 @@ impl Kind {
         match self {
             Kind::MechanicalPress(_) => 8.0,
             Kind::Millstone => 4.0,
+            Kind::EncasedFan(_) => 2.0,
+            Kind::MechanicalMixer => 4.0,
             _ => 0.0,
         }
     }
@@ -306,6 +493,8 @@ pub struct Kinetic {
     pub flow_score: i32,
     /// `MechanicalPressBlockEntity.pressingBehaviour`.
     pub pressing: Pressing,
+    /// `MechanicalMixerBlockEntity`'s cycle.
+    pub mixing: Mixing,
 }
 
 impl Kinetic {
@@ -332,6 +521,7 @@ impl Kinetic {
             crank_backwards: false,
             flow_score: 0,
             pressing: Pressing::default(),
+            mixing: Mixing::new(),
         }
     }
     /// `getGeneratedSpeed`.
@@ -435,10 +625,16 @@ impl Kinetics {
             source: e.source.map(|s| Dir::nearest(sub(s, pos))),
             stress: e.stress,
             capacity: e.capacity,
-            press_ticks: if e.pressing.running {
-                e.pressing.running_ticks.clamp(0, i16::MAX as i32) as i16
-            } else {
-                -1
+            aux: match e.kind {
+                Kind::MechanicalPress(_) if e.pressing.running => {
+                    e.pressing.running_ticks.clamp(0, i16::MAX as i32) as i16
+                }
+                Kind::MechanicalMixer if e.mixing.running => {
+                    e.mixing.running_ticks.clamp(0, i16::MAX as i32) as i16
+                }
+                // The scroll value box shows the motor's setting.
+                Kind::CreativeMotor(_) => e.motor_speed as i16,
+                _ => -1,
             },
             press_belt: e.pressing.mode == PressMode::Belt,
         })
@@ -1300,6 +1496,47 @@ impl Kinetics {
             .filter(|p| matches!(self.entities[p].kind, Kind::MechanicalPress(_)))
             .collect()
     }
+    /// `MechanicalMixerBlockEntity.tick` of the mixer at `pos`; clients hear
+    /// of it while it runs and when it stops.
+    pub fn tick_mixer(&mut self, level: &dyn Level, pos: Pos) -> Option<MixStep> {
+        let speed = self.speed_of(level, pos);
+        let e = self.entities.get_mut(&pos)?;
+        if !matches!(e.kind, Kind::MechanicalMixer) {
+            return None;
+        }
+        let was = (e.mixing.running, e.mixing.running_ticks);
+        let step = e.mixing.tick(speed);
+        if was.0 || e.mixing.running || was != (e.mixing.running, e.mixing.running_ticks) {
+            self.dirty.insert(pos);
+        }
+        Some(step)
+    }
+    /// The mixer at `pos`'s cycle.
+    pub fn mixing_mut(&mut self, pos: Pos) -> Option<&mut Mixing> {
+        let e = self.entities.get_mut(&pos)?;
+        if !matches!(e.kind, Kind::MechanicalMixer) {
+            return None;
+        }
+        self.dirty.insert(pos);
+        Some(&mut e.mixing)
+    }
+    /// Every mixer, for their tick after the kinetics'.
+    pub fn mixers(&self) -> Vec<Pos> {
+        self.positions()
+            .into_iter()
+            .filter(|p| matches!(self.entities[p].kind, Kind::MechanicalMixer))
+            .collect()
+    }
+    /// Every encased fan, with its facing and speed, for their air currents.
+    pub fn fans(&self, level: &dyn Level) -> Vec<(Pos, Dir, f32)> {
+        self.positions()
+            .into_iter()
+            .filter_map(|p| match self.entities[&p].kind {
+                Kind::EncasedFan(f) => Some((p, f, self.speed_of(level, p))),
+                _ => None,
+            })
+            .collect()
+    }
     /// Every water wheel, for their flow check.
     pub fn water_wheels(&self) -> Vec<(Pos, Dir)> {
         self.positions()
@@ -1357,7 +1594,7 @@ impl Kinetics {
                 .map_or("-".to_owned(), |s| format!("{},{},{}", s[0], s[1], s[2]));
             let network = e.network.map_or("-".to_owned(), |n| n.to_string());
             out.push_str(&format!(
-                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
+                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
                 pos[0],
                 pos[1],
                 pos[2],
@@ -1376,6 +1613,8 @@ impl Kinetics {
                 u8::from(e.pressing.running),
                 e.pressing.running_ticks,
                 u8::from(e.pressing.mode == PressMode::Belt),
+                u8::from(e.mixing.running),
+                e.mixing.running_ticks,
             ));
         }
         out
@@ -1390,8 +1629,9 @@ impl Kinetics {
         }
         for line in lines {
             let f: Vec<&str> = line.split(' ').collect();
-            // 14 fields before the water wheel and the press, 18 since.
-            if f.len() != 14 && f.len() != 18 {
+            // 14 fields before the water wheel and the press, 18 before the
+            // mixer, 20 since.
+            if ![14, 18, 20].contains(&f.len()) {
                 continue;
             }
             let num = |i: usize| f[i].parse::<f32>().ok();
@@ -1413,7 +1653,7 @@ impl Kinetics {
             e.last_capacity_provided = num(11).unwrap_or(0.0);
             e.motor_speed = int(12).unwrap_or(MOTOR_DEFAULT_SPEED);
             e.crank_backwards = f[13] == "1";
-            if f.len() == 18 {
+            if f.len() >= 18 {
                 e.flow_score = int(14).unwrap_or(0);
                 e.pressing.running = f[15] == "1";
                 e.pressing.running_ticks = int(16).unwrap_or(0);
@@ -1423,6 +1663,11 @@ impl Kinetics {
                 } else {
                     PressMode::World
                 };
+            }
+            if f.len() == 20 {
+                // MechanicalMixerBlockEntity.read: `Running` and `Ticks`.
+                e.mixing.running = f[18] == "1";
+                e.mixing.running_ticks = int(19).unwrap_or(0);
             }
             e.over_stressed = e.network.is_some() && e.capacity < e.stress;
             e.update_speed = false;
@@ -1440,8 +1685,9 @@ fn kind_key(k: Kind) -> String {
         Kind::CreativeMotor(f)
         | Kind::HandCrank(f)
         | Kind::MechanicalPress(f)
-        | Kind::WaterWheel(f) => f.name(),
-        Kind::Millstone => "",
+        | Kind::WaterWheel(f)
+        | Kind::EncasedFan(f) => f.name(),
+        Kind::Millstone | Kind::MechanicalMixer => "",
     };
     format!("{}[{}]", k.block(), state)
 }
@@ -1515,8 +1761,10 @@ pub struct View {
     /// Its network's stress and capacity.
     pub stress: f32,
     pub capacity: f32,
-    /// A press's running ticks, or -1 at rest; and whether it reaches a depot.
-    pub press_ticks: i16,
+    /// By kind: a press's or a mixer's running ticks (-1 at rest), a
+    /// creative motor's speed setting (its scroll value); -1 otherwise.
+    pub aux: i16,
+    /// Whether a press reaches a depot.
     pub press_belt: bool,
 }
 
@@ -1544,6 +1792,8 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::MechanicalPress(d) => (6, dir(d)),
         Kind::Millstone => (7, 0),
         Kind::WaterWheel(d) => (8, dir(d)),
+        Kind::EncasedFan(d) => (9, dir(d)),
+        Kind::MechanicalMixer => (10, 0),
     }
 }
 
@@ -1560,6 +1810,8 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         6 => Kind::MechanicalPress(dir?),
         7 => Kind::Millstone,
         8 => Kind::WaterWheel(dir?),
+        9 => Kind::EncasedFan(dir?),
+        10 => Kind::MechanicalMixer,
         _ => return None,
     })
 }
@@ -1583,7 +1835,7 @@ pub fn encode_update(dim: u8, full: bool, entries: &[(Pos, Option<View>)]) -> Ve
                 v.source.map_or(255, |d| d as u8),
                 v.stress,
                 v.capacity,
-                (v.press_ticks, v.press_belt),
+                (v.aux, v.press_belt),
             ),
             None => ((255, 0), 0.0, 255, 0.0, 0.0, (-1, false)),
         };
@@ -1622,7 +1874,7 @@ pub fn decode_update(data: &[u8]) -> Option<Update> {
                 source: Dir::ALL.get(usize::from(c[18])).copied(),
                 stress: float(&c[19..23]),
                 capacity: float(&c[23..27]),
-                press_ticks: i16::from_le_bytes([c[27], c[28]]),
+                aux: i16::from_le_bytes([c[27], c[28]]),
                 press_belt: c[29] != 0,
             });
             (pos, view)
@@ -2038,7 +2290,7 @@ mod tests {
             source: Some(Dir::West),
             stress: 128.0,
             capacity: 256.0,
-            press_ticks: -1,
+            aux: -1,
             press_belt: false,
         };
         let entries = vec![
@@ -2093,7 +2345,7 @@ mod tests {
             source: Some(Dir::West),
             stress: 0.0,
             capacity: 0.0,
-            press_ticks: -1,
+            aux: -1,
             press_belt: false,
         };
         // Time 20 at 16 rpm: 96 degrees, before the half-tooth offsets.
@@ -2152,6 +2404,178 @@ mod tests {
         let p = loaded.get([0, 64, 0]).unwrap().pressing;
         assert!(p.running && p.running_ticks == 60 && p.mode == PressMode::Belt);
         let v = loaded.view(&r.world, [0, 64, 0]).unwrap();
-        assert_eq!((v.press_ticks, v.press_belt), (60, true));
+        assert_eq!((v.aux, v.press_belt), (60, true));
+    }
+
+    #[test]
+    fn a_fan_turns_from_behind_and_loads_the_network() {
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::East));
+        // The fan blows east: its shaft is on its west side.
+        r.place([1, 64, 0], Kind::EncasedFan(Dir::East));
+        r.ticks(2);
+        assert_eq!(r.speed([1, 64, 0]), 16.0);
+        let (_, stress, _, _) = r.k.stats(&r.world, [1, 64, 0]).unwrap();
+        assert_eq!(stress, 2.0 * 16.0);
+        // Facing the motor, its shaft points away: it doesn't turn.
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.place([1, 64, 0], Kind::EncasedFan(Dir::West));
+        r.ticks(2);
+        assert_eq!(r.speed([1, 64, 0]), 0.0);
+    }
+
+    #[test]
+    fn a_mixer_is_driven_as_a_cogwheel() {
+        let mut r = Rig::new();
+        r.place([0, 63, 0], Kind::CreativeMotor(Dir::Up));
+        r.place([0, 64, 0], Kind::Cogwheel(Axis::Y));
+        r.place([1, 64, 0], Kind::MechanicalMixer);
+        r.ticks(2);
+        assert_eq!(r.speed([1, 64, 0]), -16.0);
+        let (_, stress, _, _) = r.k.stats(&r.world, [1, 64, 0]).unwrap();
+        assert_eq!(stress, 4.0 * 16.0);
+        // No shaft reaches it from above.
+        let mut r = Rig::new();
+        r.place([0, 65, 0], Kind::CreativeMotor(Dir::Down));
+        r.place([0, 64, 0], Kind::MechanicalMixer);
+        r.ticks(2);
+        assert_eq!(r.speed([0, 64, 0]), 0.0);
+    }
+
+    #[test]
+    fn a_running_mixer_is_saved_and_shown() {
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::MechanicalMixer);
+        r.place([1, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.ticks(1);
+        r.k.mixing_mut([0, 64, 0]).unwrap().start(0);
+        r.k.mixing_mut([0, 64, 0]).unwrap().running_ticks = 12;
+        let loaded = Kinetics::load(&r.k.save());
+        let m = loaded.get([0, 64, 0]).unwrap().mixing;
+        assert!(m.running && m.running_ticks == 12);
+        assert_eq!(loaded.view(&r.world, [0, 64, 0]).unwrap().aux, 12);
+        // The motor shows its setting.
+        assert_eq!(loaded.view(&r.world, [1, 64, 0]).unwrap().aux, 16);
+        assert_eq!(
+            parse_kind_key(&kind_key(Kind::EncasedFan(Dir::Up))),
+            Some(Kind::EncasedFan(Dir::Up))
+        );
+        assert_eq!(
+            parse_kind_key(&kind_key(Kind::MechanicalMixer)),
+            Some(Kind::MechanicalMixer)
+        );
+    }
+
+    #[test]
+    fn the_wrench_turns_blocks_as_create_does() {
+        // A shaft along X, clicked on top (Y): turned about Y, along Z.
+        assert_eq!(Kind::Shaft(Axis::X).wrenched(Dir::Up), Kind::Shaft(Axis::Z));
+        assert_eq!(
+            Kind::Shaft(Axis::Z).wrenched(Dir::Down),
+            Kind::Shaft(Axis::X)
+        );
+        // Clicked on its end: it stays.
+        assert_eq!(
+            Kind::Cogwheel(Axis::X).wrenched(Dir::East),
+            Kind::Cogwheel(Axis::X)
+        );
+        assert_eq!(
+            Kind::Gearbox(Axis::Y).wrenched(Dir::North),
+            Kind::Gearbox(Axis::X)
+        );
+        // Directional blocks: a quarter turn about the clicked face.
+        assert_eq!(
+            Kind::CreativeMotor(Dir::North).wrenched(Dir::Up),
+            Kind::CreativeMotor(Dir::East)
+        );
+        assert_eq!(
+            Kind::EncasedFan(Dir::Up).wrenched(Dir::East),
+            Kind::EncasedFan(Dir::North)
+        );
+        assert_eq!(
+            Kind::EncasedFan(Dir::Up).wrenched(Dir::Down),
+            Kind::EncasedFan(Dir::Up)
+        );
+        assert_eq!(
+            Kind::HandCrank(Dir::Up).wrenched(Dir::North),
+            Kind::HandCrank(Dir::East)
+        );
+        // The press turns only from above or below.
+        assert_eq!(
+            Kind::MechanicalPress(Dir::North).wrenched(Dir::Up),
+            Kind::MechanicalPress(Dir::East)
+        );
+        assert_eq!(
+            Kind::MechanicalPress(Dir::North).wrenched(Dir::East),
+            Kind::MechanicalPress(Dir::North)
+        );
+        assert_eq!(
+            Kind::MechanicalMixer.wrenched(Dir::Up),
+            Kind::MechanicalMixer
+        );
+        assert_eq!(Kind::Shaft(Axis::Y).state_property(), Some(("axis", "y")));
+        // Four turns about one axis come back.
+        let mut d = Dir::North;
+        for _ in 0..4 {
+            d = d.clockwise(Axis::X);
+        }
+        assert_eq!(d, Dir::North);
+    }
+
+    #[test]
+    fn a_wrenched_shaft_leaves_its_line() {
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.place([1, 64, 0], Kind::Shaft(Axis::X));
+        r.ticks(2);
+        assert_eq!(r.speed([1, 64, 0]), 16.0);
+        let turned = Kind::Shaft(Axis::X).wrenched(Dir::Up);
+        r.place([1, 64, 0], turned);
+        r.ticks(2);
+        assert_eq!(r.speed([1, 64, 0]), 0.0);
+    }
+
+    #[test]
+    fn the_motor_value_box_sits_on_its_sides() {
+        // A motor facing north (shaft out of its north face): the box on
+        // its east side, 12.5/16 of the way out, a pixel back.
+        let c = motor_value_box(Dir::North, Dir::East).unwrap();
+        let want = [12.5 / 16.0, 0.5, 0.5 + 1.0 / 16.0];
+        for k in 0..3 {
+            assert!((c[k] - want[k]).abs() < 1e-5, "{c:?}");
+        }
+        assert!(hits_motor_value_box(
+            Dir::North,
+            Dir::East,
+            [1.0, 0.5, 0.55]
+        ));
+        assert!(!hits_motor_value_box(
+            Dir::North,
+            Dir::East,
+            [1.0, 0.95, 0.55]
+        ));
+        // None on its front, back, or (lying down) underneath.
+        assert_eq!(motor_value_box(Dir::North, Dir::North), None);
+        assert_eq!(motor_value_box(Dir::North, Dir::South), None);
+        assert_eq!(motor_value_box(Dir::North, Dir::Down), None);
+        assert!(motor_value_box(Dir::Up, Dir::West).is_some());
+        let top = motor_value_box(Dir::North, Dir::Up).unwrap();
+        assert!((top[1] - 12.5 / 16.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_motor_scrolls_in_growing_steps() {
+        assert_eq!(motor_scroll_step(16, true), 20);
+        assert_eq!(motor_scroll_step(1, true), 2);
+        assert_eq!(motor_scroll_step(4, false), 3);
+        assert_eq!(motor_scroll_step(3, true), 4);
+        // Never zero: 1 down goes to -1.
+        assert_eq!(motor_scroll_step(1, false), -1);
+        assert_eq!(motor_scroll_step(-1, true), 1);
+        assert_eq!(motor_scroll_step(32, true), 48);
+        assert_eq!(motor_scroll_step(128, true), 192);
+        assert_eq!(motor_scroll_step(250, true), 256);
+        assert_eq!(motor_scroll_step(-256, false), -256);
     }
 }
