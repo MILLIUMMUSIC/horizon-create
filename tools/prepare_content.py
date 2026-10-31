@@ -336,9 +336,11 @@ def turn_y(b, quarter_turns):
 
 
 def loot(name, items):
+    # In 26.3's format (as horizon-port-pack upgrades the carried tables):
+    # one `condition` object with a `type`, not 1.21.1's `conditions` list.
     return {
         "type": "minecraft:block",
-        "pools": [{"rolls": 1.0, "bonus_rolls": 0.0, "conditions": [{"condition": "minecraft:survives_explosion"}],
+        "pools": [{"rolls": 1.0, "bonus_rolls": 0.0, "condition": {"type": "minecraft:survives_explosion"},
                    "entries": [{"type": "minecraft:item", "name": item}]} for item in items],
         "random_sequence": f"create:blocks/{name}",
     }
@@ -394,6 +396,25 @@ def fit_logistics(content, names):
                     and props.get("waterlogged", "false") == "false" and "facing" in props:
                 variants[f"facing={props['facing']}"] = model
         write_json(states / f"{name}.json", {"variants": variants})
+
+    # The extra blocks share their base block's tags: `mineable/*` decides
+    # whether the template's required tool drops them at all.
+    share_block_tags(content, {
+        **{name: "create:belt" for name in BELT_PARTS if name != "belt"},
+        **{name: "create:andesite_funnel" for name in FUNNELS if name != "andesite_funnel"},
+    })
+
+
+def share_block_tags(content, bases):
+    """Adds `create:<name>` to every block tag that lists its base."""
+    for path in (content / "data").glob("*/tags/block/**/*.json"):
+        tag = read_json(path)
+        values = tag.get("values", [])
+        listed = {v if isinstance(v, str) else v.get("id") for v in values}
+        added = [f"create:{n}" for n, base in bases.items() if base in listed and f"create:{n}" not in listed]
+        if added:
+            tag["values"] = values + added
+            write_json(path, tag)
 
 
 def take_obj_models(jar, out):

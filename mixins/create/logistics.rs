@@ -301,7 +301,11 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
         let press = [pos[0], pos[1] + 2, pos[2]];
         let (hold, pressed) = super::create_machines::press_held(self.game, press, &item.stack)?;
         let result = if hold { ProcessingResult::Hold } else { ProcessingResult::Pass };
-        Some((result, pressed.map(|(outputs, held)| Conversion { outputs, held })))
+        Some((result, pressed.map(|(outputs, held)| Conversion {
+            outputs,
+            held,
+            locked: true,
+        })))
     }
     fn processing_blocked(&self, pos: Pos) -> bool {
         let above = [pos[0], pos[1] + 1, pos[2]];
@@ -435,6 +439,11 @@ pub(super) fn belts_tick(game: &mut Game<'_>, dimension: &str, belts: &[(Pos, Be
     let mut live = HashSet::new();
     let mut destroy = Vec::new();
     for &(pos, state, speed) in belts {
+        // The kinetics learn of a removed controller a tick late: what is
+        // there now (a shaft from `belts_removed`) is no belt to break.
+        if belt_at(game, pos).is_none_or(|b| b.part != super::create_belt::Part::Start) {
+            continue;
+        }
         let chain = belt_chain(&World { game }, pos);
         if chain.len() < 2 {
             destroy.push(pos);
@@ -560,21 +569,33 @@ fn segment_of(game: &Game<'_>, pos: Pos) -> Option<(Pos, i32)> {
 }
 
 /// `BeltBlock.onRemove` for segments of ours that changed into something
-/// else: the rest of the chain becomes shafts (at pulleys) and air.
+/// else: the rest of the chain becomes shafts (at pulleys) and air. Create
+/// walks the chain within the one removal (each `setBlock` calls `onRemove`
+/// again); so does this, or `belts_tick` would find a controller whose
+/// chain is too short and break it (`initBelt`) before its pulley turns
+/// into a shaft.
 pub(super) fn belts_removed(game: &mut Game<'_>, removed: &[(Pos, BeltState)]) {
     let dimension = game.dim.id().to_owned();
     let registry = game.pack.assets.registry;
     let air = registry.default_state("minecraft:air");
     let shaft = registry.default_state(SHAFT);
-    for &(pos, state) in removed {
-        let next = on_removed(&World { game }, state, pos);
-        for (p, axis) in next {
+    let mut queue: Vec<(Pos, BeltState)> = removed.to_vec();
+    let mut done: HashSet<Pos> = removed.iter().map(|(p, _)| *p).collect();
+    while let Some((pos, state)) = queue.pop() {
+        for (p, axis) in on_removed(&World { game }, state, pos) {
+            if !done.insert(p) {
+                continue;
+            }
+            let Some(old) = belt_at(game, p) else {
+                continue;
+            };
             let target = match axis {
                 Some(a) => shaft.and_then(|s| game.with_props(s, &[("axis", a.name())])),
                 None => air,
             };
             if let Some(t) = target {
                 game.native_set_block(&dimension, p, t, super::native_hooks::flags::UPDATE_ALL);
+                queue.push((p, old));
             }
         }
     }

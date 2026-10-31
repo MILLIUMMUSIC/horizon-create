@@ -1424,7 +1424,11 @@ fn fan_on_belt(game: &mut Game<'_>, pos: Pos, kind: FanType) {
                 return None;
             }
             let outputs = fan_process(game, kind, &stack)?;
-            Some(super::create_belt::Conversion { outputs, held: None })
+            Some(super::create_belt::Conversion {
+                outputs,
+                held: None,
+                locked: false,
+            })
         });
     });
 }

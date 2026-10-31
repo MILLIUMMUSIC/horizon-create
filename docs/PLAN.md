@@ -158,3 +158,15 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   entities each tick.
 - Mod containers can't say which stack a slot takes: hoppers stack onto a chute's item (`ChuteItemHandler` takes
   only into an empty chute).
+- **No shared item, fluid or energy handlers between mods.** NeoForge's capabilities (`Capabilities.Item.BLOCK`,
+  fluids, energy) are how Create talks to Mekanism, AE2 and others. Horizon has only a block entity's fixed
+  container slots (hoppers and other mods can use them: this is how the depot, millstone and basin are reached
+  today); fluids and energy have nothing. Horizon's `docs/native-hooks-neoforge.md` proposes a
+  `block_capability(pos, kind, side, out)` hook, not built as of `aa27eca`. Plan: keep each machine's inventory
+  and tank access behind one small trait in the port, so moving to that hook (or contributing it upstream) touches
+  one place; until then, a shared registry module with the proposal's signature is the fallback if another
+  ported mod (Mekanism, AE2) must reach Create's fluids.
+- Loot tables a native port writes itself must be in 26.3's format (`"condition": {"type": ...}` per pool), as
+  `horizon-port-pack` upgrades carried ones; 1.21.1's `conditions` list drops nothing. And a template's required
+  tool applies to every block made from it: extra blocks (belt parts, the collecting funnel) need their base
+  block's `mineable/*` tags or they drop nothing (`prepare_content.share_block_tags`).

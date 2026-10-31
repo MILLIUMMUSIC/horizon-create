@@ -415,6 +415,10 @@ pub enum ProcessingResult {
 pub struct Conversion<S> {
     pub outputs: Vec<S>,
     pub held: Option<S>,
+    /// The outputs stay held where they are (`BeltPressingCallbacks` sets
+    /// `copy.locked` on its results: they wait under the press for the
+    /// cycle's end, and the rest of the stack waits behind them).
+    pub locked: bool,
 }
 
 /// `BeltFunnelBlock.Shape`.
@@ -824,7 +828,9 @@ impl<S: Stack> BeltInventory<S> {
         }
         for (k, out) in c.outputs.into_iter().enumerate() {
             let angle = (item.angle + 37 * (k as i32 + 1)).rem_euclid(360);
-            self.to_insert.push(item.similar(out, angle));
+            let mut t = item.similar(out, angle);
+            t.locked = c.locked;
+            self.to_insert.push(t);
         }
     }
 
@@ -1128,7 +1134,9 @@ impl<S: Stack> BeltInventory<S> {
             }
             for (k, out) in c.outputs.into_iter().enumerate() {
                 let angle = (item.angle + 37 * (k as i32 + 1)).rem_euclid(360);
-                self.to_insert.push(item.similar(out, angle));
+                let mut t = item.similar(out, angle);
+                t.locked = c.locked;
+                self.to_insert.push(t);
             }
             self.to_remove.push(i);
             self.dirty = true;
@@ -1143,6 +1151,7 @@ impl<S: Stack> BeltInventory<S> {
             Some(Conversion {
                 outputs: Vec::new(),
                 held: None,
+                locked: false,
             })
         });
         out
@@ -1496,6 +1505,17 @@ mod tests {
         presses: Vec<Pos>,
         funnels: HashMap<Pos, BeltFunnel>,
         funnelled: Vec<Item>,
+        /// The press's running ticks (`PressingBehaviour`), none at rest.
+        cycle: Option<i32>,
+    }
+
+    const HALF: i32 = 60;
+
+    impl Blocks {
+        /// `PressingBehaviour.tick`: the cycle ends after twice its middle.
+        fn tick_press(&mut self) {
+            self.cycle = self.cycle.map(|t| t + 1).filter(|t| *t <= 2 * HALF);
+        }
     }
 
     impl BeltLevel for Blocks {
@@ -1531,7 +1551,11 @@ mod tests {
             if !self.presses.contains(&pos) {
                 return None;
             }
-            Some(if item.stack.0 == "iron_ingot" {
+            // BeltPressingCallbacks.onItemReceived.
+            Some(if self.cycle.is_some() {
+                (ProcessingResult::Hold, None)
+            } else if item.stack.0 == "iron_ingot" {
+                self.cycle = Some(0);
                 (ProcessingResult::Hold, None)
             } else {
                 (ProcessingResult::Pass, None)
@@ -1545,7 +1569,13 @@ mod tests {
             if !self.presses.contains(&pos) {
                 return None;
             }
-            // Pressed at once: one sheet out, the rest held.
+            // BeltPressingCallbacks.whenItemHeld: pressed at the cycle's
+            // middle, one at a time; held until the cycle ends.
+            match self.cycle {
+                None => return Some((ProcessingResult::Pass, None)),
+                Some(HALF) if item.stack.0 == "iron_ingot" => {}
+                Some(_) => return Some((ProcessingResult::Hold, None)),
+            }
             let mut left = item.stack.clone();
             left.1 -= 1;
             Some((
@@ -1553,6 +1583,7 @@ mod tests {
                 Some(Conversion {
                     outputs: vec![Item("iron_sheet", 1)],
                     held: (left.1 > 0).then_some(left),
+                    locked: true,
                 }),
             ))
         }
@@ -1766,27 +1797,38 @@ mod tests {
 
     #[test]
     fn the_press_holds_and_converts() {
-        let mut b = Blocks::default();
-        flat(&mut b, Dir::South, 3);
-        b.presses.push([0, 0, 1]);
-        let belt = belt(Dir::South, 3, 32.0);
-        let mut inv: BeltInventory<Item> = BeltInventory::new();
-        inv.insert_at(&belt, 0, Item("iron_ingot", 2), 180, false);
-        let mut seen_locked = false;
-        for _ in 0..200 {
-            inv.tick(&belt, &mut b);
-            seen_locked |= inv.items.iter().any(|t| t.locked);
+        // Both directions: the rest of the stack waits behind the locked
+        // sheet, then comes back under the press for the next cycle.
+        for (facing, speed) in [(Dir::South, 16.0), (Dir::South, -16.0)] {
+            let mut b = Blocks::default();
+            flat(&mut b, facing, 3);
+            b.presses.push([0, 0, 1]);
+            let belt = belt(facing, 3, speed);
+            let mut inv: BeltInventory<Item> = BeltInventory::new();
+            let start = if speed > 0.0 { 0 } else { 2 };
+            inv.insert_at(&belt, start, Item("iron_ingot", 3), 180, false);
+            let mut seen_locked = false;
+            for _ in 0..3000 {
+                inv.tick(&belt, &mut b);
+                b.tick_press();
+                seen_locked |= inv.items.iter().any(|t| t.locked);
+            }
+            assert!(seen_locked);
+            // All three ingots pressed; the sheets went on and off the end.
+            assert!(inv.items.is_empty(), "{:?}", inv.items);
+            let count = |id: &str| {
+                b.ejected
+                    .iter()
+                    .filter(|e| e.0.0 == id)
+                    .map(|e| e.0.1)
+                    .sum::<u32>()
+            };
+            assert_eq!(
+                (count("iron_sheet"), count("iron_ingot")),
+                (3, 0),
+                "speed {speed}"
+            );
         }
-        assert!(seen_locked);
-        // Both ingots pressed; the sheets went on and off the end.
-        assert!(inv.items.is_empty(), "{:?}", inv.items);
-        let sheets: u32 = b
-            .ejected
-            .iter()
-            .filter(|e| e.0.0 == "iron_sheet")
-            .map(|e| e.0.1)
-            .sum();
-        assert_eq!(sheets, 2);
     }
 
     #[test]
