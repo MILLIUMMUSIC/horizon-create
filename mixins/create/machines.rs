@@ -579,15 +579,21 @@ pub(super) fn press_world_step(game: &mut Game<'_>, pos: Pos, step: PressStep, m
 fn items_below(game: &Game<'_>, pos: Pos) -> Vec<usize> {
     let [x, y, z] = pos.map(f64::from);
     let (lo, hi) = ([x + 0.125, y - 1.0 + 0.125, z + 0.125], [x + 0.875, y - 0.125, z + 0.875]);
+    // `getEntitiesOfClass(ItemEntity.class, box)`: the item's bounding box
+    // (0.25 wide and high, from its feet) meets the box. An item lying on
+    // the floor has its feet below the deflated box.
     (0..game.dropped.len())
         .filter(|&i| {
             let d = &game.dropped[i];
             let p = d.position;
             d.on_ground
                 && d.stack.count > 0
-                && (lo[0]..=hi[0]).contains(&p.x)
-                && (lo[1]..=hi[1]).contains(&p.y)
-                && (lo[2]..=hi[2]).contains(&p.z)
+                && p.x + 0.125 > lo[0]
+                && p.x - 0.125 < hi[0]
+                && p.y + 0.25 > lo[1]
+                && p.y < hi[1]
+                && p.z + 0.125 > lo[2]
+                && p.z - 0.125 < hi[2]
         })
         .collect()
 }

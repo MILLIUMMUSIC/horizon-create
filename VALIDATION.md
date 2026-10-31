@@ -1,5 +1,25 @@
 # Validation
 
+## Combined pass over earlier milestones (macOS, offscreen)
+
+Checked in one world after milestone 4 part 1 was merged, with the same build:
+
+- Depot: a hopper above fills it and a hopper below empties it (3 iron ingots through to a chest).
+- Millstone: a hopper above feeds it wheat, an andesite funnel on its side takes the flour out.
+- Press over items on the ground: 2 iron ingots pressed into 2 iron sheets. **Fixed here**: the scan tested the
+  item's feet against the deflated box under the press, so an item lying on the floor was never found; it now
+  tests the item's bounding box, as `getEntitiesOfClass` does.
+- Fan: pushes items on the ground along its current; through a lit soul campfire it turns sand into soul sand.
+- Wrench: a creative motor and a press turn a quarter about the clicked top face; a fan clicked on a face along its
+  axis stays (as Create's `getRotatedBlockState`); sneak + wrench in survival picks up a depot into the inventory and
+  drops its items.
+- Water wheel in a water trough: −8 RPM from the flow, driving two shafts beyond it.
+- Belt: the far pulley drives a shaft beyond it (16 RPM); an andesite funnel on a chest over the belt pushes the
+  chest's items onto it, one at a time.
+- Andesite funnels: one on a chest's or millstone's side extracts one item and waits until it is gone (as Create's
+  funnel with no filter); a collecting funnel on a chest takes items dropped onto it.
+- Chute: a hopper above it feeds a chest below through it.
+
 ## Milestone 4, part 1
 
 Ported in a cloud session on Linux (x86_64), then built, fixed and checked on macOS (Apple M5), Rust 1.99.1,
@@ -32,8 +52,7 @@ controller broke itself first; now the chain is walked at once, as `onRemove` do
 (loot tables in 1.21.1's format, and the parts missing from `mineable/*`); a press on a belt let the rest of a
 stack pass after the first item (its results were not locked, as `BeltPressingCallbacks` does).
 
-Not checked yet: belt funnels, a funnel collecting, a fan pushing items, the far pulley driving a shaft beyond
-it, hoppers into chutes, a second player.
+Not checked yet: a belt funnel pulling items off the belt into its inventory, a second player.
 
 ## Milestone 3, part 2
 
@@ -61,10 +80,8 @@ Seen in the game:
   inventory.
 - Water wheel: its frame and OBJ wheel drawn in spruce.
 
-Not checked yet: the wrench on motors, fans and the press, and dropping a depot's or basin's items; the fan pushing
-items on the ground, pulling, slabs in the current, smoking and haunting; the water wheel turning from real flow
-with the OBJ model; a LAN guest changing a value box; regressions of the press, millstone and crank beyond what the
-scene above touched.
+Not checked yet: the fan pulling (reversed), slabs in the current; the OBJ wheel seen turning; a LAN guest changing
+a value box.
 
 ## Milestones 1 to 3, part 1
 
@@ -88,6 +105,5 @@ Seen in the game:
 - Millstone: wheat thrown on it milled into wheat flour.
 - Water wheel: water flowing over it gives a flow score of 2 and 8 RPM.
 
-Not checked yet: hoppers into and out of the depot and millstone, the press over items on the ground, a LAN or
-dedicated server with a second player, building through the Horizon launcher, and anything against Create running
+Not checked yet: a LAN or dedicated server with a second player, building through the Horizon launcher, and anything against Create running
 on NeoForge (no oracle yet: values are compared by hand with Create's code).
