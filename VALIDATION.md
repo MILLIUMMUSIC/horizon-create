@@ -1,5 +1,18 @@
 # Validation
 
+## Milestone 4, part 1
+
+Ported in a cloud session on Linux (x86_64), Rust 1.99.1, Python 3.12, against the pinned Horizon (`aa27eca`) and
+horizon-mixins (`3f99a5c`). **Compiled and unit-tested only: not built with `tools/horizon.py build`, no content
+mod made (no Create jar there), not run in the game.**
+
+| Check | How | Result |
+|---|---|---|
+| Rule modules (`kinetics.rs`, `processing.rs`, `fan.rs`, `obj.rs`, `belt.rs`, `chute.rs`, `funnel.rs`) | `cargo fmt --all --check`, `cargo clippy --all-targets --locked -D warnings`, `cargo test --locked` | 75 tests pass, no warnings |
+| The bundle applies and the game compiles (`glue.rs`, `machines.rs`, `logistics.rs`) | `tools/horizon.py check` (Python 3.12) | Pass, no warnings |
+| `prepare_content.py`'s new belt and funnel fitting | `fit_logistics` on a stand-in folder with Create 6.0.10's generated `andesite_funnel` blockstate | Runs; blocks, blockstates and loot tables written |
+| In the game | Not yet | See the PR's checklist |
+
 ## Milestone 3, part 2
 
 Ported in a cloud session on Linux (x86_64), then checked on macOS (Apple M5), Rust 1.99.1, Python 3.12, against

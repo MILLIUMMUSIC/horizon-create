@@ -9,6 +9,7 @@ use super::create_kinetics::{
     Axis, ClientView, Dir, ENTRIES_PER_MESSAGE, Kind, Kinetics, Level, Pos, View,
     encode_update, gearbox_shaft_angle, hits_motor_value_box, motor_scroll_step, render_angle,
 };
+use super::create_belt::{BeltState, belt_partials, belt_scroll};
 use super::create_processing::{
     MixStep, PressMode, PressStep, mixer_head_offset, mixer_head_speed, press_head_offset,
 };
@@ -107,8 +108,9 @@ fn our_states(game: &Game<'_>) -> HashSet<u32> {
         .filter(|&i| {
             registry.state(BlockStateId(i)).is_some_and(|s| {
                 s.name.starts_with("create:")
-                    && Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str))
+                    && (Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str))
                         .is_some()
+                        || super::create_logistics::is_ours(&s.name))
             })
         })
         .collect()
@@ -171,6 +173,7 @@ pub(super) fn block_changed(
 
 /// `native_place_block`: a player placed a block in their dimension.
 pub(super) fn placed(game: &Game<'_>, pos: [i32; 3]) {
+    super::create_logistics::placed(game, pos);
     if kind_at(game, pos).is_none() {
         return;
     }
@@ -188,6 +191,10 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut mix_steps = Vec::new();
     let fans;
     let full_update;
+    let mut belts: Vec<(Pos, BeltState, f32)> = Vec::new();
+    let mut removed_belts: Vec<(Pos, BeltState)> = Vec::new();
+    let mut changed_here: Vec<Pos> = Vec::new();
+    let save_now;
     {
         let mut guard = server();
         let s = guard.get_or_insert_with(Server::default);
@@ -248,8 +255,18 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 kinetics.set_motor_speed(&mut level, pos, value);
             }
         }
+        // BeltBlock.onRemove: a segment that is no belt any more.
+        let mut note_removed = |old: Option<Kind>, new: Option<Kind>, pos: Pos| {
+            if let Some(Kind::Belt(b)) = old
+                && !matches!(new, Some(Kind::Belt(_)))
+            {
+                removed_belts.push((pos, b));
+            }
+        };
+        changed_here.clone_from(&changed);
         for pos in changed {
             let kind = kind_at(game, pos);
+            note_removed(kinetics.get(pos).map(|e| e.kind), kind, pos);
             kinetics.on_changed(&mut level, pos, kind);
         }
         // Changes no hook told us of: a loaded block that isn't ours any more.
@@ -259,6 +276,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             }
             let kind = kind_at(game, pos);
             if kinetics.get(pos).map(|e| e.kind) != kind {
+                note_removed(kinetics.get(pos).map(|e| e.kind), kind, pos);
                 kinetics.on_changed(&mut level, pos, kind);
             }
         }
@@ -289,6 +307,15 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             }
         }
         fans = kinetics.fans(&level);
+        // Belt controllers: their start segments.
+        for p in kinetics.positions() {
+            if let Some(Kind::Belt(b)) = kinetics.get(p).map(|e| e.kind)
+                && b.part == super::create_belt::Part::Start
+                && level.is_loaded(p)
+            {
+                belts.push((p, b, kinetics.speed_of(&level, p)));
+            }
+        }
         let code = dim_code(dimension);
         let updates = kinetics.take_dirty(&level);
         let full = ticks % SNAPSHOT_EVERY == 0;
@@ -305,10 +332,16 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             messages.push(encode_update(code, true, &[]));
         }
         destroy.extend(level.destroyed);
-        if ticks % SAVE_EVERY == 0 {
+        save_now = ticks % SAVE_EVERY == 0;
+        if save_now {
             save_all(s);
         }
     }
+    if save_now {
+        super::create_logistics::save_all();
+    }
+    super::create_logistics::belts_removed(game, &removed_belts);
+    super::create_logistics::changed(game, dimension, &changed_here);
     // Outside the lock: these change blocks and items, which come back to us.
     for [x, y, z] in destroy {
         game.native_run_command(&format!(
@@ -322,6 +355,8 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         super::create_machines::mixer_world_step(game, p, step);
     }
     super::create_machines::fan_tick(game, dimension, &fans);
+    super::create_logistics::belts_tick(game, dimension, &belts, full_update);
+    super::create_logistics::funnels_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
     if messages.is_empty() && depots.is_empty() {
         return;
@@ -382,11 +417,17 @@ pub(super) fn right_click(
         // Templates with a use of their own (a grindstone's or an enchanting
         // table's menu) would take the click before `native_use_item_on`:
         // the wrench acts here for them.
+        // Belts (a grindstone's template) aren't wrenched yet (BeltSlicer).
+        if matches!(kind, Some(Kind::Belt(_))) {
+            *canceled = true;
+            return;
+        }
         let own_use = matches!(
             kind,
             Some(Kind::MechanicalPress(_) | Kind::MechanicalMixer | Kind::Millstone)
         ) || name == super::create_machines::DEPOT
-            || name == super::create_machines::BASIN;
+            || name == super::create_machines::BASIN
+            || name == super::create_logistics::CHUTE;
         if own_use {
             *canceled = true;
             wrench(game, pos, face, sneaking);
@@ -398,7 +439,7 @@ pub(super) fn right_click(
             return;
         }
     }
-    if super::create_machines::right_click(game, pos, face) {
+    if super::create_machines::right_click(game, pos, face) || super::create_logistics::right_click(game, pos) {
         *canceled = true;
         return;
     }
@@ -467,6 +508,10 @@ pub(super) fn use_item_on(
     face: [i32; 3],
     claimed: &mut bool,
 ) {
+    if super::create_logistics::use_connector(game, stack, pos) {
+        *claimed = true;
+        return;
+    }
     if &*stack.item != WRENCH {
         return;
     }
@@ -487,7 +532,15 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     }
     let name = block_name(game, pos);
     let kind = kind_at(game, pos);
-    let machine = name == super::create_machines::DEPOT || name == super::create_machines::BASIN;
+    if matches!(kind, Some(Kind::Belt(_))) {
+        return true;
+    }
+    if !sneaking && super::create_logistics::wrench_funnel(game, pos) {
+        return true;
+    }
+    let machine = name == super::create_machines::DEPOT
+        || name == super::create_machines::BASIN
+        || super::create_logistics::is_ours(&name);
     if kind.is_none() && !machine {
         return false;
     }
@@ -510,9 +563,9 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
         let dimension = game.dim.id().to_owned();
         if game.native_set_block(&dimension, pos, air, super::native_hooks::flags::UPDATE_ALL)
             && mode != 1
-            && game.items().get(&name).is_some()
+            && game.items().get(super::create_logistics::item_of(&name)).is_some()
         {
-            game.give_or_drop(horizon_client::items::ItemStack::new(&name, 1));
+            game.give_or_drop(horizon_client::items::ItemStack::new(super::create_logistics::item_of(&name), 1));
         }
         return true;
     }
@@ -634,6 +687,10 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
 pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
     use super::native_lifecycle::WorldPhase;
     super::create_machines::reset();
+    super::create_logistics::world_phase(matches!(
+        phase,
+        WorldPhase::WorldCloseFinal | WorldPhase::WorldCloseFailed
+    ));
     let mut guard = server();
     match phase {
         WorldPhase::WorldOpenReady | WorldPhase::WorldOpenFailed => *guard = None,
@@ -652,6 +709,10 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
 pub(super) fn from_server(channel: &str, data: &[u8]) {
     if channel == super::create_machines::DEPOTS {
         super::create_machines::from_server(data);
+        return;
+    }
+    if channel == super::create_logistics::BELTS {
+        super::create_logistics::from_server(data);
         return;
     }
     if channel != CHANNEL {
@@ -733,6 +794,9 @@ struct Part {
     angle: f32,
     /// Moved down this far, after turning (the press's and mixer's heads).
     drop: f32,
+    /// `SpriteShiftEntry` and scroll (`shiftUVScrolling`): the belt's
+    /// texture swapped for its scrolling one, moved this far along it.
+    scroll: Option<(&'static str, &'static str, f32)>,
 }
 
 type Want = (&'static str, Option<(&'static str, &'static str)>, glam::Mat4, Axis, f32, f32);
@@ -743,6 +807,7 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
     let id = glam::Mat4::IDENTITY;
     // (holder, property, orientation, spin axis, angle, drop)
     let mut want: Vec<Want> = Vec::new();
+    let mut scrolls: Vec<Option<(&'static str, &'static str, f32)>> = Vec::new();
     match view.kind {
         Kind::Shaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
         Kind::Cogwheel(a) => {
@@ -814,9 +879,45 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             want.push(("create:hz_part_mechanical_mixer_pole", None, id, Axis::Y, 0.0, drop));
             want.push(("create:hz_part_mechanical_mixer_head", None, id, Axis::Y, whisk, drop));
         }
+        Kind::Belt(b) => {
+            // BeltRenderer: the belt's partials turned its way, their texture
+            // scrolling with its speed; the pulley turning at pulleys.
+            let (partials, angle) = belt_partials(b);
+            let turn = glam::Mat4::from_rotation_y(angle.to_radians());
+            for (name, bottom, diagonal) in partials {
+                let holder = belt_holder(name);
+                let original = if diagonal {
+                    "create:block/belt_diagonal"
+                } else if bottom {
+                    "create:block/belt_offset"
+                } else {
+                    "create:block/belt"
+                };
+                let target = if diagonal {
+                    "create:block/belt_diagonal_scroll"
+                } else {
+                    "create:block/belt_scroll"
+                };
+                let scroll = belt_scroll(b, view.speed, time, bottom);
+                scrolls.resize(want.len(), None);
+                scrolls.push(Some((original, target, scroll)));
+                want.push((holder, None, turn, Axis::Y, 0.0, 0.0));
+            }
+            if b.has_pulley() {
+                let dir = b.facing.clockwise(Axis::Y);
+                let orient = if dir.axis() == Axis::X {
+                    glam::Mat4::from_rotation_y(90f32.to_radians())
+                } else {
+                    glam::Mat4::IDENTITY
+                } * glam::Mat4::from_rotation_x(90f32.to_radians());
+                want.push(("create:hz_part_belt_pulley", None, orient, b.rotation_axis(), standard, 0.0));
+            }
+        }
     }
+    scrolls.resize(want.len(), None);
     want.into_iter()
-        .filter_map(|(block, prop, orient, axis, angle, drop)| {
+        .zip(scrolls)
+        .filter_map(|((block, prop, orient, axis, angle, drop), scroll)| {
             let state = holder(game, c, block, prop)?;
             Some(Part {
                 state,
@@ -824,6 +925,7 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                 axis,
                 angle,
                 drop,
+                scroll,
             })
         })
         .collect()
@@ -839,12 +941,12 @@ pub(super) fn draw(
     let mut guard = client();
     let Some(c) = guard.as_mut() else {
         drop(guard);
-        super::create_machines::draw_depots(game, camera, out);
+        draw_items(game, camera, out);
         return;
     };
     if c.view.dim != dim_code(game.dim.id()) || c.view.blocks.is_empty() {
         drop(guard);
-        super::create_machines::draw_depots(game, camera, out);
+        draw_items(game, camera, out);
         return;
     }
     let time = render_time();
@@ -873,7 +975,11 @@ pub(super) fn draw(
                 * glam::Mat4::from_axis_angle(unit(part.axis), part.angle.to_radians())
                 * part.orient
                 * glam::Mat4::from_translation(-half);
+            let start = out.len();
             game.block_model_vertices(part.state, seed, m, packed, false, out);
+            if let Some((original, target, scroll)) = part.scroll {
+                shift_uv(game, &mut out[start..], original, target, scroll);
+            }
         }
         if let Kind::WaterWheel(f) = view.kind {
             let angle = render_angle(view.kind, pos, view.speed, time);
@@ -885,7 +991,55 @@ pub(super) fn draw(
         }
     }
     drop(guard);
+    draw_items(game, camera, out);
+}
+
+/// The model holder of a belt partial (`AllPartialModels.BELT_*`).
+fn belt_holder(name: &str) -> &'static str {
+    match name {
+        "belt_start" => "create:hz_part_belt_start",
+        "belt_middle" => "create:hz_part_belt_middle",
+        "belt_end" => "create:hz_part_belt_end",
+        "belt_start_bottom" => "create:hz_part_belt_start_bottom",
+        "belt_middle_bottom" => "create:hz_part_belt_middle_bottom",
+        "belt_end_bottom" => "create:hz_part_belt_end_bottom",
+        "belt_diagonal_start" => "create:hz_part_belt_diagonal_start",
+        "belt_diagonal_end" => "create:hz_part_belt_diagonal_end",
+        _ => "create:hz_part_belt_diagonal_middle",
+    }
+}
+
+/// `SuperByteBuffer.shiftUVScrolling`: the vertices textured from
+/// `original` take the same place on `target`, `scroll` of its height on.
+fn shift_uv(
+    game: &Game<'_>,
+    vertices: &mut [horizon_client::mesher::Vertex],
+    original: &str,
+    target: &str,
+    scroll: f32,
+) {
+    let sprites = &game.gui.atlas.sprites;
+    let (Some(o), Some(t)) = (sprites.get(original), sprites.get(target)) else {
+        return;
+    };
+    let height = t.v1 - t.v0;
+    let eps = 1e-6;
+    for v in vertices {
+        let [u, w] = v.uv;
+        let inside = u >= o.u0.min(o.u1) - eps
+            && u <= o.u0.max(o.u1) + eps
+            && w >= o.v0.min(o.v1) - eps
+            && w <= o.v0.max(o.v1) + eps;
+        if inside {
+            v.uv = [u - o.u0 + t.u0, w - o.v0 + t.v0 + scroll * height];
+        }
+    }
+}
+
+/// What depots, basins, chutes and belts carry.
+fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
     super::create_machines::draw_depots(game, camera, out);
+    super::create_logistics::draw_belts(game, camera, out);
 }
 
 /// `WaterWheelBlockEntity.material`'s default, spruce planks, as

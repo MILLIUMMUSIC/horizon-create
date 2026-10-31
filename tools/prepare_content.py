@@ -12,6 +12,9 @@ mod:
   models, which the native mod draws turning every frame;
 - blocks get the templates and shapes Create gives them (a thin shaft, a
   cogwheel's disc, a crank on any face);
+- belts are a block per part on a grindstone's template (its `face` holds
+  the slope), drawn by the native mod; chutes and andesite funnels get the
+  templates the native mod expects (see `fit_logistics`);
 - the water wheel's OBJ model (`models/block/water_wheel/`), which the
   native mod reads at runtime, is taken from the jar when the carried
   content lacks it.
@@ -106,6 +109,9 @@ CONTAINERS = {
     # BasinBlock's `facing` (where it pours out) needs a template property:
     # it always faces down, into its own output inventory.
     "basin": {"template": "minecraft:enchanting_table", "model": "create:block/basin/block"},
+    # ChuteBlock's `facing` and `shape` need template properties: chutes are
+    # straight (facing down), drawn as the plain one.
+    "chute": {"template": "minecraft:enchanting_table", "model": "create:block/chute/block"},
 }
 
 # NeoForge's convention tags the recipes name and Horizon has no copy of
@@ -144,6 +150,41 @@ PARTIALS = {
     "cogwheel_shaftless": "create:block/cogwheel_shaftless",
     "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
     "mechanical_mixer_head": "create:block/mechanical_mixer/head",
+    # BeltRenderer's partials.
+    "belt_pulley": "create:block/belt_pulley",
+    "belt_start": "create:block/belt/start",
+    "belt_middle": "create:block/belt/middle",
+    "belt_end": "create:block/belt/end",
+    "belt_start_bottom": "create:block/belt/start_bottom",
+    "belt_middle_bottom": "create:block/belt/middle_bottom",
+    "belt_end_bottom": "create:block/belt/end_bottom",
+    "belt_diagonal_start": "create:block/belt/diagonal_start",
+    "belt_diagonal_middle": "create:block/belt/diagonal_middle",
+    "belt_diagonal_end": "create:block/belt/diagonal_end",
+}
+
+# Belts: Create's one `create:belt` (facing, slope, part, casing) is a block
+# per part here, on a grindstone's template: it has a horizontal `facing`
+# and a `face` (floor, wall, ceiling) that holds the slope (horizontal,
+# upward, downward), needs no support and has no use the native mod doesn't
+# stop. Vertical and sideways belts have no block. Shapes can only follow one
+# property: the flat belt's slab (both ways) and a lower half for slopes.
+BELT_PARTS = {"belt": "start", "hz_belt_middle": "middle", "hz_belt_end": "end", "hz_belt_pulley": "pulley"}
+BELT_SHAPES = {
+    "floor": [box(0, 3, 0, 16, 13, 16)],
+    "wall": [box(0, 0, 0, 16, 8, 16)],
+    "ceiling": [box(0, 0, 0, 16, 8, 16)],
+}
+
+# The andesite funnel: a lightning rod's template (six facings), a block for
+# each `extracting`; the item places the extracting one. AllShapes.FUNNEL_*,
+# within the block.
+FUNNELS = {"andesite_funnel": "true", "hz_andesite_funnel_collecting": "false"}
+FUNNEL_WALL_NORTH = [box(2, 2, 14, 14, 14, 16), box(1, 8, 12, 15, 15, 14), box(0.1, 13, 7, 15.9, 15, 11),
+                     box(0.1, 9, 8, 15.9, 13, 12), box(0.1, 5, 9, 15.9, 9, 13)]
+FUNNEL_SHAPES = {
+    "up": [box(2, 0, 2, 14, 8, 14), box(1, 1, 1, 15, 8, 15), box(0, 4, 0, 16, 10, 16)],
+    "down": [box(2, 8, 2, 14, 16, 14), box(1, 8, 1, 15, 15, 15), box(0, 6, 0, 16, 12, 16)],
 }
 
 # AllPartialModels.WATER_WHEEL, an OBJ model (`neoforge:obj`) with its
@@ -280,8 +321,79 @@ def fit(content):
         write_json(states / f"{block}.json", {"variants": {"": {"model": model}}})
         names[f"block.create.{block}"] = name
 
+    fit_logistics(content, names)
+
     if names:
         write_json(lang, names)
+
+
+def turn_y(b, quarter_turns):
+    """A box turned clockwise about Y (seen from above) in quarter turns."""
+    x0, y0, z0, x1, y1, z1 = b
+    for _ in range(quarter_turns % 4):
+        x0, z0, x1, z1 = 1 - z1, x0, 1 - z0, x1
+    return [x0, y0, z0, x1, y1, z1]
+
+
+def loot(name, items):
+    return {
+        "type": "minecraft:block",
+        "pools": [{"rolls": 1.0, "bonus_rolls": 0.0, "conditions": [{"condition": "minecraft:survives_explosion"}],
+                   "entries": [{"type": "minecraft:item", "name": item}]} for item in items],
+        "random_sequence": f"create:blocks/{name}",
+    }
+
+
+def fit_logistics(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    base = read_json(blocks / "belt.json") if (blocks / "belt.json").exists() else {}
+    for name, part in BELT_PARTS.items():
+        decl = dict(base)
+        decl["template"] = "minecraft:grindstone"
+        decl["item"] = False
+        decl["default_state"] = {"face": "floor"}
+        decl["shapes"] = {"property": "face", "values": BELT_SHAPES}
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+        # BeltBlock's blockstate shows only particles; the native mod draws it.
+        write_json(states / f"{name}.json", {
+            "variants": {f"face={f}": {"model": "create:block/belt/particle"} for f in BELT_SHAPES}
+        })
+        # The belt drops its connector, and a shaft where it had a pulley
+        # (`BeltBlock.getDrops`).
+        items = ["create:belt_connector"] + ([] if part == "middle" else ["create:shaft"])
+        write_json(loot_tables / f"{name}.json", loot(name, items))
+        if name != "belt":
+            names[f"block.create.{name}"] = names.get("block.create.belt", "Mechanical Belt")
+
+    original = read_json(states / "andesite_funnel.json") if (states / "andesite_funnel.json").exists() else None
+    base = read_json(blocks / "andesite_funnel.json") if (blocks / "andesite_funnel.json").exists() else {}
+    turns = {"north": 0, "east": 1, "south": 2, "west": 3}
+    shapes = dict(FUNNEL_SHAPES)
+    for f, q in turns.items():
+        shapes[f] = [turn_y(b, q) for b in FUNNEL_WALL_NORTH]
+    for name, extracting in FUNNELS.items():
+        decl = dict(base)
+        decl["template"] = "minecraft:lightning_rod"
+        decl.pop("default_state", None)
+        decl["shapes"] = {"property": "facing", "values": shapes}
+        decl.setdefault("properties", {})["light"] = 0
+        if name != "andesite_funnel":
+            decl["item"] = False
+            names[f"block.create.{name}"] = names.get("block.create.andesite_funnel", "Andesite Funnel")
+            write_json(loot_tables / f"{name}.json", loot(name, ["create:andesite_funnel"]))
+        write_json(blocks / f"{name}.json", decl)
+        if original is None:
+            continue
+        variants = {}
+        for key, model in original.get("variants", {}).items():
+            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            if props.get("extracting") == extracting and props.get("powered", "false") == "false" \
+                    and props.get("waterlogged", "false") == "false" and "facing" in props:
+                variants[f"facing={props['facing']}"] = model
+        write_json(states / f"{name}.json", {"variants": variants})
 
 
 def take_obj_models(jar, out):
