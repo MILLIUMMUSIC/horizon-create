@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Build the Create content mod from the player's own Create jar.
+
+Create's assets are All Rights Reserved, so this repository ships none of
+them. The player downloads Create's jar themselves; Horizon's own
+`horizon-port-pack` carries its blocks, items, recipes, models and textures
+into a content mod; this script then fits the carried blocks to the native
+mod:
+
+- rotating blocks (shaft, cogwheels) leave the chunk mesh: their blockstates
+  point to an empty model, and hidden `create:hz_*` blocks hold the real
+  models, which the native mod draws turning every frame;
+- blocks get the templates and shapes Create gives them (a thin shaft, a
+  cogwheel's disc, a crank on any face).
+
+Usage (Python 3.9+):
+
+  python3 tools/prepare_content.py --jar create-1.21.1-6.0.10.jar \\
+      --resources <Horizon's prepared 26.3 resources> --out target/content
+
+The result, `target/content/create`, is a content mod folder: run the game
+with `--dev-mod target/content/create`, or copy it into `horizon-mods/`.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# Box helpers in sixteenths, turned to block units.
+def box(x0, y0, z0, x1, y1, z1):
+    return [x0 / 16, y0 / 16, z0 / 16, x1 / 16, y1 / 16, z1 / 16]
+
+
+def along(axis, b):
+    """A box modelled along Y, turned to lie along `axis`."""
+    x0, y0, z0, x1, y1, z1 = b
+    if axis == "y":
+        return b
+    if axis == "x":
+        return [y0, x0, z0, y1, x1, z1]
+    return [x0, z0, y0, x1, z1, y1]
+
+
+def facing_box(facing, b):
+    """A box modelled sitting on the floor (facing up), turned so it sits
+    on the face opposite `facing`."""
+    x0, y0, z0, x1, y1, z1 = b
+    return {
+        "up": [x0, y0, z0, x1, y1, z1],
+        "down": [x0, 1 - y1, z0, x1, 1 - y0, z1],
+        "north": [x0, z0, 1 - y1, x1, z1, 1 - y0],
+        "south": [x0, z0, y0, x1, z1, y1],
+        "west": [1 - y1, z0, x0, 1 - y0, z1, x1],
+        "east": [y0, z0, x0, y1, z1, x1],
+    }[facing]
+
+
+AXES = ["x", "y", "z"]
+FACINGS = ["down", "up", "north", "south", "west", "east"]
+# AllShapes.SIX_VOXEL_POLE
+POLE = box(5, 0, 5, 11, 16, 11)
+# AllShapes.SMALL_GEAR / LARGE_GEAR discs (the large one clamped to its block).
+SMALL_GEAR = box(2, 6, 2, 14, 10, 14)
+LARGE_GEAR = box(0, 6, 0, 16, 10, 16)
+# AllShapes.CRANK
+CRANK = box(5, 0, 5, 11, 6, 11)
+
+# Rotating blocks: drawn by the native mod, hidden from the chunk mesh.
+ROTATING = {
+    "shaft": {"shapes": [POLE], "particle": "create:block/axis"},
+    "cogwheel": {"shapes": [POLE, SMALL_GEAR], "particle": "block/stripped_spruce_log_top"},
+    "large_cogwheel": {"shapes": [POLE, LARGE_GEAR], "particle": "block/stripped_spruce_log_top"},
+}
+
+# Directional kinetic blocks: a template with all six facings and nothing
+# else of its own that shows (Create's DirectionalKineticBlock). `turns`:
+# the block's own model rotates (KineticBlockEntityRenderer draws it), so it
+# leaves the chunk mesh like the rotating blocks.
+DIRECTIONAL = {
+    "creative_motor": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
+    "hand_crank": {"template": "minecraft:lightning_rod", "shape": CRANK, "turns": "create:block/axis"},
+    "water_wheel": {
+        "template": "minecraft:lightning_rod",
+        "shape": box(0, 0, 0, 16, 16, 16),
+        "turns": "block/spruce_planks",
+    },
+}
+
+# Machines with item slots: mod block entities need a template that has a
+# block entity. An enchanting table has one, no state properties, and doesn't
+# hide its neighbours' faces; its light and its menu are taken away (the
+# native mod stops the click). With no property, its shape stays its own
+# (12/16 high): the depot is 13/16, the millstone a full block.
+CONTAINERS = {
+    "depot": {"template": "minecraft:enchanting_table"},
+    "millstone": {"template": "minecraft:enchanting_table"},
+}
+
+# NeoForge's convention tags the recipes name and Horizon has no copy of
+# (NeoForge's own data: `c:ingots/iron` is vanilla's iron ingot...).
+CONVENTION_TAGS = {
+    "ingots/iron": ["minecraft:iron_ingot"],
+    "ingots/gold": ["minecraft:gold_ingot"],
+    "ingots/copper": ["minecraft:copper_ingot"],
+    "ingots/netherite": ["minecraft:netherite_ingot"],
+}
+
+# Horizontal kinetic blocks: a grindstone has a horizontal `facing`, is
+# placed facing the player, needs no support and hides no face next to it (Create's
+# press is open underneath). The native mod stops its menu.
+HORIZONTAL = {
+    "mechanical_press": {"template": "minecraft:grindstone", "shape": box(0, 0, 0, 16, 16, 16)},
+}
+
+# AllPartialModels the renderers draw: hidden blocks holding each model
+# untransformed, which the native mod turns to face their way.
+PARTIALS = {
+    "shaft_half": "create:block/shaft_half",
+    "hand_crank_handle": "create:block/hand_crank/handle",
+    "press_head": "create:block/mechanical_press/head",
+    "millstone_inner": "create:block/millstone/inner",
+}
+
+
+def read_json(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(value, f, indent=2)
+        f.write("\n")
+
+
+def carry(jar, resources, port_pack, work):
+    """Runs horizon-port-pack on the jar alone; returns the carried folder."""
+    jars = work / "pack"
+    jars.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(jar, jars / jar.name)
+    run = lambda *a: subprocess.run([str(port_pack), *a], check=True)
+    run("import", str(jars), str(work / "port"))
+    (work / "port" / "jars").mkdir(exist_ok=True)
+    shutil.copy2(jar, work / "port" / "jars" / jar.name)
+    run("inventory", str(work / "port"), "--offline")
+    run("carry", str(work / "port"), "--resources", str(resources), "create")
+    return work / "port" / "mods" / "create" / "carry"
+
+
+def fit(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    models = content / "assets" / "create" / "models" / "block"
+    lang = content / "assets" / "create" / "lang" / "en_us.json"
+    names = read_json(lang) if lang.exists() else {}
+
+    for name, spec in ROTATING.items():
+        decl = read_json(blocks / f"{name}.json")
+        # A chain: an `axis`, placed like a log, but it neither occludes its
+        # neighbours' faces nor darkens its own cell, as Create's shafts.
+        decl["template"] = "minecraft:iron_chain"
+        decl["shapes"] = {
+            "property": "axis",
+            "values": {a: [along(a, b) for b in spec["shapes"]] for a in AXES},
+        }
+        write_json(blocks / f"{name}.json", decl)
+        # The part the native mod draws: the block's own blockstate, kept
+        # under a hidden block.
+        original = read_json(states / f"{name}.json")
+        write_json(states / f"hz_{name}.json", original)
+        write_json(blocks / f"hz_{name}.json", {"template": "minecraft:iron_chain", "item": False})
+        names[f"block.create.hz_{name}"] = names.get(f"block.create.{name}", name)
+        # The block itself shows nothing but its particles.
+        write_json(models / f"hz_blank_{name}.json", {"textures": {"particle": spec["particle"]}})
+        write_json(states / f"{name}.json", {
+            "variants": {f"axis={a}": {"model": f"create:block/hz_blank_{name}"} for a in AXES}
+        })
+
+    for name, spec in DIRECTIONAL.items():
+        decl = read_json(blocks / f"{name}.json")
+        decl["template"] = spec["template"]
+        decl.pop("default_state", None)
+        decl["shapes"] = {
+            "property": "facing",
+            "values": {f: [facing_box(f, spec["shape"])] for f in FACINGS},
+        }
+        props = decl.setdefault("properties", {})
+        props["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+        if "turns" in spec:
+            original = read_json(states / f"{name}.json")
+            write_json(states / f"hz_{name}.json", original)
+            write_json(blocks / f"hz_{name}.json", {"template": spec["template"], "item": False})
+            names[f"block.create.hz_{name}"] = names.get(f"block.create.{name}", name)
+            write_json(models / f"hz_blank_{name}.json", {"textures": {"particle": spec["turns"]}})
+            write_json(states / f"{name}.json", {
+                "variants": {f"facing={f}": {"model": f"create:block/hz_blank_{name}"} for f in FACINGS}
+            })
+
+    for name, spec in HORIZONTAL.items():
+        decl = read_json(blocks / f"{name}.json")
+        decl["template"] = spec["template"]
+        decl["default_state"] = {"face": "floor"}
+        decl["shapes"] = {
+            "property": "facing",
+            "values": {f: [spec["shape"]] for f in ["north", "south", "west", "east"]},
+        }
+        write_json(blocks / f"{name}.json", decl)
+
+    for name, spec in CONTAINERS.items():
+        decl = read_json(blocks / f"{name}.json")
+        decl["template"] = spec["template"]
+        decl.pop("default_state", None)
+        decl.pop("shapes", None)
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+
+    # Horizon reads `data/<ns>/recipe/*.json` only, not its subfolders, where
+    # vanilla reads them all (`create:pressing/iron_ingot`): bring each up as
+    # `create:pressing.iron_ingot`. 1198 of Create's recipes, crafting
+    # included, would be missing otherwise.
+    for recipe_dir in (content / "data").glob("*/recipe"):
+        for path in sorted(recipe_dir.rglob("*.json")):
+            rel = path.relative_to(recipe_dir)
+            if len(rel.parts) == 1:
+                continue
+            flat = recipe_dir / ".".join(rel.parts)
+            path.rename(flat)
+        for sub in sorted((d for d in recipe_dir.rglob("*") if d.is_dir()), reverse=True):
+            if not any(sub.iterdir()):
+                sub.rmdir()
+
+    tags = content / "data" / "c" / "tags" / "item"
+    for tag, items in CONVENTION_TAGS.items():
+        path = tags / f"{tag}.json"
+        existing = read_json(path)["values"] if path.exists() else []
+        write_json(path, {"values": sorted(set(existing) | set(items))})
+
+    for name, model in PARTIALS.items():
+        block = f"hz_part_{name}"
+        write_json(blocks / f"{block}.json", {"template": "minecraft:stone", "item": False})
+        write_json(states / f"{block}.json", {"variants": {"": {"model": model}}})
+        names[f"block.create.{block}"] = name
+
+    if names:
+        write_json(lang, names)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--jar", type=Path, help="the player's Create jar (create-1.21.1-6.0.10.jar)")
+    parser.add_argument("--carried", type=Path, help="an existing horizon-port-pack carry folder instead of --jar")
+    parser.add_argument("--resources", type=Path, help="Horizon's prepared 26.3 resources (for --jar)")
+    parser.add_argument("--port-pack", type=Path, default=Path(os.environ.get("HORIZON_PORT_PACK", "horizon-port-pack")))
+    parser.add_argument("--out", type=Path, default=ROOT / "target" / "content")
+    args = parser.parse_args()
+    out = args.out / "create"
+    with tempfile.TemporaryDirectory(prefix="create-content-") as tmp:
+        if args.carried:
+            carried = args.carried
+        elif args.jar and args.resources:
+            carried = carry(args.jar.resolve(), args.resources.resolve(), args.port_pack, Path(tmp))
+        else:
+            parser.error("give --jar with --resources, or --carried")
+        if out.exists():
+            shutil.rmtree(out)
+        shutil.copytree(carried, out)
+    fit(out)
+    print(out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

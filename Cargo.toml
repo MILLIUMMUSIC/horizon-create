@@ -1,0 +1,18 @@
+[package]
+name = "create-horizon"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Create (the Minecraft mod) ported to Horizon as a native mod"
+
+[lib]
+# The rule modules are also injected as same-crate modules by horizon-mixins.
+path = "src/lib.rs"
+
+[dependencies]
+# Horizon's own; the injected modules use the game's copy.
+serde_json = "1"
+
+[workspace]
+resolver = "2"
