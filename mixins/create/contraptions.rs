@@ -8,7 +8,7 @@
 
 use super::Game;
 use super::create_contraption::{
-    Actuator, ActuatorStep, Chassis, ChassisKind, Facts, HEAD, MAX_CHASSIS_RANGE, POLE, PistonContraption,
+    Actuator, ActuatorStep, Bearing, BearingContraption, BearingStep, Chassis, ChassisKind, Facts, HEAD, MAX_CHASSIS_RANGE, POLE, PistonContraption,
     PistonPart, PistonState, STICKY_HEAD, StructureWorld, Sticky, attached_chassis, chassis_block, chassis_of,
     glue_group, in_span, piston_block, piston_of,
 };
@@ -93,6 +93,26 @@ struct State {
     /// Action bar lines for players, sent at the next tick (a message from
     /// a client can't show one).
     told: Vec<(u128, horizon_client::text::Text)>,
+    /// Mechanical and windmill bearings.
+    bearings: HashMap<(String, Pos), BearingEntry>,
+    /// Bearings clicked with an empty hand (`useItemOn`), handled at the
+    /// next tick.
+    clicked: Vec<(String, Pos)>,
+}
+
+/// A bearing's turning structure, out of the world.
+struct Turning {
+    contraption: BearingContraption<BlockStateId>,
+    texts: Vec<String>,
+    entities: Vec<Option<horizon_world::nbt::Compound>>,
+    ranges: Vec<(usize, i32)>,
+    glue: Vec<(Pos, Pos)>,
+}
+
+#[derive(Default)]
+struct BearingEntry {
+    bearing: Bearing,
+    turning: Option<Turning>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -276,6 +296,7 @@ impl StructureWorld for Scan<'_, '_> {
             replaceable: f.replaceable,
             part: part_of(game, id),
             chassis: chassis_at(game, pos, self.ranges.get(&pos).copied().unwrap_or(DEFAULT_RANGE)),
+            sail: game.block_in_tag("create:windmill_sails", &f.name),
         }
     }
     fn glue(&self, pos: Pos, dir: Dir) -> Option<usize> {
@@ -325,6 +346,66 @@ fn set_piston(game: &mut Game<'_>, pos: Pos, state: PistonState) {
 
 // ---- Assembly and disassembly ------------------------------------------------
 
+/// The saved data of the block entity at `at` (`StructureBlockInfo.nbt`),
+/// taken out of the world.
+fn capture(game: &mut Game<'_>, at: Pos, state: BlockStateId) -> Option<horizon_world::nbt::Compound> {
+    let key = (at[0], at[1], at[2]);
+    let facts = game.res.facts().get(state);
+    let name = facts.name.to_string();
+    let has_entity = facts.block_entity;
+    let entity = game.world.block_entities.remove(&key).filter(|_| has_entity)?;
+    match horizon_client::save::encode_block_entity(key, &entity, &name) {
+        horizon_world::nbt::Tag::Compound(c) => Some(c),
+        _ => None,
+    }
+}
+
+/// `removeBlocksFromWorld`: the blocks gone without drops.
+fn remove_blocks(game: &mut Game<'_>, at: &[Pos]) {
+    use super::native_hooks::flags;
+    let air = game.res.facts().air;
+    for &p in at {
+        set(
+            game,
+            p,
+            air,
+            flags::UPDATE_MOVE_BY_PISTON | flags::UPDATE_SUPPRESS_DROPS | flags::UPDATE_KNOWN_SHAPE | flags::UPDATE_ALL,
+        );
+    }
+}
+
+/// `addBlocksToWorld` for one block: put at `at` with its block entity's
+/// data, or dropped where it can't go (bedrock, or a solid block in the way
+/// of one without collision).
+fn put_back(game: &mut Game<'_>, at: Pos, state: BlockStateId, solid: bool, nbt: Option<horizon_world::nbt::Compound>) {
+    use super::native_hooks::flags;
+    let here = game.world.block(at[0], at[1], at[2]);
+    let here_facts = game.res.facts().get(here);
+    let here_solid = !game.block_collision_shape(at).boxes().is_empty();
+    if here_facts.hardness == -1.0 || (!solid && here_solid) {
+        let item = game.res.facts().get(state).item.to_string();
+        if item != "minecraft:air" {
+            let centre = at.map(|v| f64::from(v) + 0.5);
+            game.spawn_item(horizon_client::items::ItemStack::new(&item, 1), centre, [0.0, 0.1, 0.0], 10);
+        }
+        return;
+    }
+    if !game.world.is_air(here) && !here_facts.replaceable {
+        let _ = game.destroy_block_dropping(at);
+    }
+    set(game, at, state, flags::UPDATE_MOVE_BY_PISTON | flags::UPDATE_ALL);
+    // The block entity's data back, at its new place (`loadWithComponents`).
+    if let Some(mut nbt) = nbt {
+        use horizon_world::nbt::Tag;
+        for (k, v) in [("x", at[0]), ("y", at[1]), ("z", at[2])] {
+            nbt.insert(k.into(), Tag::Int(v));
+        }
+        if let Some((key, entity)) = horizon_client::save::decode_block_entity(&Tag::Compound(nbt)) {
+            game.world.block_entities.insert(key, entity);
+        }
+    }
+}
+
 /// `assemble`: the structure built, checked and taken out of the world.
 fn assemble(game: &mut Game<'_>, pos: Pos, facing: Dir, rpm: f32, actuator: &mut Actuator) -> Option<Running> {
     let retract = actuator.movement_speed(rpm, facing) < 0.0;
@@ -351,32 +432,9 @@ fn assemble(game: &mut Game<'_>, pos: Pos, facing: Dir, rpm: f32, actuator: &mut
     for b in &contraption.blocks {
         texts.push(state_text(game, b.state));
         let at = contraption.world_pos(b.local, contraption.initial_extension_progress);
-        if at == piston {
-            entities.push(None);
-            continue;
-        }
-        let key = (at[0], at[1], at[2]);
-        let facts = game.res.facts().get(b.state);
-        let name = facts.name.to_string();
-        let has_entity = facts.block_entity;
-        let nbt = game.world.block_entities.remove(&key).filter(|_| has_entity).and_then(|e| {
-            match horizon_client::save::encode_block_entity(key, &e, &name) {
-                horizon_world::nbt::Tag::Compound(c) => Some(c),
-                _ => None,
-            }
-        });
-        entities.push(nbt);
+        entities.push(if at == piston { None } else { capture(game, at, b.state) });
     }
-    use super::native_hooks::flags;
-    let air = game.res.facts().air;
-    for at in contraption.removals() {
-        set(
-            game,
-            at,
-            air,
-            flags::UPDATE_MOVE_BY_PISTON | flags::UPDATE_SUPPRESS_DROPS | flags::UPDATE_KNOWN_SHAPE | flags::UPDATE_ALL,
-        );
-    }
+    remove_blocks(game, &contraption.removals());
     set_piston(game, pos, PistonState::Moving);
     // The chassis' ranges and the glue go with the blocks.
     let dimension = game.dim.id().to_owned();
@@ -405,37 +463,11 @@ fn assemble(game: &mut Game<'_>, pos: Pos, facing: Dir, rpm: f32, actuator: &mut
 /// head lands back in it), the blocks put back, those that can't go where
 /// they land dropped.
 fn disassemble(game: &mut Game<'_>, pos: Pos, running: Running, grid_offset: i32) {
-    use super::native_hooks::flags;
     set_piston(game, pos, PistonState::Extended);
     let c = &running.contraption;
     let (placements, retracted) = c.placements(grid_offset);
     for (at, i) in placements {
-        let state = c.blocks[i].state;
-        let here = game.world.block(at[0], at[1], at[2]);
-        let here_facts = game.res.facts().get(here);
-        let here_solid = !game.block_collision_shape(at).boxes().is_empty();
-        if here_facts.hardness == -1.0 || (!c.blocks[i].solid && here_solid) {
-            let item = game.res.facts().get(state).item.to_string();
-            if item != "minecraft:air" {
-                let centre = at.map(|v| f64::from(v) + 0.5);
-                game.spawn_item(horizon_client::items::ItemStack::new(&item, 1), centre, [0.0, 0.1, 0.0], 10);
-            }
-            continue;
-        }
-        if !game.world.is_air(here) && !here_facts.replaceable {
-            let _ = game.destroy_block_dropping(at);
-        }
-        set(game, at, state, flags::UPDATE_MOVE_BY_PISTON | flags::UPDATE_ALL);
-        // The block entity's data back, at its new place (`loadWithComponents`).
-        if let Some(mut nbt) = running.entities[i].clone() {
-            use horizon_world::nbt::Tag;
-            for (k, v) in [("x", at[0]), ("y", at[1]), ("z", at[2])] {
-                nbt.insert(k.into(), Tag::Int(v));
-            }
-            if let Some((key, entity)) = horizon_client::save::decode_block_entity(&Tag::Compound(nbt)) {
-                game.world.block_entities.insert(key, entity);
-            }
-        }
+        put_back(game, at, c.blocks[i].state, c.blocks[i].solid, running.entities[i].clone());
     }
     if retracted {
         set_piston(game, pos, PistonState::Retracted);
@@ -609,29 +641,64 @@ fn save_text(s: &State, dimension: &str) -> String {
             c.extension_length,
             c.initial_extension_progress
         );
-        for (i, b) in c.blocks.iter().enumerate() {
-            let nbt = r.entities[i]
-                .as_ref()
-                .and_then(|n| horizon_world::nbt::write_network(&horizon_world::nbt::Tag::Compound(n.clone()), limits()).ok())
-                .map_or_else(|| "-".to_owned(), |b| hex(&b));
-            out += &format!(
-                "b {} {} {} {} {} {} {} {}\n",
-                b.local[0],
-                b.local[1],
-                b.local[2],
-                u8::from(b.solid),
-                u8::from(b.brittle),
-                u8::from(b.pole),
-                r.texts[i],
-                nbt
-            );
+        out += &cargo_text(&c.blocks, &r.texts, &r.entities, &r.ranges, &r.glue);
+    }
+    // `bearing x y z angle running speed`, then for a turning one `t facing
+    // sails` and its blocks as a piston's.
+    for ((d, p), b) in &s.bearings {
+        if d != dimension {
+            continue;
         }
-        for (i, range) in &r.ranges {
-            out += &format!("r {i} {range}\n");
+        let bearing = &b.bearing;
+        out += &format!(
+            "bearing {} {} {} {} {} {}\n",
+            p[0],
+            p[1],
+            p[2],
+            bearing.angle,
+            u8::from(bearing.running),
+            bearing.last_rpm
+        );
+        if let Some(t) = &b.turning {
+            let c = &t.contraption;
+            out += &format!("t {} {}\n", c.facing.name(), c.sails);
+            out += &cargo_text(&c.blocks, &t.texts, &t.entities, &t.ranges, &t.glue);
         }
-        for g in &r.glue {
-            out += &format!("g {}\n", corners(g));
-        }
+    }
+    out
+}
+
+/// A moved structure's `b`, `r` and `g` lines.
+fn cargo_text(
+    blocks: &[super::create_contraption::Moved<BlockStateId>],
+    texts: &[String],
+    entities: &[Option<horizon_world::nbt::Compound>],
+    ranges: &[(usize, i32)],
+    glue: &[(Pos, Pos)],
+) -> String {
+    let mut out = String::new();
+    for (i, b) in blocks.iter().enumerate() {
+        let nbt = entities[i]
+            .as_ref()
+            .and_then(|n| horizon_world::nbt::write_network(&horizon_world::nbt::Tag::Compound(n.clone()), limits()).ok())
+            .map_or_else(|| "-".to_owned(), |b| hex(&b));
+        out += &format!(
+            "b {} {} {} {} {} {} {} {}\n",
+            b.local[0],
+            b.local[1],
+            b.local[2],
+            u8::from(b.solid),
+            u8::from(b.brittle),
+            u8::from(b.pole),
+            texts[i],
+            nbt
+        );
+    }
+    for (i, range) in ranges {
+        out += &format!("r {i} {range}\n");
+    }
+    for (a, b) in glue {
+        out += &format!("g {} {} {} {} {} {}\n", a[0], a[1], a[2], b[0], b[1], b[2]);
     }
     out
 }
@@ -644,6 +711,7 @@ fn save(s: &State) {
     let dims: std::collections::HashSet<&String> = (s.pistons.keys().map(|(d, _)| d))
         .chain(s.ranges.keys().map(|(d, _)| d))
         .chain(s.glue.keys())
+        .chain(s.bearings.keys().map(|(d, _)| d))
         .collect();
     for d in dims {
         if let Err(e) = std::fs::write(save_path(root, d), save_text(s, d)) {
@@ -661,7 +729,7 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
     let Ok(text) = std::fs::read_to_string(save_path(root, dimension)) else {
         return;
     };
-    let mut current: Option<Pos> = None;
+    let mut current: Option<Target> = None;
     for line in text.lines() {
         let f: Vec<&str> = line.split(' ').collect();
         match f.first().copied() {
@@ -675,10 +743,40 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                 entry.actuator.extension_length = f[5].parse().unwrap_or(0);
                 entry.actuator.running = f[6] == "1";
                 entry.actuator.assemble_next_tick = false;
-                current = Some(pos);
+                current = Some(Target::Piston(pos));
+            }
+            Some("bearing") if f.len() >= 6 => {
+                let (Ok(x), Ok(y), Ok(z)) = (f[1].parse(), f[2].parse(), f[3].parse()) else {
+                    continue;
+                };
+                let pos = [x, y, z];
+                let entry = s.bearings.entry((dimension.to_owned(), pos)).or_default();
+                entry.bearing.angle = f[4].parse().unwrap_or(0.0);
+                entry.bearing.running = f[5] == "1";
+                // KineticBlockEntity.read: a loaded speed isn't a change.
+                entry.bearing.last_rpm = f.get(6).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                current = Some(Target::Bearing(pos));
+            }
+            Some("t") if f.len() >= 3 => {
+                let Some(Target::Bearing(pos)) = current else { continue };
+                let Some(facing) = Dir::parse(f[1]) else { continue };
+                let entry = s.bearings.entry((dimension.to_owned(), pos)).or_default();
+                entry.turning = Some(Turning {
+                    contraption: BearingContraption {
+                        facing,
+                        anchor: [0, 1, 2].map(|k| pos[k] + facing.normal()[k]),
+                        blocks: Vec::new(),
+                        sails: f[2].parse().unwrap_or(0),
+                        glue: Vec::new(),
+                    },
+                    texts: Vec::new(),
+                    entities: Vec::new(),
+                    ranges: Vec::new(),
+                    glue: Vec::new(),
+                });
             }
             Some("c") if f.len() >= 8 => {
-                let Some(pos) = current else { continue };
+                let Some(Target::Piston(pos)) = current else { continue };
                 let (Ok(x), Ok(y), Ok(z)) = (f[1].parse(), f[2].parse(), f[3].parse()) else {
                     continue;
                 };
@@ -714,27 +812,20 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                 let g = ([n[0], n[1], n[2]], [n[3], n[4], n[5]]);
                 if tag == "glue" {
                     s.glue.entry(dimension.to_owned()).or_default().push(g);
-                } else if let Some(r) = current
-                    .and_then(|pos| s.pistons.get_mut(&(dimension.to_owned(), pos)))
-                    .and_then(|p| p.running.as_mut())
-                {
-                    r.glue.push(g);
+                } else if let Some(c) = cargo(s, dimension, current) {
+                    c.glue.push(g);
                 }
             }
             Some("r") if f.len() >= 3 => {
                 let (Ok(i), Ok(range)) = (f[1].parse(), f[2].parse()) else {
                     continue;
                 };
-                if let Some(r) = current
-                    .and_then(|pos| s.pistons.get_mut(&(dimension.to_owned(), pos)))
-                    .and_then(|p| p.running.as_mut())
-                {
-                    r.ranges.push((i, range));
+                if let Some(c) = cargo(s, dimension, current) {
+                    c.ranges.push((i, range));
                 }
             }
             Some("b") if f.len() >= 9 => {
-                let Some(pos) = current else { continue };
-                let Some(r) = s.pistons.get_mut(&(dimension.to_owned(), pos)).and_then(|p| p.running.as_mut()) else {
+                let Some(r) = cargo(s, dimension, current) else {
                     continue;
                 };
                 let (Ok(x), Ok(y), Ok(z)) = (f[1].parse(), f[2].parse(), f[3].parse()) else {
@@ -747,7 +838,7 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                         horizon_world::nbt::Tag::Compound(c) => Some(c),
                         _ => None,
                     });
-                r.contraption.blocks.push(super::create_contraption::Moved {
+                r.blocks.push(super::create_contraption::Moved {
                     local: [x, y, z],
                     state,
                     solid: f[4] == "1",
@@ -764,6 +855,52 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
     for ((d, _), p) in s.pistons.iter_mut() {
         if d == dimension && p.actuator.running && p.running.is_none() {
             p.actuator.running = false;
+        }
+    }
+    for ((d, _), b) in s.bearings.iter_mut() {
+        if d == dimension && b.bearing.running && b.turning.is_none() {
+            b.bearing.running = false;
+        }
+    }
+}
+
+/// What the `b`, `r` and `g` lines of a save belong to.
+#[derive(Clone, Copy)]
+enum Target {
+    Piston(Pos),
+    Bearing(Pos),
+}
+
+/// A moved structure's parts, a piston's or a bearing's.
+struct Cargo<'a> {
+    blocks: &'a mut Vec<super::create_contraption::Moved<BlockStateId>>,
+    texts: &'a mut Vec<String>,
+    entities: &'a mut Vec<Option<horizon_world::nbt::Compound>>,
+    ranges: &'a mut Vec<(usize, i32)>,
+    glue: &'a mut Vec<(Pos, Pos)>,
+}
+
+fn cargo<'a>(s: &'a mut State, dimension: &str, target: Option<Target>) -> Option<Cargo<'a>> {
+    match target? {
+        Target::Piston(pos) => {
+            let r = s.pistons.get_mut(&(dimension.to_owned(), pos))?.running.as_mut()?;
+            Some(Cargo {
+                blocks: &mut r.contraption.blocks,
+                texts: &mut r.texts,
+                entities: &mut r.entities,
+                ranges: &mut r.ranges,
+                glue: &mut r.glue,
+            })
+        }
+        Target::Bearing(pos) => {
+            let t = s.bearings.get_mut(&(dimension.to_owned(), pos))?.turning.as_mut()?;
+            Some(Cargo {
+                blocks: &mut t.contraption.blocks,
+                texts: &mut t.texts,
+                entities: &mut t.entities,
+                ranges: &mut t.ranges,
+                glue: &mut t.glue,
+            })
         }
     }
 }
@@ -871,6 +1008,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             changed.push(p);
         }
     }
+    bearings_tick(game, dimension, &mut changed);
     let message = {
         let mut guard = state();
         let s = guard.get_or_insert_with(State::default);
@@ -916,6 +1054,7 @@ pub(super) fn world_phase(closing: bool) {
     *guard = None;
     *client() = None;
     CLIENT_GLUE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    *CLIENT_BEARINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 // ---- Clients -------------------------------------------------------------------
@@ -963,7 +1102,6 @@ fn encode(game: &Game<'_>, s: &mut State, dimension: &str) -> Vec<u8> {
             out.extend_from_slice(&u32::MAX.to_le_bytes());
         }
     }
-    s.changed.retain(|(d, _)| d != dimension);
     // Then the dimension's glue, for players holding super glue.
     let glue = s.glue.get(dimension).map_or(&[][..], Vec::as_slice);
     out.extend_from_slice(&(glue.len() as u32).to_le_bytes());
@@ -972,6 +1110,38 @@ fn encode(game: &Game<'_>, s: &mut State, dimension: &str) -> Vec<u8> {
             push_i(&mut out, *v);
         }
     }
+    // Then the turning bearings: place, facing, angle, degrees a tick, and
+    // their blocks as the pistons'.
+    let turning: Vec<(&Pos, &BearingEntry)> = s
+        .bearings
+        .iter()
+        .filter(|((d, _), b)| d == dimension && b.turning.is_some())
+        .map(|((_, p), b)| (p, b))
+        .collect();
+    out.extend_from_slice(&(turning.len() as u32).to_le_bytes());
+    for (pos, b) in &turning {
+        let c = &b.turning.as_ref().expect("turning").contraption;
+        for v in **pos {
+            push_i(&mut out, v);
+        }
+        out.push(c.facing as u8);
+        push_f(&mut out, b.bearing.angle);
+        push_f(&mut out, super::create_contraption::convert_to_angular(b.bearing.last_rpm));
+        let full = s.changed.contains(&(dimension.to_owned(), **pos)) || s.ticks % 100 == 0;
+        if full {
+            out.extend_from_slice(&(c.blocks.len() as u32).to_le_bytes());
+            for m in &c.blocks {
+                for v in m.local {
+                    push_i(&mut out, v);
+                }
+                out.extend_from_slice(&m.state.0.to_le_bytes());
+                out.push(u8::from(m.solid));
+            }
+        } else {
+            out.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
+    }
+    s.changed.retain(|(d, _)| d != dimension);
     let _ = game;
     out
 }
@@ -1052,6 +1222,42 @@ pub(super) fn from_server(data: &[u8]) {
         glue.push(([v[0], v[1], v[2]], [v[3], v[4], v[5]]));
     }
     *CLIENT_GLUE.lock().unwrap_or_else(|e| e.into_inner()) = glue;
+    let Some(n) = r.u32() else { return };
+    let mut guard = CLIENT_BEARINGS.lock().unwrap_or_else(|e| e.into_inner());
+    let views = guard.get_or_insert_with(HashMap::new);
+    let mut seen = Vec::new();
+    for _ in 0..n {
+        let (Some(x), Some(y), Some(z)) = (r.i32(), r.i32(), r.i32()) else { return };
+        let Some(facing) = r.u8().and_then(|d| Dir::ALL.get(usize::from(d)).copied()) else { return };
+        let (Some(angle), Some(speed), Some(count)) = (r.f32(), r.f32(), r.u32()) else { return };
+        let pos = [x, y, z];
+        let mut blocks = None;
+        if count != u32::MAX {
+            let mut list = Vec::with_capacity(count.min(4096) as usize);
+            for _ in 0..count {
+                let (Some(lx), Some(ly), Some(lz), Some(id), Some(solid)) = (r.i32(), r.i32(), r.i32(), r.u32(), r.u8())
+                else {
+                    return;
+                };
+                list.push(([lx, ly, lz], BlockStateId(id), solid != 0));
+            }
+            blocks = Some(list);
+        }
+        let old = views.get(&pos).map(|v| v.blocks.clone());
+        let Some(blocks) = blocks.or(old) else { continue };
+        views.insert(
+            pos,
+            BearingView {
+                facing,
+                angle,
+                speed,
+                blocks,
+                at: Instant::now(),
+            },
+        );
+        seen.push(pos);
+    }
+    views.retain(|p, _| seen.contains(p));
 }
 
 struct Reader<'a> {
@@ -1085,6 +1291,31 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
     if !game.native_window() {
         return;
     }
+    let turning: Vec<(Pos, BearingView)> = CLIENT_BEARINGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|m| m.iter().map(|(p, v)| (*p, v.clone())).collect())
+        .unwrap_or_default();
+    // Riders turn by what the drawn structure turned since the last tick.
+    let mut last = RIDDEN.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = std::mem::take(&mut *last);
+    for (pos, v) in turning {
+        if v.facing.axis() != super::create_kinetics::Axis::Y {
+            continue;
+        }
+        let anchor = [0, 1, 2].map(|k| pos[k] + v.facing.normal()[k]);
+        let angle = v.angle + v.speed * v.at.elapsed().as_secs_f32().min(0.5) * 20.0;
+        last.push((pos, angle));
+        let Some((_, before)) = previous.iter().find(|(p, _)| *p == pos) else {
+            continue;
+        };
+        let delta = (angle - before + 540.0).rem_euclid(360.0) - 180.0;
+        let solid: Vec<Pos> = v.blocks.iter().filter(|b| b.2).map(|b| b.0).collect();
+        let centres = turned_centres(anchor, v.facing.axis(), *before, &solid);
+        carry_turn(game, None, anchor, &centres, delta);
+    }
+    drop(last);
     let views: Vec<ClientView> = match client().as_ref() {
         Some(v) => v.values().cloned().collect(),
         None => return,
@@ -1114,6 +1345,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
 /// (`getInterpolatedOffset`).
 pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
     draw_glue(game, camera, out);
+    draw_bearings(game, camera, out);
     let views: Vec<ClientView> = match client().as_ref() {
         Some(v) => v.values().cloned().collect(),
         None => return,
@@ -1185,6 +1417,9 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
     let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let face = Dir::nearest(face);
     let glue = held.as_deref() == Some(SUPER_GLUE);
+    if click_bearing(game, pos) {
+        return true;
+    }
     if let Some(c) = chassis_at(game, pos, DEFAULT_RANGE) {
         let slime = glue || held.as_deref().is_some_and(|i| game.items().item_in_tag("c:slimeballs", i));
         let side = super::create_contraption::glueable_side(c.kind, c.axis, face);
@@ -1450,6 +1685,372 @@ fn draw_glue(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client:
                     * glam::Mat4::from_scale(scale.as_vec3());
                 game.block_model_vertices(slime, 0, m, 0xF0F0, false, out);
             }
+        }
+    }
+}
+
+// ---- Bearings ------------------------------------------------------------------
+
+/// The structure in front of the bearing at `pos` taken out of the world
+/// (`MechanicalBearingBlockEntity.assemble`).
+fn assemble_bearing(game: &mut Game<'_>, pos: Pos, facing: Dir, windmill: bool) -> Option<Turning> {
+    let contraption = {
+        let scan = scan(game);
+        match BearingContraption::assemble(&scan, pos, facing, windmill) {
+            Ok(Some(c)) => c,
+            Ok(None) => return None,
+            Err(e) => {
+                log::debug!("Create: bearing at {pos:?} can't turn: {e:?}");
+                return None;
+            }
+        }
+    };
+    let mut texts = Vec::with_capacity(contraption.blocks.len());
+    let mut entities = Vec::with_capacity(contraption.blocks.len());
+    let at: Vec<Pos> = contraption
+        .blocks
+        .iter()
+        .map(|b| [0, 1, 2].map(|k| b.local[k] + contraption.anchor[k]))
+        .collect();
+    for (b, &p) in contraption.blocks.iter().zip(&at) {
+        texts.push(state_text(game, b.state));
+        entities.push(capture(game, p, b.state));
+    }
+    remove_blocks(game, &at);
+    let dimension = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let mut ranges = Vec::new();
+    for (i, p) in at.iter().enumerate() {
+        if let Some(r) = s.ranges.remove(&(dimension.clone(), *p)) {
+            ranges.push((i, r));
+        }
+    }
+    let all = s.glue.entry(dimension).or_default();
+    let glue: Vec<(Pos, Pos)> = contraption.glue.iter().filter_map(|&g| all.get(g).copied()).collect();
+    all.retain(|g| !glue.contains(g));
+    Some(Turning {
+        contraption,
+        texts,
+        entities,
+        ranges,
+        glue,
+    })
+}
+
+/// `ControlledContraptionEntity.disassemble`: the blocks put back turned
+/// by `angle` rounded to a quarter (`StructureTransform`), their states
+/// turned with them.
+fn disassemble_bearing(game: &mut Game<'_>, t: Turning, angle: f32) {
+    use super::create_contraption::{TurnShape, rounded_angle, turn_props, turn_pos};
+    let c = &t.contraption;
+    let axis = c.facing.axis();
+    let quarter = rounded_angle(angle);
+    let registry = game.pack.assets.registry;
+    let mut placed = Vec::with_capacity(c.blocks.len());
+    for (i, b) in c.blocks.iter().enumerate() {
+        let at = c.placed_at(b.local, angle);
+        let mut state = b.state;
+        if quarter != 0
+            && let Some(info) = registry.state(b.state)
+        {
+            let facts = game.res.facts().get(b.state);
+            let class = |name: &str| facts.classes.iter().any(|k| &**k == name);
+            let shape = if class("StairBlock") {
+                TurnShape::Stairs
+            } else if class("FaceAttachedHorizontalDirectionalBlock") {
+                TurnShape::FaceAttached
+            } else {
+                TurnShape::Plain
+            };
+            let base = registry.default_state(&info.name);
+            let six = base.and_then(|s| game.with_props(s, &[("facing", "up")])).is_some()
+                && base.and_then(|s| game.with_props(s, &[("facing", "north")])).is_some();
+            let props: Vec<(String, String)> = info.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let turned = turn_props(&props, shape, six, axis, quarter);
+            let pairs: Vec<(&str, &str)> = turned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            if let Some(id) = base.and_then(|s| game.with_props(s, &pairs)) {
+                state = id;
+            }
+        }
+        put_back(game, at, state, b.solid, t.entities[i].clone());
+        placed.push(at);
+    }
+    let dimension = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    for &(i, r) in &t.ranges {
+        if let Some(at) = placed.get(i) {
+            s.ranges.insert((dimension.clone(), *at), r);
+        }
+    }
+    let turn = |p: Pos| {
+        let local = [0, 1, 2].map(|k| p[k] - c.anchor[k]);
+        let v = turn_pos(local, quarter, axis);
+        [0, 1, 2].map(|k| v[k] + c.anchor[k])
+    };
+    s.glue
+        .entry(dimension)
+        .or_default()
+        .extend(t.glue.iter().map(|&(a, b)| (turn(a), turn(b))));
+}
+
+/// The places of a turning structure's solid blocks, turned by `angle`
+/// about its anchor (their centres).
+fn turned_centres(anchor: Pos, axis: super::create_kinetics::Axis, angle: f32, blocks: &[Pos]) -> Vec<[f64; 3]> {
+    blocks
+        .iter()
+        .map(|l| {
+            let v = super::create_kinetics::rotate_vec(l.map(|c| c as f32), angle, axis);
+            [0, 1, 2].map(|k| f64::from(anchor[k]) + 0.5 + f64::from(v[k]))
+        })
+        .collect()
+}
+
+/// What stands on a structure turning about Y is turned with it by
+/// `delta` degrees about the anchor's centre (`ContraptionCollider`
+/// carrying riders); `centres` are its solid blocks' centres now.
+fn carry_turn(game: &mut Game<'_>, dimension: Option<&str>, anchor: Pos, centres: &[[f64; 3]], delta: f32) {
+    if centres.is_empty() || delta == 0.0 {
+        return;
+    }
+    let pivot = [f64::from(anchor[0]) + 0.5, f64::from(anchor[2]) + 0.5];
+    // The top of the block something at `p` stands on (its feet near it).
+    let on = |p: [f64; 3]| {
+        centres
+            .iter()
+            .filter(|c| (p[0] - c[0]).abs() < 0.8 && (p[2] - c[2]).abs() < 0.8)
+            .map(|c| c[1] + 0.5)
+            .filter(|top| p[1] >= top - 0.6 && p[1] <= top + 0.3)
+            .reduce(f64::max)
+    };
+    // Turned about the pivot, standing on that top (Horizon has no
+    // collision with the moving blocks: this holds it up).
+    let turn = |p: [f64; 3], top: f64| {
+        let v = super::create_kinetics::rotate_vec(
+            [(p[0] - pivot[0]) as f32, 0.0, (p[2] - pivot[1]) as f32],
+            delta,
+            super::create_kinetics::Axis::Y,
+        );
+        [pivot[0] + f64::from(v[0]), top, pivot[1] + f64::from(v[2])]
+    };
+    let Some(dimension) = dimension else {
+        if let Some(p) = game.player.as_mut() {
+            let at = [p.position.x, p.position.y, p.position.z];
+            if let Some(top) = on(at) {
+                let to = turn(at, top);
+                p.position.x = to[0];
+                p.position.y = to[1];
+                p.position.z = to[2];
+                p.velocity.y = 0.0;
+                p.ground.on_ground = true;
+                p.fall_distance = 0.0;
+            }
+        }
+        return;
+    };
+    for d in game.dropped.iter_mut() {
+        let at = [d.position.x, d.position.y, d.position.z];
+        if let Some(top) = on(at) {
+            let to = turn(at, top);
+            d.position.x = to[0];
+            d.position.y = to[1];
+            d.position.z = to[2];
+            d.velocity.y = 0.0;
+        }
+    }
+    let mobs: Vec<(u32, [f64; 3])> = game
+        .native_mobs(dimension)
+        .into_iter()
+        .filter_map(|m| on(m.pos).map(|top| (m.id, turn(m.pos, top))))
+        .collect();
+    for (id, to) in mobs {
+        game.native_teleport_mob(dimension, id, to);
+    }
+}
+
+/// After the kinetics' tick of `dimension`: every bearing's tick
+/// (`MechanicalBearingBlockEntity.tick`); a windmill's generated speed set
+/// from its sails. Pistons' ticks come first.
+fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
+    let found: Vec<(Pos, Dir, bool, f32)> = super::create_glue::with_kinetics(game, |k, level| {
+        k.positions()
+            .into_iter()
+            .filter_map(|p| match k.get(p).map(|e| e.kind) {
+                Some(Kind::MechanicalBearing(f)) => Some((p, f, false, k.speed_of(level, p))),
+                Some(Kind::WindmillBearing(f)) => Some((p, f, true, k.speed_of(level, p))),
+                _ => None,
+            })
+            .collect()
+    });
+    let (mut taken, clicked) = {
+        let mut guard = state();
+        let s = guard.get_or_insert_with(State::default);
+        let keys: Vec<(String, Pos)> = s.bearings.keys().filter(|(d, _)| d == dimension).cloned().collect();
+        let taken: HashMap<Pos, BearingEntry> =
+            keys.into_iter().filter_map(|k| s.bearings.remove(&k).map(|b| (k.1, b))).collect();
+        let clicked: Vec<Pos> = s.clicked.iter().filter(|(d, _)| d == dimension).map(|(_, p)| *p).collect();
+        s.clicked.retain(|(d, _)| d != dimension);
+        (taken, clicked)
+    };
+    let mut generated: Vec<(Pos, i32)> = Vec::new();
+    for &(pos, facing, windmill, rpm) in &found {
+        if !game.world.loaded(pos[0], pos[2]) {
+            continue;
+        }
+        let mut entry = taken.remove(&pos).unwrap_or_default();
+        let mut b = entry.bearing;
+        if clicked.contains(&pos) && b.clicked() {
+            // Put back at once: a windmill as it was built.
+            if let Some(t) = entry.turning.take() {
+                disassemble_bearing(game, t, if windmill { 0.0 } else { b.angle });
+                changed.push(pos);
+            }
+            b.stopped();
+            if windmill {
+                generated.push((pos, 0));
+            }
+        }
+        b.speed(rpm, windmill);
+        let before = b.angle;
+        let mut turning = entry.turning.take();
+        let step = b.tick(rpm, windmill, || {
+            turning = assemble_bearing(game, pos, facing, windmill);
+            turning.is_some()
+        });
+        match step {
+            BearingStep::Idle => {}
+            BearingStep::Assembled | BearingStep::Turned => {
+                if step == BearingStep::Assembled {
+                    changed.push(pos);
+                }
+                if let Some(t) = &turning {
+                    let c = &t.contraption;
+                    if windmill {
+                        generated.push((pos, super::create_contraption::windmill_speed(c.sails)));
+                    }
+                    if facing.axis() == super::create_kinetics::Axis::Y {
+                        let solid: Vec<Pos> = c.blocks.iter().filter(|b| b.solid).map(|b| b.local).collect();
+                        let centres = turned_centres(c.anchor, facing.axis(), before, &solid);
+                        carry_turn(game, Some(dimension), c.anchor, &centres, b.angle - before);
+                    }
+                }
+            }
+            BearingStep::Disassemble { angle } => {
+                if let Some(t) = turning.take() {
+                    disassemble_bearing(game, t, angle);
+                    changed.push(pos);
+                }
+                b.stopped();
+                if windmill {
+                    generated.push((pos, 0));
+                }
+            }
+        }
+        entry.bearing = b;
+        entry.turning = turning;
+        taken.insert(pos, entry);
+    }
+    // Bearings that are gone put their structure back where it is.
+    let gone: Vec<Pos> = taken
+        .keys()
+        .filter(|p| !found.iter().any(|(q, ..)| q == *p) && game.world.loaded(p[0], p[2]))
+        .copied()
+        .collect();
+    for p in gone {
+        if let Some(mut entry) = taken.remove(&p)
+            && let Some(t) = entry.turning.take()
+        {
+            disassemble_bearing(game, t, entry.bearing.angle);
+            changed.push(p);
+        }
+    }
+    if !generated.is_empty() {
+        super::create_glue::with_kinetics(game, |k, level| {
+            for (p, rpm) in generated {
+                if k.get(p).is_some_and(|e| e.flow_score != rpm) {
+                    k.set_flow_score(level, p, rpm);
+                }
+            }
+        });
+    }
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    for (p, entry) in taken {
+        s.bearings.insert((dimension.to_owned(), p), entry);
+    }
+}
+
+/// `MechanicalBearingBlock.useItemOn` / `WindmillBearingBlock.useItemOn`
+/// with an empty hand, not sneaking: true when it took the click.
+fn click_bearing(game: &mut Game<'_>, pos: Pos) -> bool {
+    let name = &game.res.facts().get(game.world.block(pos[0], pos[1], pos[2])).name;
+    if name.as_ref() != "create:mechanical_bearing" && name.as_ref() != "create:windmill_bearing" {
+        return false;
+    }
+    if game.held().is_some() || game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+        return false;
+    }
+    let dimension = game.dim.id().to_owned();
+    state().get_or_insert_with(State::default).clicked.push((dimension, pos));
+    true
+}
+
+/// The angle a client draws the bearing at `pos`'s top at (degrees).
+pub(super) fn bearing_angle(pos: Pos) -> f32 {
+    CLIENT_BEARINGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&pos))
+        .map_or(0.0, |v| v.angle + v.speed * v.at.elapsed().as_secs_f32().min(0.5) * 20.0)
+}
+
+#[derive(Clone)]
+struct BearingView {
+    facing: Dir,
+    angle: f32,
+    /// Degrees a tick.
+    speed: f32,
+    blocks: Vec<(Pos, BlockStateId, bool)>,
+    at: Instant,
+}
+
+static CLIENT_BEARINGS: Mutex<Option<HashMap<Pos, BearingView>>> = Mutex::new(None);
+/// The angle each turning bearing was drawn at on the window's last tick.
+static RIDDEN: Mutex<Vec<(Pos, f32)>> = Mutex::new(Vec::new());
+
+/// `ContraptionRenderer` for bearings: every block turned about the
+/// anchor's centre by the angle running on between the server's updates.
+fn draw_bearings(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
+    let views: Vec<(Pos, BearingView)> = CLIENT_BEARINGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|m| m.iter().map(|(p, v)| (*p, v.clone())).collect())
+        .unwrap_or_default();
+    for (pos, v) in views {
+        let anchor = [0, 1, 2].map(|k| pos[k] + v.facing.normal()[k]);
+        let centre = glam::DVec3::new(f64::from(anchor[0]), f64::from(anchor[1]), f64::from(anchor[2])) + 0.5;
+        if centre.distance_squared(camera) > VIEW_DISTANCE * VIEW_DISTANCE {
+            continue;
+        }
+        let angle = v.angle + v.speed * v.at.elapsed().as_secs_f32().min(0.5) * 20.0;
+        let axis = match v.facing.axis() {
+            super::create_kinetics::Axis::X => glam::Vec3::X,
+            super::create_kinetics::Axis::Y => glam::Vec3::Y,
+            super::create_kinetics::Axis::Z => glam::Vec3::Z,
+        };
+        let turn = glam::Mat4::from_translation((centre - camera).as_vec3()) * glam::Mat4::from_axis_angle(axis, angle.to_radians());
+        for (local, state, _) in &v.blocks {
+            let r = super::create_kinetics::rotate_vec(local.map(|c| c as f32), angle, v.facing.axis());
+            let lit = [0, 1, 2].map(|k| (centre[k] + f64::from(r[k])).floor() as i32);
+            let light = game.world.light(lit[0], lit[1], lit[2]);
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            let cell = [0, 1, 2].map(|k| local[k] + anchor[k]);
+            let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
+            let m = turn * glam::Mat4::from_translation(glam::Vec3::new(local[0] as f32, local[1] as f32, local[2] as f32) - 0.5);
+            game.block_model_vertices(*state, seed, m, packed, false, out);
         }
     }
 }

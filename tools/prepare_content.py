@@ -98,6 +98,15 @@ DIRECTIONAL = {
     "encased_fan": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
     # AllShapes.PUMP; its cog is a partial.
     "mechanical_pump": {"template": "minecraft:lightning_rod", "shape": box(2, 0, 2, 14, 16, 14)},
+    # BearingBlock: the casing stays in the chunk mesh; its top turns with
+    # the structure (a partial) and its shaft half with the kinetics.
+    "mechanical_bearing": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
+    "windmill_bearing": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
+    # SailBlock (a WrenchableDirectionalBlock): AllShapes.SAIL.
+    **{name: {"template": "minecraft:lightning_rod", "shape": box(0, 5, 0, 16, 10, 16)}
+       for name in ["sail_frame"] + [f"{c}_sail" for c in [
+           "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray", "cyan",
+           "purple", "blue", "brown", "green", "red", "black"]]},
 }
 
 # Machines with item slots: mod block entities need a template that has a
@@ -206,6 +215,9 @@ PARTIALS = {
     "deployer_hand_pointing": "create:block/deployer/hand_pointing",
     "deployer_hand_punching": "create:block/deployer/hand_punching",
     "deployer_hand_holding": "create:block/deployer/hand_holding",
+    # BearingRenderer's tops.
+    "bearing_top": "create:block/bearing/top",
+    "bearing_top_wooden": "create:block/bearing/top_wooden",
     # BeltRenderer's partials.
     "belt_pulley": "create:block/belt_pulley",
     "belt_start": "create:block/belt/start",

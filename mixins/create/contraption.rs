@@ -14,6 +14,8 @@ use std::collections::{HashSet, VecDeque};
 pub const MAX_BLOCKS_MOVED: usize = 2048;
 pub const MAX_CHASSIS_RANGE: i32 = 16;
 pub const MAX_PISTON_POLES: i32 = 64;
+pub const MIN_WINDMILL_SAILS: usize = 8;
+pub const WINDMILL_SAILS_PER_RPM: usize = 8;
 
 /// `MechanicalPistonBlock.STATE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -364,6 +366,8 @@ pub struct Facts {
     pub replaceable: bool,
     pub part: Option<PistonPart>,
     pub chassis: Option<Chassis>,
+    /// `AllBlockTags.WINDMILL_SAILS`.
+    pub sail: bool,
 }
 
 impl Facts {
@@ -582,6 +586,8 @@ pub enum AssemblyError {
     Unmovable(Pos),
     Unloaded(Pos),
     TooLarge,
+    /// `notEnoughSails`: a windmill with fewer than `MIN_WINDMILL_SAILS`.
+    NotEnoughSails(usize),
 }
 
 /// A moved block: its place relative to the contraption's anchor, its
@@ -607,6 +613,91 @@ fn sub(a: Pos, b: Pos) -> Pos {
 fn step(p: Pos, d: Dir, n: i32) -> Pos {
     let v = d.normal();
     [p[0] + v[0] * n, p[1] + v[1] * n, p[2] + v[2] * n]
+}
+
+/// `Contraption.searchMovedStructure`'s loop of `moveBlock` from `frontier`
+/// (`forced` none for a bearing): the blocks taken, in order, with their
+/// facts; the glue found holding them added to `glue`. `already` blocks
+/// count towards `maxBlocksMoved`.
+pub fn search_structure<W: StructureWorld>(
+    world: &W,
+    mut frontier: VecDeque<Pos>,
+    anchoring: &HashSet<Pos>,
+    forced: Option<Dir>,
+    glue: &mut Vec<usize>,
+    already: usize,
+) -> Result<Vec<(Pos, Facts)>, AssemblyError> {
+    let mut out = Vec::new();
+    let mut visited: HashSet<Pos> = HashSet::new();
+    while let Some(pos) = frontier.pop_front() {
+        visited.insert(pos);
+        if world.outside_height(pos) || anchoring.contains(&pos) {
+            continue;
+        }
+        if !world.loaded(pos) {
+            return Err(AssemblyError::Unloaded(pos));
+        }
+        let f = world.facts(pos);
+        if !f.necessary {
+            continue;
+        }
+        if !f.allowed() {
+            return Err(AssemblyError::Unmovable(pos));
+        }
+        // moveChassis: its group, and the blocks it holds.
+        if let Some(c) = f.chassis {
+            let mut held = attached_chassis(world, pos, &c);
+            held.extend(chassis_positions(world, pos, &c, forced));
+            for p in held {
+                if !visited.contains(&p) && !frontier.contains(&p) {
+                    frontier.push_back(p);
+                }
+            }
+        }
+        // Slime blocks and super glue drag adjacent blocks.
+        for dir in Dir::ALL {
+            let next = step(pos, dir, 1);
+            if anchoring.contains(&next) {
+                continue;
+            }
+            let nf = world.facts(next);
+            if !nf.allowed() {
+                if Some(dir) == forced {
+                    return Err(AssemblyError::Unmovable(pos));
+                }
+                continue;
+            }
+            let attached = nf.attached[dir.opposite() as usize];
+            let mut stick =
+                !nf.brittle && can_stick(f.sticky, nf.sticky) && can_stick(nf.sticky, f.sticky);
+            if stick
+                && (f.push_only
+                    || nf.push_only
+                    || f.not_supportive(dir)
+                    || nf.not_supportive(dir.opposite()))
+            {
+                stick = false;
+            }
+            let pushed = Some(dir) == forced && !f.not_supportive(dir);
+            let glued = world.glue(pos, dir);
+            if let Some(g) = glued
+                && !glue.contains(&g)
+            {
+                glue.push(g);
+            }
+            if !visited.contains(&next)
+                && !frontier.contains(&next)
+                && (stick || attached || pushed || glued.is_some())
+            {
+                frontier.push_back(next);
+            }
+        }
+        out.push((pos, f));
+        if already + out.len() > MAX_BLOCKS_MOVED {
+            return Err(AssemblyError::TooLarge);
+        }
+    }
+    Ok(out)
 }
 
 /// `PistonContraption`: a mechanical piston's poles and head, and what they
@@ -742,70 +833,15 @@ impl<S: Clone> PistonContraption<S> {
     ) -> Result<(), AssemblyError> {
         let mut frontier: VecDeque<Pos> = VecDeque::new();
         self.initial_frontier(world, forced, &mut frontier)?;
-        let mut visited: HashSet<Pos> = HashSet::new();
-        while let Some(pos) = frontier.pop_front() {
-            visited.insert(pos);
-            if world.outside_height(pos) || anchoring.contains(&pos) {
-                continue;
-            }
-            if !world.loaded(pos) {
-                return Err(AssemblyError::Unloaded(pos));
-            }
-            let f = world.facts(pos);
-            if !f.necessary {
-                continue;
-            }
-            if !f.allowed() {
-                return Err(AssemblyError::Unmovable(pos));
-            }
-            // moveChassis: its group, and the blocks it holds.
-            if let Some(c) = f.chassis {
-                let mut held = attached_chassis(world, pos, &c);
-                held.extend(chassis_positions(world, pos, &c, Some(forced)));
-                for p in held {
-                    if !visited.contains(&p) && !frontier.contains(&p) {
-                        frontier.push_back(p);
-                    }
-                }
-            }
-            // Slime blocks and super glue drag adjacent blocks.
-            for dir in Dir::ALL {
-                let next = step(pos, dir, 1);
-                if anchoring.contains(&next) {
-                    continue;
-                }
-                let nf = world.facts(next);
-                if !nf.allowed() {
-                    if dir == forced {
-                        return Err(AssemblyError::Unmovable(pos));
-                    }
-                    continue;
-                }
-                let attached = nf.attached[dir.opposite() as usize];
-                let mut stick =
-                    !nf.brittle && can_stick(f.sticky, nf.sticky) && can_stick(nf.sticky, f.sticky);
-                if stick
-                    && (f.push_only
-                        || nf.push_only
-                        || f.not_supportive(dir)
-                        || nf.not_supportive(dir.opposite()))
-                {
-                    stick = false;
-                }
-                let pushed = dir == forced && !f.not_supportive(forced);
-                let glued = world.glue(pos, dir);
-                if let Some(g) = glued
-                    && !self.glue.contains(&g)
-                {
-                    self.glue.push(g);
-                }
-                if !visited.contains(&next)
-                    && !frontier.contains(&next)
-                    && (stick || attached || pushed || glued.is_some())
-                {
-                    frontier.push_back(next);
-                }
-            }
+        let found = search_structure(
+            world,
+            frontier,
+            anchoring,
+            Some(forced),
+            &mut self.glue,
+            self.blocks.len(),
+        )?;
+        for (pos, f) in found {
             // addBlock, shifted back by the poles in front.
             self.blocks.push(Moved {
                 local: sub(
@@ -817,9 +853,6 @@ impl<S: Clone> PistonContraption<S> {
                 brittle: f.brittle,
                 pole: false,
             });
-            if self.blocks.len() > MAX_BLOCKS_MOVED {
-                return Err(AssemblyError::TooLarge);
-            }
         }
         Ok(())
     }
@@ -1143,6 +1176,374 @@ impl Actuator {
     }
 }
 
+// ---- Bearings ------------------------------------------------------------------
+
+/// `BearingContraption`: what a mechanical or windmill bearing turns, the
+/// structure in front of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BearingContraption<S> {
+    pub facing: Dir,
+    /// `pos.relative(facing)`, the block the structure turns about.
+    pub anchor: Pos,
+    pub blocks: Vec<Moved<S>>,
+    /// `sailBlocks`.
+    pub sails: usize,
+    pub glue: Vec<usize>,
+}
+
+impl<S: Clone> BearingContraption<S> {
+    /// `BearingContraption.assemble` for the bearing at `pos`: none when
+    /// nothing stands in front of it.
+    pub fn assemble<W: StructureWorld<State = S>>(
+        world: &W,
+        pos: Pos,
+        facing: Dir,
+        windmill: bool,
+    ) -> Result<Option<Self>, AssemblyError> {
+        let anchor = step(pos, facing, 1);
+        let mut frontier = VecDeque::new();
+        if !world.facts(anchor).brittle {
+            frontier.push_back(anchor);
+        }
+        // isAnchoringBlockAt: the bearing itself.
+        let anchoring = HashSet::from([pos]);
+        let mut glue = Vec::new();
+        let found = search_structure(world, frontier, &anchoring, None, &mut glue, 0)?;
+        let sails = found.iter().filter(|(_, f)| f.sail).count();
+        if windmill && sails < MIN_WINDMILL_SAILS {
+            return Err(AssemblyError::NotEnoughSails(sails));
+        }
+        if found.is_empty() {
+            return Ok(None);
+        }
+        let blocks = found
+            .into_iter()
+            .map(|(p, f)| Moved {
+                local: sub(p, anchor),
+                state: world.state(p),
+                solid: f.solid,
+                brittle: f.brittle,
+                pole: false,
+            })
+            .collect();
+        Ok(Some(BearingContraption {
+            facing,
+            anchor,
+            blocks,
+            sails,
+            glue,
+        }))
+    }
+
+    /// Where a block lands when the structure is put back turned by
+    /// `angle` (`StructureTransform.apply`, the angle in quarter turns).
+    pub fn placed_at(&self, local: Pos, angle: f32) -> Pos {
+        add(
+            self.anchor,
+            turn_pos(local, rounded_angle(angle), self.facing.axis()),
+        )
+    }
+}
+
+/// `WindmillBearingBlockEntity.getGeneratedSpeed`, turning clockwise.
+pub fn windmill_speed(sails: usize) -> i32 {
+    (sails / WINDMILL_SAILS_PER_RPM).clamp(1, 16) as i32
+}
+
+/// `KineticBlockEntity.convertToAngular`: degrees a tick.
+pub fn convert_to_angular(rpm: f32) -> f32 {
+    rpm * 3.0 / 10.0
+}
+
+/// `StructureTransform(offset, x, y, z)`'s angle: rounded to a quarter
+/// turn, in -90..=270.
+pub fn rounded_angle(angle: f32) -> i32 {
+    let mut a = ((angle / 90.0).round() as i32 * 90) % 360;
+    if a < -90 {
+        a += 360;
+    }
+    a
+}
+
+/// The `Rotation` of a rounded angle, as its ordinal (clockwise quarter
+/// turns `rotateFacing` makes).
+pub fn rotation_steps(angle: i32) -> usize {
+    match angle {
+        -90 | 270 => 1,
+        90 => 3,
+        180 => 2,
+        _ => 0,
+    }
+}
+
+/// `VecHelper.rotate` of a block offset by a rounded angle.
+pub fn turn_pos(local: Pos, angle: i32, axis: Axis) -> Pos {
+    let v = super::create_kinetics::rotate_vec(local.map(|c| c as f32), angle as f32, axis);
+    v.map(|c| c.round() as i32)
+}
+
+/// Which of `StructureTransform.apply`'s cases a block state takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnShape {
+    Plain,
+    /// `StairBlock`.
+    Stairs,
+    /// `FaceAttachedHorizontalDirectionalBlock` (buttons, levers...).
+    FaceAttached,
+}
+
+fn get<'a>(props: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    props
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+fn put(props: &mut [(String, String)], key: &str, value: &str) {
+    if let Some(p) = props.iter_mut().find(|(k, _)| k == key) {
+        p.1 = value.to_owned();
+    }
+}
+
+/// `BlockState.rotate(rotation)` as vanilla's blocks answer it, from their
+/// properties: facing, axis, sign rotation and the sides of fences and
+/// walls (rails' and stairs' shapes are left).
+fn vanilla_rotate(props: &mut [(String, String)], steps: usize) {
+    let turn = |d: Dir| (0..steps).fold(d, |d, _| d.clockwise(Axis::Y));
+    if let Some(f) = get(props, "facing").and_then(Dir::parse) {
+        put(props, "facing", turn(f).name());
+    }
+    if steps % 2 == 1 {
+        match get(props, "axis") {
+            Some("x") => put(props, "axis", "z"),
+            Some("z") => put(props, "axis", "x"),
+            _ => {}
+        }
+    }
+    if let Some(r) = get(props, "rotation").and_then(|r| r.parse::<usize>().ok()) {
+        put(props, "rotation", &((r + 4 * steps) % 16).to_string());
+    }
+    let sides: Vec<(Dir, String)> = [Dir::North, Dir::East, Dir::South, Dir::West]
+        .into_iter()
+        .filter_map(|d| get(props, d.name()).map(|v| (d, v.to_owned())))
+        .collect();
+    if sides.len() == 4 {
+        for (d, v) in sides {
+            put(props, turn(d).name(), &v);
+        }
+    }
+}
+
+/// `StructureTransform.apply(BlockState)` for a turn of `angle` (rounded)
+/// about `axis`: the new properties. `six_facing`: the block's `facing`
+/// takes up and down (`BlockStateProperties.FACING`, not
+/// `HORIZONTAL_FACING`).
+pub fn turn_props(
+    props: &[(String, String)],
+    shape: TurnShape,
+    six_facing: bool,
+    axis: Axis,
+    angle: i32,
+) -> Vec<(String, String)> {
+    let mut props = props.to_vec();
+    let steps = rotation_steps(angle);
+    if steps == 0 {
+        return props;
+    }
+    if axis == Axis::Y {
+        vanilla_rotate(&mut props, steps);
+        return props;
+    }
+    let rotate_facing = |d: Dir| (0..steps).fold(d, |d, _| d.clockwise(axis));
+    match shape {
+        TurnShape::FaceAttached => {
+            let z = axis == Axis::Z;
+            let forced = if z { Dir::West } else { Dir::South };
+            let (Some(facing), Some(face)) = (
+                get(&props, "facing").and_then(Dir::parse),
+                get(&props, "face"),
+            ) else {
+                return props;
+            };
+            if facing.axis() == axis && face == "wall" {
+                return props;
+            }
+            for _ in 0..steps {
+                let face = get(&props, "face").unwrap_or("wall").to_owned();
+                let facing = get(&props, "facing")
+                    .and_then(Dir::parse)
+                    .unwrap_or(Dir::North);
+                put(
+                    &mut props,
+                    "facing",
+                    if face == "ceiling" {
+                        forced
+                    } else {
+                        forced.opposite()
+                    }
+                    .name(),
+                );
+                if face != "wall" {
+                    put(&mut props, "face", "wall");
+                    continue;
+                }
+                let floor = facing.positive() != z;
+                put(&mut props, "face", if floor { "floor" } else { "ceiling" });
+            }
+            props
+        }
+        TurnShape::Stairs => {
+            let Some(facing) = get(&props, "facing").and_then(Dir::parse) else {
+                return props;
+            };
+            let flip_half = |props: &mut Vec<(String, String)>| {
+                let half = if get(props, "half") == Some("top") {
+                    "bottom"
+                } else {
+                    "top"
+                };
+                put(props, "half", half);
+            };
+            if facing.axis() != axis {
+                for _ in 0..steps {
+                    let d = get(&props, "facing").and_then(Dir::parse).unwrap_or(facing);
+                    let bottom = get(&props, "half") == Some("bottom");
+                    if d.positive() ^ bottom ^ (d.axis() == Axis::Z) {
+                        flip_half(&mut props);
+                    } else {
+                        put(&mut props, "facing", d.opposite().name());
+                    }
+                }
+            } else if steps == 2 {
+                flip_half(&mut props);
+            }
+            props
+        }
+        TurnShape::Plain => {
+            if let (true, Some(f)) = (six_facing, get(&props, "facing").and_then(Dir::parse)) {
+                put(&mut props, "facing", rotate_facing(f).name());
+            } else if let Some(a) = get(&props, "axis").and_then(Axis::parse) {
+                put(
+                    &mut props,
+                    "axis",
+                    rotate_facing(Dir::positive_of(a)).axis().name(),
+                );
+            } else if steps == 2 {
+                if get(&props, "facing")
+                    .and_then(Dir::parse)
+                    .is_some_and(|f| f.axis() == axis)
+                {
+                    return props;
+                }
+                vanilla_rotate(&mut props, 2);
+                match get(&props, "type") {
+                    Some("bottom") => put(&mut props, "type", "top"),
+                    Some("top") => put(&mut props, "type", "bottom"),
+                    _ => {}
+                }
+            }
+            props
+        }
+    }
+}
+
+/// `MechanicalBearingBlockEntity`'s motion (`ROTATE_PLACE`; a windmill's
+/// with `windmill`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Bearing {
+    pub running: bool,
+    pub angle: f32,
+    pub assemble_next_tick: bool,
+    pub last_rpm: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BearingStep {
+    Idle,
+    /// Assembled this tick (and turned).
+    Assembled,
+    Turned,
+    /// Put the structure back at `angle` (`disassemble`).
+    Disassemble {
+        angle: f32,
+    },
+}
+
+impl Bearing {
+    /// `onSpeedChanged`: a windmill keeps its queued assembly; a stop or a
+    /// turn round snaps the angle to a degree.
+    pub fn speed(&mut self, rpm: f32, windmill: bool) {
+        if rpm == self.last_rpm {
+            return;
+        }
+        let prev = self.last_rpm;
+        self.last_rpm = rpm;
+        if !windmill {
+            self.assemble_next_tick = true;
+        }
+        if self.running && prev != 0.0 && rpm.signum() != prev.signum()
+            || self.running && rpm == 0.0 && prev != 0.0
+        {
+            self.angle = self.angle.round();
+        }
+    }
+
+    /// `MechanicalBearingBlock.useItemOn` with an empty hand: true when it
+    /// must put its structure back now.
+    pub fn clicked(&mut self) -> bool {
+        if self.running {
+            return true;
+        }
+        self.assemble_next_tick = true;
+        false
+    }
+
+    /// `tick`: `assemble` takes the structure (true when it did).
+    pub fn tick(
+        &mut self,
+        rpm: f32,
+        windmill: bool,
+        assemble: impl FnOnce() -> bool,
+    ) -> BearingStep {
+        let mut assembled = false;
+        if self.assemble_next_tick {
+            self.assemble_next_tick = false;
+            if self.running {
+                if rpm == 0.0 {
+                    // A windmill goes back as it was built.
+                    let angle = if windmill { 0.0 } else { self.angle };
+                    return BearingStep::Disassemble { angle };
+                }
+            } else {
+                if rpm == 0.0 && !windmill {
+                    return BearingStep::Idle;
+                }
+                if assemble() {
+                    self.running = true;
+                    self.angle = 0.0;
+                    assembled = true;
+                }
+            }
+        }
+        if !self.running {
+            return BearingStep::Idle;
+        }
+        self.angle = (self.angle + convert_to_angular(rpm)) % 360.0;
+        if assembled {
+            BearingStep::Assembled
+        } else {
+            BearingStep::Turned
+        }
+    }
+
+    /// After `disassemble`.
+    pub fn stopped(&mut self) {
+        self.running = false;
+        self.angle = 0.0;
+        self.assemble_next_tick = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1156,6 +1557,7 @@ mod tests {
         Bedrock,
         Part(PistonPart),
         Chassis(Chassis),
+        Sail,
     }
 
     /// Blocks, and glue as pairs of its corners.
@@ -1210,6 +1612,11 @@ mod tests {
                 },
                 Some(B::Chassis(c)) => Facts {
                     chassis: Some(*c),
+                    ..solid
+                },
+                Some(B::Sail) => Facts {
+                    sail: true,
+                    sticky: Some(Sticky::Slime),
                     ..solid
                 },
             }
@@ -1626,5 +2033,156 @@ mod tests {
         );
         // A lone block holds nothing.
         assert!(glue_group(&w, [9, 9, 9], [9, 9, 9]).is_none());
+    }
+
+    #[test]
+    fn a_bearing_takes_what_holds_to_its_front() {
+        let mut w = World::default();
+        w.0.insert([0, 1, 0], B::Slime);
+        w.0.insert([1, 1, 0], B::Stone);
+        w.0.insert([0, 0, 1], B::Stone);
+        let c = BearingContraption::assemble(&w, [0, 0, 0], Dir::Up, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.anchor, [0, 1, 0]);
+        let locals: Vec<Pos> = c.blocks.iter().map(|b| b.local).collect();
+        assert_eq!(locals, vec![[0, 0, 0], [1, 0, 0]]);
+        // Nothing in front: nothing to turn.
+        assert_eq!(
+            BearingContraption::<String>::assemble(&w, [5, 0, 0], Dir::Up, false),
+            Ok(None)
+        );
+        // Put back a quarter turn about Y.
+        assert_eq!(c.placed_at([1, 0, 0], 90.0), [0, 1, -1]);
+        assert_eq!(c.placed_at([1, 0, 0], 44.0), [1, 1, 0]);
+    }
+
+    #[test]
+    fn a_windmill_needs_eight_sails() {
+        let mut w = World::default();
+        for i in 1..=7 {
+            w.0.insert([0, i, 0], B::Sail);
+        }
+        assert_eq!(
+            BearingContraption::assemble(&w, [0, 0, 0], Dir::Up, true),
+            Err(AssemblyError::NotEnoughSails(7))
+        );
+        w.0.insert([0, 8, 0], B::Sail);
+        let c = BearingContraption::assemble(&w, [0, 0, 0], Dir::Up, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!((c.sails, windmill_speed(c.sails)), (8, 1));
+        assert_eq!(windmill_speed(200), 16);
+    }
+
+    #[test]
+    fn the_bearing_turns_and_puts_back_on_a_quarter() {
+        let mut b = Bearing::default();
+        b.speed(32.0, false);
+        assert_eq!(b.tick(32.0, false, || true), BearingStep::Assembled);
+        assert!((b.angle - 9.6).abs() < 1e-4);
+        for _ in 0..9 {
+            b.tick(32.0, false, || true);
+        }
+        b.speed(0.0, false);
+        assert_eq!(b.angle, 96.0);
+        assert_eq!(
+            b.tick(0.0, false, || true),
+            BearingStep::Disassemble { angle: 96.0 }
+        );
+        assert_eq!(rounded_angle(96.0), 90);
+        assert_eq!(rounded_angle(-100.0), -90);
+        assert_eq!(rotation_steps(-90), rotation_steps(270));
+        b.stopped();
+        // A stopped bearing doesn't assemble; a windmill does.
+        b.assemble_next_tick = true;
+        assert_eq!(b.tick(0.0, false, || true), BearingStep::Idle);
+        b.assemble_next_tick = true;
+        assert_eq!(b.tick(0.0, true, || true), BearingStep::Assembled);
+    }
+
+    #[test]
+    fn states_turn_with_the_structure() {
+        let p = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        // A quarter turn about Y: facing, axis and fence sides.
+        assert_eq!(
+            turn_props(
+                &p(&[("facing", "north")]),
+                TurnShape::Plain,
+                false,
+                Axis::Y,
+                270
+            ),
+            p(&[("facing", "east")])
+        );
+        assert_eq!(
+            turn_props(&p(&[("axis", "x")]), TurnShape::Plain, false, Axis::Y, 90),
+            p(&[("axis", "z")])
+        );
+        let fence = p(&[
+            ("east", "false"),
+            ("north", "true"),
+            ("south", "false"),
+            ("west", "false"),
+        ]);
+        assert_eq!(
+            turn_props(&fence, TurnShape::Plain, false, Axis::Y, 270),
+            p(&[
+                ("east", "true"),
+                ("north", "false"),
+                ("south", "false"),
+                ("west", "false")
+            ])
+        );
+        // About X: a six-way facing turns, a log's axis too, a horizontal
+        // facing only on a half turn.
+        assert_eq!(
+            turn_props(
+                &p(&[("facing", "up")]),
+                TurnShape::Plain,
+                true,
+                Axis::X,
+                270
+            ),
+            p(&[("facing", "north")])
+        );
+        assert_eq!(
+            turn_props(&p(&[("axis", "y")]), TurnShape::Plain, false, Axis::X, 90),
+            p(&[("axis", "z")])
+        );
+        assert_eq!(
+            turn_props(
+                &p(&[("facing", "east")]),
+                TurnShape::Plain,
+                false,
+                Axis::X,
+                90
+            ),
+            p(&[("facing", "east")])
+        );
+        assert_eq!(
+            turn_props(
+                &p(&[("facing", "north"), ("type", "bottom")]),
+                TurnShape::Plain,
+                false,
+                Axis::X,
+                180
+            ),
+            p(&[("facing", "south"), ("type", "top")])
+        );
+        // Stairs facing north, upright, a quarter about X.
+        let stairs = p(&[("facing", "north"), ("half", "bottom")]);
+        let once = turn_props(&stairs, TurnShape::Stairs, false, Axis::X, 270);
+        assert_eq!(once, p(&[("facing", "south"), ("half", "bottom")]));
+        // A lever on the floor turned about X stands on a wall.
+        let lever = p(&[("face", "floor"), ("facing", "east")]);
+        assert_eq!(
+            turn_props(&lever, TurnShape::FaceAttached, false, Axis::X, 270),
+            p(&[("face", "wall"), ("facing", "north")])
+        );
     }
 }

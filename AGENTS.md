@@ -66,7 +66,8 @@ Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 `create:depots` (D1: items held by depots, basins, millstones),
 `create:values` (client → server value box changes, checked by the server),
 `create:fluids` (F1: tanks' and basins' fluids),
-`create:contraptions` (C1: running pistons' offsets and speeds, their blocks when they change, then the glue),
+`create:contraptions` (C1: running pistons' offsets and speeds, their blocks when they change, then the glue,
+then turning bearings' angles and blocks),
 `create:chassis` (client → server: a chassis' range scrolled with the wrench).
 
 Contraptions: `contraption.rs` (rules: structure search, `PistonContraption`,
@@ -76,6 +77,8 @@ window's player is carried on its own side from `native_tick` (`tick.rs`):
 in single player the server's copy of the player is not the one that moves.
 Chassis ranges and super glue live in `contraptions.rs`'s state (no block
 entity or entity), saved in the same file and moved with the structure.
+Bearings tick there too (`bearings_tick`); a windmill's generated speed is
+the kinetics' `flow_score`.
 
 Fluids: `fluids.rs` (rules) reaches every fluid holder through the
 `FluidAccess` trait; `fluid_glue.rs` answers it (tanks kept in the native

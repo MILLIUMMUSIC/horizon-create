@@ -267,6 +267,22 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       click (`SuperGlueSelectionHandler`'s client outlines and messages), glue in the off hand gluing a placed
       block (`SuperGlueHandler`), glue particles and sounds, the sticker, chassis' connected textures and range
       display (`ChassisRangeDisplay`), Create 6's value board for the range (the wheel steps it here).
+      Part 2b, mechanical and windmill bearings (**done, checked in the game in part**): `contraption.rs` has
+      `BearingContraption` (the shared `searchMovedStructure` from the block in front, the bearing anchoring, the
+      sail count and `notEnoughSails`), `MechanicalBearingBlockEntity`'s motion in `ROTATE_PLACE` (assembly on a
+      speed change or an empty-hand click, `convertToAngular`, the angle snapped on a stop, a windmill put back as
+      built), `StructureTransform` for putting a structure back on a quarter turn (positions, and states through
+      vanilla's rotation about Y, `FACING`/`AXIS` about X and Z, stairs, face-attached blocks, half turns of
+      slabs and horizontal blocks) and the windmill's generated speed. `contraptions.rs` takes the structure out,
+      draws it turned about the anchor's centre on clients (the angle running on between updates), carries what
+      stands on a structure turning about Y (players on their own side, as pistons do), saves turning bearings, and
+      sets a windmill's speed in the kinetics (`flow_score` holds it). The bearings use a lightning rod's
+      template; their tops are partials turned with the structure. Not yet: the movement mode value box
+      (`ROTATE_PLACE_RETURNED`, `ROTATE_NEVER_PLACE`) and the windmill's rotation direction box (it turns
+      clockwise), sequenced gearshift angles, the clockwork bearing, structures on bearings inside other
+      contraptions (`StabilizedContraption`), riders on horizontal bearings, colliding with turning blocks, kinetic
+      and block-entity-rendered blocks drawn while turning, rails' and stairs' shapes and bells turned, the
+      assembly error on goggles, `DirectionalKineticBlock`'s placement (the clicked face decides here).
    3. Gantry carriage and shaft, rope and elevator pulley.
    4. Actors on contraptions (drill, saw, harvester, plough, deployer, portable storage interfaces).
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.

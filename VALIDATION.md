@@ -1,5 +1,30 @@
 # Validation
 
+## Milestone 5, part 2b: mechanical and windmill bearings (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 140 unit tests pass (4 new
+in `contraption.rs`), clippy has no warnings.
+
+Seen working:
+
+- A mechanical bearing facing up on a creative motor at 16 RPM, a slime block on it with a stone, a log and
+  stairs beside: the structure turns about the anchor (4.8° a tick), drawn turned; stopping the motor at 9.6° puts
+  it back as it was; at 105.6° (then 91.2°) it goes back a quarter turn round: the stone from east to north, the
+  log's axis from X to Z, the stairs from south to east. Seen from above, the drawn blocks turn the same way.
+- A player standing on the turning stone goes round with it (radius 1, about 96° a second) and stays on top.
+- A bearing facing north (axis Z) turning at -16 RPM, clicked with an empty hand at about -90°: the stone east of
+  the slime goes below it, the planks above go east, the log beside stands up (axis Y), as drawn.
+- A windmill bearing with a radial chassis and 20 white wool: an empty-hand click starts it at 2 RPM (20 sails / 8),
+  turning the shafts beside it; clicked again it puts the 20 wool back as built.
+- A turning bearing is saved when the world closes and goes on turning after loading (its speed is saved, so
+  loading doesn't count as a change).
+- A bearing set turning before anything stands in front of it doesn't assemble until clicked (Create assembles
+  only on a speed change or a click).
+
+Not checked yet: riders on mobs and items, a turning structure's chests and torches, glue and chassis ranges
+turned with it, the bearing and sail models in every facing, crafting them, a windmill with too few sails
+(`notEnoughSails` is unit-tested), a stressed network stopping a bearing.
+
 ## Milestone 5, part 2a: chassis and super glue (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 136 unit tests pass (6 new

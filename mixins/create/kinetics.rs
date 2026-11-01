@@ -232,6 +232,8 @@ impl Kind {
             Kind::HandCrank(f) => Kind::HandCrank(turn_facing(f)),
             Kind::WaterWheel(f) => Kind::WaterWheel(turn_facing(f)),
             Kind::EncasedFan(f) => Kind::EncasedFan(turn_facing(f)),
+            Kind::MechanicalBearing(f) => Kind::MechanicalBearing(turn_facing(f)),
+            Kind::WindmillBearing(f) => Kind::WindmillBearing(turn_facing(f)),
             // PumpBlock.getRotatedBlockState: turned round, whatever the face.
             Kind::MechanicalPump(f) => Kind::MechanicalPump(f.opposite()),
             // No property to turn (millstone, mixer), or a press's side.
@@ -249,7 +251,9 @@ impl Kind {
             | Kind::MechanicalPress(f)
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
-            | Kind::MechanicalPump(f) => Some(("facing", f.name())),
+            | Kind::MechanicalPump(f)
+            | Kind::MechanicalBearing(f)
+            | Kind::WindmillBearing(f) => Some(("facing", f.name())),
             Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) => Some(("facing", f.name())),
             Kind::Millstone | Kind::MechanicalMixer | Kind::Belt(_) | Kind::MechanicalArm => None,
         }
@@ -266,7 +270,7 @@ pub fn rotate_vec(v: [f32; 3], deg: f32, axis: Axis) -> [f32; 3] {
     match axis {
         Axis::X => [x, y * cos - z * sin, z * cos + y * sin],
         Axis::Y => [x * cos + z * sin, y, z * cos - x * sin],
-        Axis::Z => [x * cos - y * sin, y, z * cos + x * sin],
+        Axis::Z => [x * cos - y * sin, y * cos + x * sin, z],
     }
 }
 
@@ -384,6 +388,11 @@ pub enum Kind {
     /// and whether it is sticky; its `STATE` is in the block, not the kind
     /// (contraption.rs).
     MechanicalPiston(Dir, bool, bool),
+    /// `MechanicalBearingBlock`: the way its top faces; its shaft is behind
+    /// (contraption.rs turns what is in front).
+    MechanicalBearing(Dir),
+    /// `WindmillBearingBlock`: a generator while its sails turn.
+    WindmillBearing(Dir),
 }
 
 impl Kind {
@@ -408,6 +417,8 @@ impl Kind {
             "create:mechanical_pump" => facing().map(Kind::MechanicalPump),
             "create:mechanical_mixer" => Some(Kind::MechanicalMixer),
             "create:mechanical_arm" => Some(Kind::MechanicalArm),
+            "create:mechanical_bearing" => facing().map(Kind::MechanicalBearing),
+            "create:windmill_bearing" => facing().map(Kind::WindmillBearing),
             DEPLOYER => facing().map(|f| Kind::Deployer(f, false)),
             DEPLOYER_ALONG => facing().map(|f| Kind::Deployer(f, true)),
             n => {
@@ -432,6 +443,8 @@ impl Kind {
             Kind::MechanicalMixer => "create:mechanical_mixer",
             Kind::Belt(b) => b.block().map_or("create:belt", |(name, _)| name),
             Kind::MechanicalArm => "create:mechanical_arm",
+            Kind::MechanicalBearing(_) => "create:mechanical_bearing",
+            Kind::WindmillBearing(_) => "create:windmill_bearing",
             Kind::Deployer(_, along) => {
                 if along {
                     DEPLOYER_ALONG
@@ -455,7 +468,9 @@ impl Kind {
             | Kind::MechanicalPress(f)
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
-            | Kind::MechanicalPump(f) => f.axis(),
+            | Kind::MechanicalPump(f)
+            | Kind::MechanicalBearing(f)
+            | Kind::WindmillBearing(f) => f.axis(),
             Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
             Kind::Deployer(f, along) | Kind::MechanicalPiston(f, along, _) => {
@@ -472,7 +487,9 @@ impl Kind {
             Kind::HandCrank(f) => face == f.opposite(),
             Kind::MechanicalPress(f) | Kind::WaterWheel(f) => face.axis() == f.axis(),
             Kind::Millstone => face == Dir::Down,
-            Kind::EncasedFan(f) => face == f.opposite(),
+            Kind::EncasedFan(f) | Kind::MechanicalBearing(f) | Kind::WindmillBearing(f) => {
+                face == f.opposite()
+            }
             Kind::MechanicalPump(_) => false,
             Kind::MechanicalMixer | Kind::MechanicalArm => false,
             Kind::Belt(b) => b.has_shaft_towards(face),
@@ -506,6 +523,7 @@ impl Kind {
             Kind::MechanicalArm => 2.0,
             Kind::Deployer(..) => 4.0,
             Kind::MechanicalPiston(..) => 4.0,
+            Kind::MechanicalBearing(_) => 4.0,
             _ => 0.0,
         }
     }
@@ -515,6 +533,7 @@ impl Kind {
             Kind::CreativeMotor(_) => 16384.0,
             Kind::HandCrank(_) => 8.0,
             Kind::WaterWheel(_) => 32.0,
+            Kind::WindmillBearing(_) => 512.0,
             _ => 0.0,
         }
     }
@@ -522,7 +541,10 @@ impl Kind {
     pub fn is_generator(self) -> bool {
         matches!(
             self,
-            Kind::CreativeMotor(_) | Kind::HandCrank(_) | Kind::WaterWheel(_)
+            Kind::CreativeMotor(_)
+                | Kind::HandCrank(_)
+                | Kind::WaterWheel(_)
+                | Kind::WindmillBearing(_)
         )
     }
     /// `KineticBlock.areStatesKineticallyEquivalent`: same block, same axis.
@@ -558,7 +580,8 @@ pub struct Kinetic {
     /// `HandCrankBlockEntity.inUse` and `backwards`.
     pub crank_in_use: i32,
     pub crank_backwards: bool,
-    /// `WaterWheelBlockEntity.flowScore`.
+    /// `WaterWheelBlockEntity.flowScore`; a windmill bearing's generated
+    /// speed (`getGeneratedSpeed`, set by contraptions.rs).
     pub flow_score: i32,
     /// `MechanicalPressBlockEntity.pressingBehaviour`.
     pub pressing: Pressing,
@@ -615,6 +638,7 @@ impl Kinetic {
                 convert(sign * CRANK_SPEED, f)
             }
             Kind::WaterWheel(_) => water_wheel_speed(self.flow_score),
+            Kind::WindmillBearing(_) => self.flow_score as f32,
             _ => 0.0,
         }
     }
@@ -1768,7 +1792,9 @@ fn kind_key(k: Kind) -> String {
         | Kind::MechanicalPress(f)
         | Kind::WaterWheel(f)
         | Kind::EncasedFan(f)
-        | Kind::MechanicalPump(f) => f.name(),
+        | Kind::MechanicalPump(f)
+        | Kind::MechanicalBearing(f)
+        | Kind::WindmillBearing(f) => f.name(),
         Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => "",
         Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) => f.name(),
         Kind::Belt(b) => {
@@ -1894,6 +1920,8 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::MechanicalPiston(d, along, sticky) => {
             (15, dir(d) | u8::from(along) << 3 | u8::from(sticky) << 4)
         }
+        Kind::MechanicalBearing(d) => (16, dir(d)),
+        Kind::WindmillBearing(d) => (17, dir(d)),
     }
 }
 
@@ -1928,6 +1956,8 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
             state & 8 != 0,
             state & 16 != 0,
         ),
+        16 => Kind::MechanicalBearing(dir?),
+        17 => Kind::WindmillBearing(dir?),
         _ => return None,
     })
 }
@@ -2669,6 +2699,8 @@ mod tests {
             Kind::Deployer(Dir::Up, false),
             Kind::MechanicalPiston(Dir::North, true, true),
             Kind::MechanicalPiston(Dir::Down, false, false),
+            Kind::MechanicalBearing(Dir::West),
+            Kind::WindmillBearing(Dir::Up),
         ] {
             assert_eq!(parse_kind_key(&kind_key(k)), Some(k));
             let (tag, state) = kind_code(k);
