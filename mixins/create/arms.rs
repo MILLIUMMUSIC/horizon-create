@@ -161,7 +161,13 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
         return false;
     }
     if entity.is_none() {
-        *entity = Some((block.to_owned(), Compound::new()));
+        let mut nbt = Compound::new();
+        if block == VAULT {
+            // ItemVaultBlock.onPlace: updateConnectivity, however the block
+            // was placed (a player, a command).
+            put(&mut nbt, "Uninitialized", Tag::Byte(1));
+        }
+        *entity = Some((block.to_owned(), nbt));
     }
     true
 }

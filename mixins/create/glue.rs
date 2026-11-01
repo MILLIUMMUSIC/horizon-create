@@ -414,10 +414,33 @@ pub(super) fn with_kinetics<R>(
     r
 }
 
+/// The tick and block of the last main-hand click a Create block took.
+static TAKEN_CLICK: Mutex<Option<(u64, [i32; 3])>> = Mutex::new(None);
+
 /// `native_right_click_block`: hand cranks turn, creative motors step
 /// their speed (as well as the scroll value box), the wrench acts on blocks
 /// whose template has a use of its own.
 pub(super) fn right_click(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
+    // Create's blocks answer SUCCESS on the client, which then sends no
+    // off-hand use; Horizon's client doesn't run the mod and sends both. The
+    // off hand's use of a block the main hand's just took is dropped.
+    let mut taken = TAKEN_CLICK.lock().unwrap_or_else(|e| e.into_inner());
+    if game.hand == horizon_client::first_person::Hand::Off && *taken == Some((game.ticks, pos)) {
+        *canceled = true;
+        return;
+    }
+    right_click_hand(game, pos, face, canceled);
+    if *canceled && game.hand == horizon_client::first_person::Hand::Main {
+        *taken = Some((game.ticks, pos));
+    }
+}
+
+fn right_click_hand(
     game: &mut Game<'_>,
     pos: [i32; 3],
     face: [i32; 3],

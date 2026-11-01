@@ -120,7 +120,11 @@ CONTAINERS = {
 }
 
 # NeoForge's convention tags the recipes name and Horizon has no copy of
-# (NeoForge's own data: `c:ingots/iron` is vanilla's iron ingot...).
+# (NeoForge 21.1's own data for vanilla's items: `c:ingots/iron` is vanilla's
+# iron ingot...). Tags only other mods fill (`c:ingots/lead`) stay empty.
+COLORS = ["white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray", "cyan",
+          "purple", "blue", "brown", "green", "red", "black"]
+WOODS = ["acacia", "birch", "cherry", "dark_oak", "jungle", "mangrove", "oak", "spruce"]
 CONVENTION_TAGS = {
     "ingots/iron": ["minecraft:iron_ingot"],
     "ingots/gold": ["minecraft:gold_ingot"],
@@ -128,6 +132,27 @@ CONVENTION_TAGS = {
     "ingots/netherite": ["minecraft:netherite_ingot"],
     "nuggets/iron": ["minecraft:iron_nugget"],
     "nuggets/gold": ["minecraft:gold_nugget"],
+    "cobblestones": ["minecraft:cobblestone", "minecraft:infested_cobblestone", "minecraft:mossy_cobblestone",
+                     "minecraft:cobbled_deepslate"],
+    "dusts/redstone": ["minecraft:redstone"],
+    "eggs": ["minecraft:egg"],
+    "ender_pearls": ["minecraft:ender_pearl"],
+    "gems/lapis": ["minecraft:lapis_lazuli"],
+    "gems/quartz": ["minecraft:quartz"],
+    "glass_blocks": ["minecraft:glass", "minecraft:tinted_glass"] + [f"minecraft:{c}_stained_glass" for c in COLORS],
+    "obsidians": ["minecraft:obsidian", "minecraft:crying_obsidian"],
+    "raw_materials/copper": ["minecraft:raw_copper"],
+    "raw_materials/gold": ["minecraft:raw_gold"],
+    "raw_materials/iron": ["minecraft:raw_iron"],
+    "rods/wooden": ["minecraft:stick"],
+    "stones": ["minecraft:andesite", "minecraft:diorite", "minecraft:granite", "minecraft:stone", "minecraft:deepslate",
+               "minecraft:tuff"],
+    "storage_blocks/raw_copper": ["minecraft:raw_copper_block"],
+    "storage_blocks/raw_gold": ["minecraft:raw_gold_block"],
+    "storage_blocks/raw_iron": ["minecraft:raw_iron_block"],
+    "strings": ["minecraft:string"],
+    "stripped_logs": [f"minecraft:stripped_{w}_log" for w in WOODS] + ["minecraft:stripped_bamboo_block"],
+    "stripped_woods": [f"minecraft:stripped_{w}_wood" for w in WOODS],
 }
 
 # Horizontal kinetic blocks: a grindstone has a horizontal `facing`, is

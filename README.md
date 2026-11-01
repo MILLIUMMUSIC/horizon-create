@@ -11,7 +11,7 @@ Status: **milestones 1, 2 and 3 (part 1): kinetics, their visuals, and the first
 OBJ model) is checked in the game in part (see VALIDATION.md for what was seen). **Milestone 4 part 1** (mechanical belt, chute,
 andesite funnel) is checked in the game. **Milestone 4, fluids** (straight fluid pipes, mechanical pump,
 single fluid tanks, basin fluids) and **milestone 4 part 2** (item vault, mechanical arm, deployer) are ported and
-unit-tested; VALIDATION.md says what of them was seen in the game. See
+unit-tested and checked in the game in part (VALIDATION.md says what was seen). See
 [docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next, and [VALIDATION.md](VALIDATION.md) for what was
 checked how.
 

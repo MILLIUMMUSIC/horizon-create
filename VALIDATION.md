@@ -1,9 +1,51 @@
 # Validation
 
-## Milestone 4, fluids
+## Milestone 4, part 2 and fluids: checked on the Mac (macOS, offscreen)
+
+Both cloud PRs merged together, then built with `tools/horizon.py build` (Python 3.12) against the pinned Horizon
+(`aa27eca`) and horizon-mixins (`3f99a5c`), the content mod made from Create 6.0.10's jar, and run offscreen in a
+creative world. 115 unit tests pass, clippy has no warnings.
+
+Fixed here:
+
+- **The arm and the pump had the same wire code** (12) in `kinetics.rs`'s `create:kinetics` sync once both PRs were
+  in: the arm is 14 now.
+- **The content mod didn't build**: horizon-port-pack leaves out `mechanical_arm` (no template has its properties)
+  and `fit` read its declaration as if it were carried; containers it leaves out are declared from nothing now.
+- **Nothing drew a tank's or basin's fluid**: the fluid's sprite was looked up as `minecraft:block/water_still`, and the
+  atlas keeps vanilla's sprites without the namespace (`block/water_still`); and the tint was packed as 0xRRGGBB
+  where the vertex takes RGBA8 (red in the low byte), which turned water orange.
+- **A right click on a deployer gave its item straight back**, and every Create block's click could run twice:
+  Horizon's client doesn't run the mod, so for a block whose template has no use it sends the off hand's use too,
+  where Create's client answers SUCCESS and sends none. `glue::right_click` drops the off hand's click on a block the
+  main hand's click just took (same tick, same block).
+- **The deployer's andesite casing never came** (nor any recipe naming `c:stripped_logs`, `c:cobblestones`,
+  `c:stripped_woods`...): NeoForge's convention tags for vanilla items are added to the content mod
+  (`CONVENTION_TAGS`); tags only other mods fill stay empty, as with NeoForge.
+- **Vaults placed by a command never joined**: the vault's block entity starts `Uninitialized` now
+  (`ItemVaultBlock.onPlace` runs however the block is placed), not only when a player places it.
+
+Seen working after the fixes:
+
+- Fluids: a mechanical pump driven by a cogwheel beside it (−16 RPM) between an open pipe end in a water source and a
+  fluid tank: the source drained and its 1000 mB went into the tank within a few seconds, saved and loaded with the
+  world (`create_fluids_*.txt`). Buckets: a water bucket fills the tank and an empty one takes it back in survival;
+  in creative the bucket is kept and the tank still fills or drains, as Create's `FluidHelper` does. The water is
+  drawn in the tank's window, tinted.
+- Arm: the arm item selects a depot ("Extract from depot") and another ("Deposit to depot", after a second click),
+  the placed arm takes both points, turns with a cogwheel beside it and carries iron ingots from one depot to the
+  other; its base, arms, claw and cog are drawn.
+- Deployer: placed facing down by a command over a depot, its shaft turned by a motor along Z; a right click on its
+  front gives it andesite alloy; it waits while the depot is empty (as Create's `shouldActivate` with a transported
+  item handler below) and applies the alloy to stripped oak logs on the depot, making andesite casing (8 alloy left
+  6 after two logs); pole and hand drawn, its state saved in `create_deployers_*.txt`.
+- Vault: three blocks in a row join; a hopper fills the first block, an andesite funnel on the last one takes the
+  iron out of the whole vault.
+
+## Milestone 4, fluids (cloud)
 
 Ported in a cloud session on Linux (x86_64), Rust 1.99.1, Python 3.12, against the pinned Horizon (`aa27eca`) and
-horizon-mixins (`3f99a5c`). **Compiled and unit-tested only: nothing of it has been run in the game yet.**
+horizon-mixins (`3f99a5c`). Then checked on the Mac: see above.
 
 | Check | How | Result |
 |---|---|---|
@@ -24,33 +66,23 @@ apart, outputs drained first, `CombinedTankWrapper`'s loss of a second fluid), i
 and recipes with fluid ingredients (one tank per ingredient, `SizedFluidIngredient`), and which mixing recipes are
 supported (dough and cardboard pulp yes; tea, chocolate and honey no: no milk or Create fluids here).
 
-Not checked yet (all in the game, for the Mac pass):
+Not checked yet (fluids):
 
-- `prepare_content.py --jar` makes the fluid pipe (straight, chain template, its model per axis), the pump (lightning
-  rod template, its cog partial), the tank (glass template, the single window model) with their loot and tags; the
-  pipe and pump break with a pickaxe and drop themselves.
-- Placing pipes along the clicked axis; the pump's cog turns when a cogwheel beside it turns (and not from a shaft at
-  its back); goggles show the pump's 4 su per RPM.
-- A pump (any speed) between an open pipe end in water and a tank: the tank fills (watch it go up, about 16 mB a
-  tick at 32 RPM, 8000 mB to full) and the water source is drained (and refilled by an infinite pool).
-- The pump wrenched round: the tank empties out of the open end, a water source appears there after 1000 mB.
-- Lava the same way; water and lava meeting in a pipe breaking it into cobblestone; pouring water onto lava making
-  obsidian; water poured in the nether vanishing.
-- Pipes longer than 16 blocks from the pump (range), two branches splitting the flow, a pump pushing into another
-  pump.
-- Breaking a pipe mid-flow stops it; placing a block in front of an open end; closing and reopening the world keeps
-  tanks' contents and the pipes keep working (pressure comes back from the pumps).
-- Buckets on a tank and on a basin (fill, take back; creative keeps the bucket); the tank's fluid drawn at its level,
-  water tinted, lava untinted; the basin's fluids drawn side by side.
-- A mixer over a basin with wheat flour and 1000 mB of water piped or poured in making dough; cardboard pulp.
-- Cauldrons and beehives drained by an open end.
-- A LAN guest seeing tanks and basins fill (the `create:fluids` channel).
+- The pump's cog turning, seen; goggles on the pump; the pipe and pump breaking with a pickaxe and dropping
+  themselves; placing pipes by hand along the clicked axis.
+- The pump wrenched round emptying the tank out of the open end; lava; water and lava meeting in a pipe; pouring onto
+  lava; the nether.
+- An infinite pool feeding the pump for long (the test pool had air under it, so its source didn't come back: a
+  test rig problem, not the mod's), the tank filling to 8000 mB.
+- Pipes longer than 16 blocks, two branches, a pump into a pump, breaking a pipe mid-flow, a block in front of an open
+  end.
+- Buckets on a basin and its fluids drawn; a mixer making dough from flour and piped water; cardboard pulp.
+- Cauldrons and beehives drained by an open end; a LAN guest seeing tanks and basins fill.
 
-## Milestone 4, arm and deployer
+## Milestone 4, arm and deployer (cloud)
 
 Ported in a cloud session on Linux (x86_64), Rust 1.99.1, Python 3.12, against the pinned Horizon (`aa27eca`) and
-horizon-mixins (`3f99a5c`). **Compiled and unit-tested only: nothing of this part has been run in the game yet**
-(the cloud has no Minecraft resources and no Create jar).
+horizon-mixins (`3f99a5c`). Then checked on the Mac: see above.
 
 | Check | How | Result |
 |---|---|---|
@@ -69,34 +101,23 @@ placement (`axis_along_first` by neighbouring shafts), the wrench, `BeltDeployer
 recipes; the arm and deployer as kinetic blocks (a cog drives the arm, the deployer's shaft follows
 `axis_along_first`, saved and synced kinds).
 
-Not checked yet (every in-game check, for the Mac pass):
+Not checked yet (arm, deployer, vault):
 
-- Content: the vault, arm and both deployer blocks load with their models (the vault turned east–west by `facing`,
-  the deployer's twelve variants), the eleven new `hz_part_*` partials bake (the arm's are modelled around the origin,
-  some with negative coordinates), each drops itself (the extra deployer block drops a deployer) with the right tool.
-- Vault: placing one (its axis from the player, or from a lone vault beside it), hoppers into and out of one block,
-  a line of three joining into one vault and a 2×2×2 one; funnels, chutes and arms filling and emptying the whole
-  vault; breaking a block of a multiblock (its items drop, the rest joins again); the wrench from above (it leaves its
-  vault and turns); right clicks don't open the barrel template's menu; saving and reloading.
-- Arm: the arm item's selection (a click on a depot, belt, basin, chute, deployer, millstone or collecting funnel:
-  "Extract from" / "Deposit to" over the hotbar, a second click switches; funnels only deposit); placing it takes
-  the selection (out of range ones dropped with a message); driven by a cog beside it, 2 su; carrying items from a
-  depot to a depot, a belt to a basin, a millstone's outputs to a chute, into a deployer's hand; round-robin
-  between outputs; the belt item it reaches for waiting; an empty hand taking the held item back; the arm's base,
-  lower and upper arm, claw and grips drawn and moving as `ArmRenderer` does (backing up to rest halfway), its held
-  item in the claw, the cog turning; saving and reloading mid-move; a second player seeing it move.
-- Deployer: placed facing away from the player (sneaking: towards), `axis_along_first` by a shaft beside it, its
-  shaft turning; right click on its front swaps hands, the wrench on its front switches punch/use, elsewhere turns
-  it or its shaft; using: placing a held block two blocks out (or against the block there), not when that block is
-  already there; punching: breaking the block in front over several cycles with the held tool, its drops in the
-  deployer, then taken by a funnel or arm; a deploying recipe on a depot under it (e.g. an axe on exposed chiseled
-  copper, an `item_application` such as andesite casing) and on a belt passing under it, one item per cycle, the
-  held item used or kept as the recipe says; the pole and hand (pointing, holding, punching) drawn going out and
-  back with its held item; its state saved beside the world (`data/create_deployers_*.txt`) and its items dropped
-  when it is broken.
-- Regressions: belts, chutes and funnels into chests, depots and other inventories (their insertion and extraction
-  now look for vaults and deployers first); presses over belts and depots (a deployer is looked for when no press is
-  there).
+- Crafting the andesite funnel, fluid pipe, fluid tank, item vault, mechanical arm and deployer: horizon-port-pack
+  leaves their blocks out and drops their crafting recipes with them (`recipes_unregistered`), so the content mod has
+  none (they come from the creative menu or commands). See docs/PLAN.md.
+- Vault: placing by hand (its axis from the player or a lone vault beside it), a 2×2×2 vault, chutes and arms on a
+  vault, breaking a block of a multiblock, the wrench from above, right clicks not opening the barrel's menu.
+- Arm: belts, basins, millstones, chutes, deployers and funnels as points; round robin; out-of-range points on
+  placing; an empty hand taking its item; the held item drawn in the claw while moving; saving mid-move; a second
+  player.
+- Deployer: placing by hand (facing, sneaking, `axis_along_first` by a shaft); the wrench switching punch/use;
+  using (placing a held block), punching (breaking the block in front); deploying on a belt; an axe on copper; the
+  pole and hand compared closely against Create's (the pole stands out of the back while retracted, as the
+  partial's 9 px behind the block suggest, but its movement wasn't compared frame by frame); dropping its items when
+  broken.
+- Regressions: belts, chutes and funnels into chests and depots, presses over belts and depots (they now look for
+  vaults and deployers first). The combined pass below was made before this merge.
 
 ## Combined pass over earlier milestones (macOS, offscreen)
 
