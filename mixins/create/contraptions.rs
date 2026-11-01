@@ -117,6 +117,8 @@ struct State {
     /// signal last tick.
     columns: HashMap<(String, Column), ElevatorColumn>,
     contact_inputs: std::collections::HashSet<(String, Pos)>,
+    /// Elevator pulleys clicked with an empty hand (`clicked`).
+    elevator_clicks: Vec<(String, Pos)>,
 }
 
 /// A moving gantry (`GantryContraptionEntity`).
@@ -1979,7 +1981,7 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
     let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let face = Dir::nearest(face);
     let glue = held.as_deref() == Some(SUPER_GLUE);
-    if click_bearing(game, pos) || click_carriage(game, pos) {
+    if click_bearing(game, pos) || click_carriage(game, pos) || click_elevator(game, pos) {
         return true;
     }
     if let Some(c) = chassis_at(game, pos, DEFAULT_RANGE) {
@@ -2596,6 +2598,46 @@ fn click_bearing(game: &mut Game<'_>, pos: Pos) -> bool {
     let dimension = game.dim.id().to_owned();
     state().get_or_insert_with(State::default).clicked.push((dimension, pos));
     true
+}
+
+/// `ElevatorPulleyBlock.useItemOn` with an empty hand, not sneaking.
+fn click_elevator(game: &mut Game<'_>, pos: Pos) -> bool {
+    if name_at(game, pos) != "create:elevator_pulley" {
+        return false;
+    }
+    if game.held().is_some() || game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+        return false;
+    }
+    let dimension = game.dim.id().to_owned();
+    state().get_or_insert_with(State::default).elevator_clicks.push((dimension, pos));
+    true
+}
+
+/// `RedstoneContactBlock.updateShape` for the blocks changed and their
+/// neighbours: a redstone contact gives a signal while another faces it
+/// (`hasValidContact`).
+pub(super) fn contacts_changed(game: &mut Game<'_>, changed: &[Pos]) {
+    let mut seen = std::collections::HashSet::new();
+    for &p in changed {
+        for at in std::iter::once(p).chain(Dir::ALL.into_iter().map(|d| add(p, d))) {
+            if !seen.insert(at) || !game.world.loaded(at[0], at[2]) {
+                continue;
+            }
+            let Some((name, facing)) = contact_at(game, at) else {
+                continue;
+            };
+            if name != REDSTONE_CONTACT {
+                continue;
+            }
+            let front = add(at, facing);
+            let valid = contact_at(game, front).is_some_and(|(_, f)| f == facing.opposite());
+            let id = game.world.block(at[0], at[1], at[2]);
+            let want = if valid { "true" } else { "false" };
+            if prop(game, id, "powered").as_deref() != Some(want) {
+                set_named(game, at, REDSTONE_CONTACT, &[("facing", facing.name()), ("powered", want)]);
+            }
+        }
+    }
 }
 
 /// The angle a client draws the bearing at `pos`'s top at (degrees).
@@ -3422,7 +3464,10 @@ fn assemble_elevator(game: &mut Game<'_>, pos: Pos) -> Result<Option<ElevatorEnt
         return Err(ElevatorError::ColumnConflict);
     }
     let elevator = Elevator::new(pos[1], offset, contact_y);
-    col.target = Some(elevator.level_at(pos[1], offset));
+    // column.target: the floor it stands at, its contact the one calling.
+    let level = elevator.level_at(pos[1], offset);
+    col.target = Some(level);
+    col.calling = Some(level);
     gather_column(game, column, &mut col);
     col.active = true;
     state().get_or_insert_with(State::default).columns.insert((dim, column), col);
@@ -3444,6 +3489,13 @@ fn elevators_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) 
             .collect()
     });
     let dim = dimension.to_owned();
+    let clicks: Vec<Pos> = {
+        let mut guard = state();
+        let s = guard.get_or_insert_with(State::default);
+        let mine = s.elevator_clicks.iter().filter(|(d, _)| *d == dim).map(|(_, p)| *p).collect();
+        s.elevator_clicks.retain(|(d, _)| *d != dim);
+        mine
+    };
     // Contacts called by a signal.
     let columns: Vec<Column> = state()
         .as_ref()
@@ -3493,9 +3545,29 @@ fn elevators_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) 
             let before = s.elevator_rpm.insert(key.clone(), rpm).unwrap_or(0.0);
             (s.elevators.remove(&key), before == 0.0 && rpm != 0.0)
         };
+        let clicked = clicks.contains(&pos);
+        // clicked: a running elevator is taken apart (its cabin put down, its
+        // column free), a stopped one assembles.
+        if clicked && let Some(e) = &entry {
+            let (cabin, column) = {
+                let mut guard = state();
+                let s = guard.get_or_insert_with(State::default);
+                if let Some(c) = s.columns.get_mut(&(dim.clone(), e.column)) {
+                    c.active = false;
+                }
+                let cabin = s.pulleys.remove(&key).filter(|c| c.elevator);
+                (cabin, e.column)
+            };
+            let _ = column;
+            if let Some(mut cabin) = cabin {
+                disassemble_pulley(game, pos, cabin.hanging.take(), e.elevator.offset.round() as i32, false);
+            }
+            changed.push(pos);
+            continue;
+        }
         let mut entry = match entry {
             Some(e) => e,
-            None if started => match assemble_elevator(game, pos) {
+            None if (started || clicked) && rpm != 0.0 => match assemble_elevator(game, pos) {
                 Ok(Some(e)) => e,
                 Ok(None) => continue,
                 Err(e) => {

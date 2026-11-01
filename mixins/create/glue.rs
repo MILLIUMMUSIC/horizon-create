@@ -117,7 +117,8 @@ fn our_states(game: &Game<'_>) -> HashSet<u32> {
                     && (Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str))
                         .is_some()
                         || super::create_logistics::is_ours(&s.name)
-                        || super::create_fluid_glue::is_ours(&s.name))
+                        || super::create_fluid_glue::is_ours(&s.name)
+                        || s.name == "create:redstone_contact")
             })
         })
         .collect()
@@ -372,6 +373,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     }
     super::create_logistics::belts_removed(game, &removed_belts);
     super::create_logistics::changed(game, dimension, &changed_here);
+    super::create_contraptions::contacts_changed(game, &changed_here);
     // Outside the lock: these change blocks and items, which come back to us.
     for [x, y, z] in destroy {
         game.native_run_command(&format!(

@@ -307,9 +307,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       cabin is put back as blocks once it has arrived (contraptions aren't entities here, so nothing could stand
       on it while it waits) and taken out again for the next call; a client puts a player standing on a load
       back on top of it when it is put back. Not yet: floor names and the contact's screen, contraption controls
-      choosing floors, door controls, the pulley's belt and coil drawn, the click that disassembles it, columns
-      saved (gathered again on load), redstone contacts touching each other (`hasValidContact`) and on moving
-      structures, mirrored elevator pulleys, actors on the cabin.
+      choosing floors, door controls, the pulley's belt and coil drawn, columns
+      saved (gathered again on load), redstone contacts on moving structures (`ContactMovementBehaviour`), mirrored elevator pulleys, actors on the cabin.
       Gantry shaft and carriage (**done, checked in the game in part**): `contraption.rs` has the shaft's parts
       (`updateShape`), `canAssembleOn`, `getPinionMovementSpeed`, `GantryContraption` (from the carriage, the
       shaft behind anchoring) and `GantryContraptionEntity`'s tick (`checkPinionShaft`: no shaft or no speed

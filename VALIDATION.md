@@ -1,5 +1,11 @@
 # Validation
 
+## Elevator clicks and redstone contacts (macOS, offscreen)
+
+Seen working: two redstone contacts placed facing each other both give a signal, and stop when one is taken
+away. Clicking the elevator pulley with an empty hand takes the elevator apart (a call does nothing then);
+clicking again assembles it, and calls work again, up and down.
+
 ## Directional placement (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`. Drills, bearings, creative motors, hand cranks, encased fans,
