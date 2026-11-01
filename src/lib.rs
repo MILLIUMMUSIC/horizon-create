@@ -8,6 +8,8 @@ pub mod create_arm;
 pub mod create_belt;
 #[path = "../mixins/create/chute.rs"]
 pub mod create_chute;
+#[path = "../mixins/create/contraption.rs"]
+pub mod create_contraption;
 #[path = "../mixins/create/deployer.rs"]
 pub mod create_deployer;
 #[path = "../mixins/create/fan.rs"]

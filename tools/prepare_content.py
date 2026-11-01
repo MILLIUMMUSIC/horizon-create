@@ -518,6 +518,7 @@ def fit_logistics(content, names):
             write_json(states / f"{name}.json", {"variants": variants})
 
     fit_arms(content, names)
+    fit_pistons(content, names)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -527,6 +528,8 @@ def fit_logistics(content, names):
         **{name: f"create:{kind}_tunnel" for kind in ("andesite", "brass")
            for name in tunnel_blocks(kind) if name != f"{kind}_tunnel"},
         **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
+        **{name: f"create:{piston}" for name, (piston, _, _) in piston_blocks().items() if name != piston},
+        "hz_mechanical_piston_head_sticky": "create:mechanical_piston_head",
     })
 
 
@@ -620,6 +623,78 @@ def fit_arms(content, names):
             if props.get("axis_along_first") == along and "facing" in props:
                 variants[f"facing={props['facing']}"] = model
         write_json(states / f"{name}.json", {"variants": variants})
+
+
+# Mechanical pistons: Create's `facing`, `axis_along_first` and `state` (no
+# template has all three): a lightning rod's template (`facing`) per
+# piston, `axis_along_first` and state, the plain one the retracted piston
+# not along first. Poles and heads are lightning rods too (all six facings).
+PISTON_STATES = ["retracted", "moving", "extended"]
+FOUR_VOXEL_POLE = box(6, 0, 6, 10, 16, 10)
+
+
+def piston_blocks():
+    """{block: (piston, axis_along_first, state)}, as contraption.rs names them."""
+    out = {}
+    for piston in ("mechanical_piston", "sticky_mechanical_piston"):
+        for along_first in ("false", "true"):
+            for state in PISTON_STATES:
+                plain = along_first == "false" and state == "retracted"
+                name = piston if plain else f"hz_{piston}_{'along' if along_first == 'true' else 'across'}_{state}"
+                out[name] = (piston, along_first, state)
+    return out
+
+
+def fit_pistons(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+
+    def declare(name, shape, base, item=True):
+        decl = read_json(blocks / f"{base}.json") if (blocks / f"{base}.json").exists() else {}
+        decl = dict(decl)
+        decl["template"] = "minecraft:lightning_rod"
+        decl.pop("default_state", None)
+        decl["shapes"] = {"property": "facing", "values": {f: [facing_box(f, b) for b in shape] for f in FACINGS}}
+        decl.setdefault("properties", {})["light"] = 0
+        if not item:
+            decl["item"] = False
+            names[f"block.create.{name}"] = names.get(f"block.create.{base}", base)
+            write_json(loot_tables / f"{name}.json", loot(name, [f"create:{base}"]))
+        write_json(blocks / f"{name}.json", decl)
+
+    def variants(original, keep):
+        out = {}
+        for key, model in original.get("variants", {}).items():
+            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            if keep(props) and "facing" in props:
+                out[f"facing={props['facing']}"] = model
+        return out
+
+    full = [box(0, 0, 0, 16, 16, 16)]
+    # The carried blockstates, read before the plain blocks' are rewritten.
+    originals = {n: read_json(states / f"{n}.json") for n in
+                 ("mechanical_piston", "sticky_mechanical_piston", "mechanical_piston_head")
+                 if (states / f"{n}.json").exists()}
+    for name, (piston, along_first, state) in piston_blocks().items():
+        shape = full if state == "retracted" else [CASING_12PX, FOUR_VOXEL_POLE]
+        declare(name, shape, piston, item=name == piston)
+        if piston in originals:
+            original = originals[piston]
+            write_json(states / f"{name}.json", {"variants": variants(
+                original, lambda p: p.get("axis_along_first") == along_first and p.get("state") == state)})
+    declare("piston_extension_pole", [FOUR_VOXEL_POLE], "piston_extension_pole")
+    head = [box(0, 12, 0, 16, 16, 16), FOUR_VOXEL_POLE]
+    for kind in ("normal", "sticky"):
+        name = "mechanical_piston_head" if kind == "normal" else "hz_mechanical_piston_head_sticky"
+        declare(name, head, "mechanical_piston_head", item=False)
+        if "mechanical_piston_head" in originals:
+            original = originals["mechanical_piston_head"]
+            write_json(states / f"{name}.json", {"variants": variants(original, lambda p: p.get("type") == kind)})
+    # The head drops nothing (Create: its loot table is empty): the piston
+    # keeps it.
+    write_json(loot_tables / "mechanical_piston_head.json", {"type": "minecraft:block", "pools": []})
+    write_json(loot_tables / "hz_mechanical_piston_head_sticky.json", {"type": "minecraft:block", "pools": []})
 
 
 def share_block_tags(content, bases):

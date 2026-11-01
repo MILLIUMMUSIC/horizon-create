@@ -1139,7 +1139,7 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
     let Some(name) = block_name(game, pos) else {
         return;
     };
-    if !is_ours(&name) {
+    if !is_ours(&name) && super::create_contraption::piston_of(&name).is_none() {
         return;
     }
     let player = game.native_acting_player();
@@ -1257,8 +1257,9 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
                 put(&mut be.nbt, "Uninitialized", Tag::Byte(1))
             });
         }
-        DEPLOYER | DEPLOYER_ALONG => {
-            // DirectionalAxisKineticBlock.getStateForPlacement.
+        n if n == DEPLOYER || n == DEPLOYER_ALONG || super::create_contraption::piston_of(n).is_some() => {
+            // DirectionalAxisKineticBlock.getStateForPlacement (deployers
+            // and mechanical pistons).
             let mut facing = nearest_looking(p.yaw, p.pitch).opposite();
             if p.sneaking {
                 facing = facing.opposite();
@@ -1283,6 +1284,15 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
                 horizontal_facing(p.yaw).axis() == Axis::X,
                 shaft_towards,
             );
+            if let Some((sticky, ..)) = super::create_contraption::piston_of(n) {
+                let block = super::create_contraption::piston_block(
+                    sticky,
+                    along,
+                    super::create_contraption::PistonState::Retracted,
+                );
+                set_block(game, pos, block, &[("facing", facing.name())]);
+                return;
+            }
             let block = if along { DEPLOYER_ALONG } else { DEPLOYER };
             set_block(game, pos, block, &[("facing", facing.name())]);
             let dim = game.dim.id().to_owned();

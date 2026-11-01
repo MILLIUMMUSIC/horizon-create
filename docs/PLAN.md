@@ -233,11 +233,24 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      covers, moved with it. This is a stand-in; the real fix is an engine hook for extra collision boxes per
      level (to propose upstream with the capability hook).
    Parts:
-   1. Mechanical piston and sticky piston, extension poles, piston head (`MechanicalPistonBlockEntity`,
-      `LinearActuatorBlockEntity`, `PistonContraption`): kinetic block, its speed as linear motion
-      (`convertToLinear`, clamped to ±0.49 a tick), assembly on movement, the structure in front (a line of
-      blocks, without glue or chassis yet), disassembly at the end of its range or when it stops; drawing the
-      moved blocks and poles; riders carried; the collision stand-in. The contraption core is built here.
+   1. Mechanical piston and sticky piston, extension poles, piston head (**done, checked in the game in part**):
+      `contraption.rs` has `searchMovedStructure`/`moveBlock` with `BlockMovementChecks`' fallbacks (the block's
+      Java classes and tags from Horizon's facts: brittle, attached towards, not supportive, slime and honey
+      sticking, push reactions), `PistonContraption` (poles behind and in front, the head, the line in front,
+      a sticky one pulling the first block), colliders and the world check, and `LinearActuatorBlockEntity`'s
+      tick in `MOVE_PLACE` (assembly when the speed changes, `convertToLinear` clamped to ±0.49, stopping on the
+      grid against the world, placed at either end or when it stops). `contraptions.rs` takes the blocks out
+      (block entities' data kept, `UPDATE_MOVE_BY_PISTON`), puts them back (dropping what can't go back), keeps
+      the piston's `STATE` blocks, draws the moving blocks on clients from `create:contraptions` (interpolated
+      between ticks), carries what stands on them (the window's player from `native_tick` on its own side, mobs
+      and items on the server), and saves running pistons beside the world. Blocks: a lightning rod's template
+      per piston, `axis_along_first` and state, placed as `DirectionalAxisKineticBlock` places them; poles and
+      heads on lightning rods. Not yet: the movement mode value box (`MOVE_NEVER_PLACE`, `MOVE_PLACE_RETURNED`),
+      redstone and sequenced gearshifts, pistons inside other contraptions (`moveMechanicalPiston`), breaking a
+      pole or the head breaking the rest, kinetic and other natively drawn blocks drawn while moving (their
+      models are blank), block entity renderers while moving (chests), colliding with other contraptions,
+      pushing entities that stand in the way (only riders and entities inside move), LAN guests carried (the
+      server can't move a remote player), sounds and the assembly error on goggles.
    2. Super glue and linear and radial chassis (what a structure takes in), the mechanical bearing and windmill
       bearing (rotating contraptions: drawn turned; collision of turned structures stays a gap).
    3. Gantry carriage and shaft, rope and elevator pulley.

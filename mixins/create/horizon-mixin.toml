@@ -52,6 +52,18 @@ name = "create_arm"
 source = "arm.rs"
 
 [[module]]
+id = "contraptions"
+file = "crates/horizon-client/src/game.rs"
+name = "create_contraptions"
+source = "contraptions.rs"
+
+[[module]]
+id = "contraption"
+file = "crates/horizon-client/src/game.rs"
+name = "create_contraption"
+source = "contraption.rs"
+
+[[module]]
 id = "deployer"
 file = "crates/horizon-client/src/game.rs"
 name = "create_deployer"
@@ -247,6 +259,15 @@ bindings = [
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "face", ty = "[i32; 3]", value = "face" },
   { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
+[[injection]]
+id = "tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_tick"
+helper = "tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
 ]
 
 [[injection]]

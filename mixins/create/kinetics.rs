@@ -250,7 +250,7 @@ impl Kind {
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
             | Kind::MechanicalPump(f) => Some(("facing", f.name())),
-            Kind::Deployer(f, _) => Some(("facing", f.name())),
+            Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) => Some(("facing", f.name())),
             Kind::Millstone | Kind::MechanicalMixer | Kind::Belt(_) | Kind::MechanicalArm => None,
         }
     }
@@ -380,6 +380,10 @@ pub enum Kind {
     /// `DeployerBlock`: its facing and `AXIS_ALONG_FIRST_COORDINATE`
     /// (deployer.rs).
     Deployer(Dir, bool),
+    /// `MechanicalPistonBlock`: its facing, `AXIS_ALONG_FIRST_COORDINATE`
+    /// and whether it is sticky; its `STATE` is in the block, not the kind
+    /// (contraption.rs).
+    MechanicalPiston(Dir, bool, bool),
 }
 
 impl Kind {
@@ -406,7 +410,10 @@ impl Kind {
             "create:mechanical_arm" => Some(Kind::MechanicalArm),
             DEPLOYER => facing().map(|f| Kind::Deployer(f, false)),
             DEPLOYER_ALONG => facing().map(|f| Kind::Deployer(f, true)),
-            _ => None,
+            n => {
+                let (sticky, along, _) = super::create_contraption::piston_of(n)?;
+                facing().map(|f| Kind::MechanicalPiston(f, along, sticky))
+            }
         }
     }
     pub fn block(self) -> &'static str {
@@ -432,6 +439,11 @@ impl Kind {
                     DEPLOYER
                 }
             }
+            Kind::MechanicalPiston(_, along, sticky) => super::create_contraption::piston_block(
+                sticky,
+                along,
+                super::create_contraption::PistonState::Retracted,
+            ),
         }
     }
     /// `IRotate.getRotationAxis`.
@@ -446,7 +458,9 @@ impl Kind {
             | Kind::MechanicalPump(f) => f.axis(),
             Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
-            Kind::Deployer(f, along) => super::create_deployer::rotation_axis(f, along),
+            Kind::Deployer(f, along) | Kind::MechanicalPiston(f, along, _) => {
+                super::create_deployer::rotation_axis(f, along)
+            }
         }
     }
     /// `IRotate.hasShaftTowards`.
@@ -462,7 +476,7 @@ impl Kind {
             Kind::MechanicalPump(_) => false,
             Kind::MechanicalMixer | Kind::MechanicalArm => false,
             Kind::Belt(b) => b.has_shaft_towards(face),
-            Kind::Deployer(f, along) => {
+            Kind::Deployer(f, along) | Kind::MechanicalPiston(f, along, _) => {
                 face.axis() == super::create_deployer::rotation_axis(f, along)
             }
         }
@@ -491,6 +505,7 @@ impl Kind {
             Kind::MechanicalMixer => 4.0,
             Kind::MechanicalArm => 2.0,
             Kind::Deployer(..) => 4.0,
+            Kind::MechanicalPiston(..) => 4.0,
             _ => 0.0,
         }
     }
@@ -1755,7 +1770,7 @@ fn kind_key(k: Kind) -> String {
         | Kind::EncasedFan(f)
         | Kind::MechanicalPump(f) => f.name(),
         Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => "",
-        Kind::Deployer(f, _) => f.name(),
+        Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) => f.name(),
         Kind::Belt(b) => {
             let face = b.block().map_or("floor", |(_, face)| face);
             return format!("{}[{};{face}]", k.block(), b.facing.name());
@@ -1876,6 +1891,9 @@ fn kind_code(k: Kind) -> (u8, u8) {
         }
         Kind::MechanicalArm => (14, 0),
         Kind::Deployer(d, along) => (13, dir(d) | u8::from(along) << 3),
+        Kind::MechanicalPiston(d, along, sticky) => {
+            (15, dir(d) | u8::from(along) << 3 | u8::from(sticky) << 4)
+        }
     }
 }
 
@@ -1904,6 +1922,11 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         13 => Kind::Deployer(
             Dir::ALL.get(usize::from(state & 7)).copied()?,
             state & 8 != 0,
+        ),
+        15 => Kind::MechanicalPiston(
+            Dir::ALL.get(usize::from(state & 7)).copied()?,
+            state & 8 != 0,
+            state & 16 != 0,
         ),
         _ => return None,
     })
@@ -2644,6 +2667,8 @@ mod tests {
             Kind::MechanicalArm,
             Kind::Deployer(Dir::West, true),
             Kind::Deployer(Dir::Up, false),
+            Kind::MechanicalPiston(Dir::North, true, true),
+            Kind::MechanicalPiston(Dir::Down, false, false),
         ] {
             assert_eq!(parse_kind_key(&kind_key(k)), Some(k));
             let (tag, state) = kind_code(k);

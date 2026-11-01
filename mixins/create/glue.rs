@@ -372,6 +372,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_logistics::tunnels_tick(game, dimension);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
+    super::create_contraptions::level_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
     if messages.is_empty() && depots.is_empty() {
         return;
@@ -744,6 +745,7 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
     super::create_logistics::world_phase(closing);
     super::create_fluid_glue::world_phase(closing);
     super::create_arms::world_phase(closing);
+    super::create_contraptions::world_phase(closing);
     let mut guard = server();
     match phase {
         WorldPhase::WorldOpenReady | WorldPhase::WorldOpenFailed => *guard = None,
@@ -770,6 +772,10 @@ pub(super) fn from_server(channel: &str, data: &[u8]) {
     }
     if channel == super::create_logistics::BELTS {
         super::create_logistics::from_server(data);
+        return;
+    }
+    if channel == super::create_contraptions::CONTRAPTIONS {
+        super::create_contraptions::from_server(data);
         return;
     }
     if channel == super::create_arms::ARMS {
@@ -981,7 +987,9 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
         // ArmRenderer: its cog (the body is create_arms').
         Kind::MechanicalArm => want.push(("create:hz_part_arm_cog", None, id, Axis::Y, standard, 0.0)),
         // DeployerRenderer: a shaft along its axis (pole and hand: create_arms).
-        Kind::Deployer(..) => {
+        // DeployerRenderer and MechanicalPistonRenderer: a shaft along its
+        // axis (the rest: create_arms, create_contraptions).
+        Kind::Deployer(..) | Kind::MechanicalPiston(..) => {
             let a = view.kind.rotation_axis();
             want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
         }
@@ -1114,6 +1122,7 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);
+    super::create_contraptions::draw(game, camera, out);
 }
 
 /// `WaterWheelBlockEntity.material`'s default, spruce planks, as

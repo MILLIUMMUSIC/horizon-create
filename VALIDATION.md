@@ -1,5 +1,28 @@
 # Validation
 
+## Milestone 5, part 1: mechanical pistons (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 130 unit tests pass (7 new
+in `contraption.rs`), clippy has no warnings.
+
+Seen working:
+
+- A mechanical piston facing up with two poles behind it and a stone on top, driven by a creative motor at 16 RPM:
+  turned one way it extends (the piston MOVING, then EXTENDED), the poles and head sliding up through it with the
+  stone, drawn moving smoothly, the stone placed two blocks up; turned the other way it retracts, leaving the
+  stone (not sticky), the poles back behind it and the piston RETRACTED.
+- A sticky piston pulls the stone back down with it.
+- A survival player standing on the stone rides it up (from y 102 to 104) instead of falling through.
+- Quitting the world in the middle of a retraction saves it (`create_contraptions_*.txt`, offset 1.25) and it
+  finishes after loading.
+- A horizontal piston pushing a stone toward obsidian stops on the grid with the stone against it.
+- Placed by a player looking down, a piston faces up (as `DirectionalAxisKineticBlock` places it).
+
+Not checked yet: slime and honey dragging blocks, torches and ladders coming along, chests keeping their items
+through a move, blocks dropped where they can't land, mobs and items carried, long pole chains (the 64-pole cap), a
+piston broken while moving, crafting the pistons and poles, the piston and pole models in every facing and axis,
+a LAN guest seeing it move.
+
 ## Combined pass over milestone 4 (macOS, offscreen)
 
 After part 3 was merged, one world, the same build. 123 unit tests pass, clippy has no warnings.

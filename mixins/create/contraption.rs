@@ -1,0 +1,1110 @@
+// Create's contraptions as milestone 5 part 1 needs them, injected as
+// `crate::game::create_contraption`: `Contraption.searchMovedStructure` and
+// `moveBlock` with `BlockMovementChecks` (asked of the world as `Facts`),
+// `PistonContraption` (its poles, head and the blocks in front),
+// `TranslatingContraption`'s colliders and `ContraptionCollider`'s world
+// check, and `LinearActuatorBlockEntity` / `MechanicalPistonBlockEntity`'s
+// motion. Contraptions are no entities here: the glue takes their blocks out
+// of the world, draws them moving and puts them back. No Horizon types.
+
+use super::create_kinetics::{Axis, Dir, Pos};
+use std::collections::{HashSet, VecDeque};
+
+/// `CKinetics` defaults.
+pub const MAX_BLOCKS_MOVED: usize = 2048;
+pub const MAX_CHASSIS_RANGE: i32 = 16;
+pub const MAX_PISTON_POLES: i32 = 64;
+
+/// `MechanicalPistonBlock.STATE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PistonState {
+    Retracted,
+    Moving,
+    Extended,
+}
+
+impl PistonState {
+    pub const ALL: [PistonState; 3] = [
+        PistonState::Retracted,
+        PistonState::Moving,
+        PistonState::Extended,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            PistonState::Retracted => "retracted",
+            PistonState::Moving => "moving",
+            PistonState::Extended => "extended",
+        }
+    }
+}
+
+/// The blocks of the piston's parts (prepare_content.py's `piston_blocks`).
+pub const POLE: &str = "create:piston_extension_pole";
+pub const HEAD: &str = "create:mechanical_piston_head";
+pub const STICKY_HEAD: &str = "create:hz_mechanical_piston_head_sticky";
+/// (sticky, axis_along_first, state) for each piston block.
+pub const PISTON_BLOCKS: [(&str, bool, bool, PistonState); 12] = [
+    (
+        "create:mechanical_piston",
+        false,
+        false,
+        PistonState::Retracted,
+    ),
+    (
+        "create:hz_mechanical_piston_across_moving",
+        false,
+        false,
+        PistonState::Moving,
+    ),
+    (
+        "create:hz_mechanical_piston_across_extended",
+        false,
+        false,
+        PistonState::Extended,
+    ),
+    (
+        "create:hz_mechanical_piston_along_retracted",
+        false,
+        true,
+        PistonState::Retracted,
+    ),
+    (
+        "create:hz_mechanical_piston_along_moving",
+        false,
+        true,
+        PistonState::Moving,
+    ),
+    (
+        "create:hz_mechanical_piston_along_extended",
+        false,
+        true,
+        PistonState::Extended,
+    ),
+    (
+        "create:sticky_mechanical_piston",
+        true,
+        false,
+        PistonState::Retracted,
+    ),
+    (
+        "create:hz_sticky_mechanical_piston_across_moving",
+        true,
+        false,
+        PistonState::Moving,
+    ),
+    (
+        "create:hz_sticky_mechanical_piston_across_extended",
+        true,
+        false,
+        PistonState::Extended,
+    ),
+    (
+        "create:hz_sticky_mechanical_piston_along_retracted",
+        true,
+        true,
+        PistonState::Retracted,
+    ),
+    (
+        "create:hz_sticky_mechanical_piston_along_moving",
+        true,
+        true,
+        PistonState::Moving,
+    ),
+    (
+        "create:hz_sticky_mechanical_piston_along_extended",
+        true,
+        true,
+        PistonState::Extended,
+    ),
+];
+
+/// A piston block's (sticky, axis_along_first, state).
+pub fn piston_of(name: &str) -> Option<(bool, bool, PistonState)> {
+    PISTON_BLOCKS
+        .iter()
+        .find(|(n, ..)| *n == name)
+        .map(|&(_, sticky, along, state)| (sticky, along, state))
+}
+
+/// The block of a piston in `state`.
+pub fn piston_block(sticky: bool, along: bool, state: PistonState) -> &'static str {
+    PISTON_BLOCKS
+        .iter()
+        .find(|&&(_, s, a, st)| s == sticky && a == along && st == state)
+        .map_or(PISTON_BLOCKS[0].0, |(n, ..)| n)
+}
+
+/// The piston's own blocks, as the structure search sees them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PistonPart {
+    Piston {
+        facing: Dir,
+        sticky: bool,
+        state: PistonState,
+    },
+    Pole {
+        facing: Dir,
+    },
+    Head {
+        facing: Dir,
+        sticky: bool,
+    },
+}
+
+/// `isStickyBlock`: slime and honey.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sticky {
+    Slime,
+    Honey,
+}
+
+/// What `BlockMovementChecks` and `Contraption.moveBlock` ask of a block.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Facts {
+    /// `isMovementNecessary` (air and replaceable blocks without collision
+    /// are left behind).
+    pub necessary: bool,
+    /// `isMovementAllowed` (unbreakable blocks, `PushReaction.BLOCK`...);
+    /// a moving piston is refused here, by `allowed`.
+    pub allowed: bool,
+    /// `isBrittle`: torches, ladders, rails, carpets...
+    pub brittle: bool,
+    /// `WoolCarpetBlock`, which a piston pushes although it is brittle.
+    pub carpet: bool,
+    /// `PushReaction.PUSH_ONLY`.
+    pub push_only: bool,
+    pub sticky: Option<Sticky>,
+    /// `isBlockAttachedTowards`, by `Dir` index.
+    pub attached: [bool; 6],
+    /// `isNotSupportive`, by `Dir` index (the piston's own parts are worked
+    /// out here).
+    pub not_supportive: [bool; 6],
+    /// A collision shape (`getCollisionShape` not empty).
+    pub solid: bool,
+    /// `canBeReplaced`.
+    pub replaceable: bool,
+    pub part: Option<PistonPart>,
+}
+
+impl Facts {
+    fn allowed(&self) -> bool {
+        // isMovementAllowedFallback: pistons only when they aren't moving.
+        if let Some(PistonPart::Piston { state, .. }) = self.part {
+            return state != PistonState::Moving;
+        }
+        self.allowed
+    }
+    fn not_supportive(&self, d: Dir) -> bool {
+        match self.part {
+            Some(PistonPart::Pole { facing } | PistonPart::Head { facing, .. }) => {
+                d.axis() != facing.axis()
+            }
+            _ => self.not_supportive[d as usize],
+        }
+    }
+    /// `ContraptionCollider.isCollidingWithWorld` for a block in the way.
+    pub fn blocks_contraption(&self) -> bool {
+        self.solid && !self.replaceable
+    }
+}
+
+/// NeoForge's `canStickTo`: either is sticky, but not slime against honey.
+fn can_stick(a: Option<Sticky>, b: Option<Sticky>) -> bool {
+    match (a, b) {
+        (Some(Sticky::Slime), Some(Sticky::Honey)) | (Some(Sticky::Honey), Some(Sticky::Slime)) => {
+            false
+        }
+        (a, b) => a.is_some() || b.is_some(),
+    }
+}
+
+/// The level, as a contraption's assembly sees it.
+pub trait StructureWorld {
+    type State: Clone;
+    fn loaded(&self, pos: Pos) -> bool;
+    fn outside_height(&self, pos: Pos) -> bool;
+    fn facts(&self, pos: Pos) -> Facts;
+    fn state(&self, pos: Pos) -> Self::State;
+    /// `MECHANICAL_PISTON_HEAD` facing `facing`.
+    fn head(&self, facing: Dir, sticky: bool) -> Self::State;
+    /// `PISTON_EXTENSION_POLE` facing `facing`.
+    fn pole(&self, facing: Dir) -> Self::State;
+}
+
+/// `AssemblyException`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssemblyError {
+    TooManyPoles,
+    NoPoles,
+    Unmovable(Pos),
+    Unloaded(Pos),
+    TooLarge,
+}
+
+/// A moved block: its place relative to the contraption's anchor, its
+/// state, and what its placement and collisions need of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Moved<S> {
+    pub local: Pos,
+    pub state: S,
+    pub solid: bool,
+    pub brittle: bool,
+    /// Whether it is one of the piston's poles (`isExtensionPole`).
+    pub pole: bool,
+}
+
+fn add(a: Pos, b: Pos) -> Pos {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub(a: Pos, b: Pos) -> Pos {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn step(p: Pos, d: Dir, n: i32) -> Pos {
+    let v = d.normal();
+    [p[0] + v[0] * n, p[1] + v[1] * n, p[2] + v[2] * n]
+}
+
+/// `PistonContraption`: a mechanical piston's poles and head, and what they
+/// push or pull.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PistonContraption<S> {
+    pub orientation: Dir,
+    pub sticky: bool,
+    /// The block in front of the piston when it was assembled
+    /// (`pos.relative(direction)`).
+    pub anchor: Pos,
+    pub blocks: Vec<Moved<S>>,
+    pub extension_length: i32,
+    pub initial_extension_progress: i32,
+}
+
+impl<S: Clone> PistonContraption<S> {
+    /// `PistonContraption.assemble` for the piston at `pos` facing
+    /// `orientation`, retracting when `retract`; none when `pos` is no piston.
+    pub fn assemble<W: StructureWorld<State = S>>(
+        world: &W,
+        pos: Pos,
+        orientation: Dir,
+        retract: bool,
+    ) -> Result<Option<Self>, AssemblyError> {
+        let Some(PistonPart::Piston { sticky, state, .. }) = world.facts(pos).part else {
+            return Ok(None);
+        };
+        let mut c = PistonContraption {
+            orientation,
+            sticky,
+            anchor: step(pos, orientation, 1),
+            blocks: Vec::new(),
+            extension_length: 0,
+            initial_extension_progress: 0,
+        };
+        let anchoring = c.collect_extensions(world, pos, state)?;
+        let forced = if retract {
+            orientation.opposite()
+        } else {
+            orientation
+        };
+        c.search(world, &anchoring, forced)?;
+        Ok(Some(c))
+    }
+
+    /// `collectExtensions`: the poles in front (when extended) and behind,
+    /// the head (or a pole) at the piston's own place. Answers the places
+    /// they take in the world (`isAnchoringBlockAt`).
+    fn collect_extensions<W: StructureWorld<State = S>>(
+        &mut self,
+        world: &W,
+        pos: Pos,
+        state: PistonState,
+    ) -> Result<HashSet<Pos>, AssemblyError> {
+        let d = self.orientation;
+        let mut poles: Vec<(Pos, S, bool)> = Vec::new();
+        let mut front = 0;
+        let mut at = pos;
+        if state == PistonState::Extended {
+            loop {
+                let next = step(at, d, 1);
+                match world.facts(next).part {
+                    Some(PistonPart::Pole { facing }) if facing.axis() == d.axis() => {
+                        at = next;
+                        poles.push((at, world.pole(d), true));
+                        front += 1;
+                    }
+                    Some(PistonPart::Head { facing, sticky }) if facing == d => {
+                        at = next;
+                        poles.push((at, world.head(d, sticky), false));
+                        front += 1;
+                        break;
+                    }
+                    _ => break,
+                }
+                if front > MAX_PISTON_POLES {
+                    return Err(AssemblyError::TooManyPoles);
+                }
+            }
+        }
+        if front == 0 {
+            poles.push((pos, world.head(d, self.sticky), false));
+        } else {
+            poles.push((pos, world.pole(d), true));
+        }
+        let mut back = 0;
+        let mut end = pos;
+        loop {
+            let next = step(end, d.opposite(), 1);
+            match world.facts(next).part {
+                Some(PistonPart::Pole { facing }) if facing.axis() == d.axis() => {
+                    end = next;
+                    poles.push((end, world.pole(d), true));
+                    back += 1;
+                }
+                _ => break,
+            }
+            if front + back > MAX_PISTON_POLES {
+                return Err(AssemblyError::TooManyPoles);
+            }
+        }
+        self.extension_length = front + back;
+        self.initial_extension_progress = front;
+        if self.extension_length == 0 {
+            return Err(AssemblyError::NoPoles);
+        }
+        let mut anchoring = HashSet::new();
+        for (p, s, pole) in poles {
+            anchoring.insert(p);
+            self.blocks.push(Moved {
+                local: sub(step(p, d, -front), self.anchor),
+                state: s,
+                solid: true,
+                brittle: false,
+                pole,
+            });
+        }
+        Ok(anchoring)
+    }
+
+    /// `searchMovedStructure` from `addToInitialFrontier`, then `moveBlock`
+    /// until the frontier is empty.
+    fn search<W: StructureWorld<State = S>>(
+        &mut self,
+        world: &W,
+        anchoring: &HashSet<Pos>,
+        forced: Dir,
+    ) -> Result<(), AssemblyError> {
+        let mut frontier: VecDeque<Pos> = VecDeque::new();
+        self.initial_frontier(world, forced, &mut frontier)?;
+        let mut visited: HashSet<Pos> = HashSet::new();
+        while let Some(pos) = frontier.pop_front() {
+            visited.insert(pos);
+            if world.outside_height(pos) || anchoring.contains(&pos) {
+                continue;
+            }
+            if !world.loaded(pos) {
+                return Err(AssemblyError::Unloaded(pos));
+            }
+            let f = world.facts(pos);
+            if !f.necessary {
+                continue;
+            }
+            if !f.allowed() {
+                return Err(AssemblyError::Unmovable(pos));
+            }
+            // Slime blocks (and super glue, not ported) drag adjacent blocks.
+            for dir in Dir::ALL {
+                let next = step(pos, dir, 1);
+                if anchoring.contains(&next) {
+                    continue;
+                }
+                let nf = world.facts(next);
+                if !nf.allowed() {
+                    if dir == forced {
+                        return Err(AssemblyError::Unmovable(pos));
+                    }
+                    continue;
+                }
+                let attached = nf.attached[dir.opposite() as usize];
+                let mut stick =
+                    !nf.brittle && can_stick(f.sticky, nf.sticky) && can_stick(nf.sticky, f.sticky);
+                if stick
+                    && (f.push_only
+                        || nf.push_only
+                        || f.not_supportive(dir)
+                        || nf.not_supportive(dir.opposite()))
+                {
+                    stick = false;
+                }
+                let pushed = dir == forced && !f.not_supportive(forced);
+                if !visited.contains(&next)
+                    && !frontier.contains(&next)
+                    && (stick || attached || pushed)
+                {
+                    frontier.push_back(next);
+                }
+            }
+            // addBlock, shifted back by the poles in front.
+            self.blocks.push(Moved {
+                local: sub(
+                    step(pos, self.orientation, -self.initial_extension_progress),
+                    self.anchor,
+                ),
+                state: world.state(pos),
+                solid: f.solid,
+                brittle: f.brittle,
+                pole: false,
+            });
+            if self.blocks.len() > MAX_BLOCKS_MOVED {
+                return Err(AssemblyError::TooLarge);
+            }
+        }
+        Ok(())
+    }
+
+    /// `addToInitialFrontier`: the line of blocks in front of the head (only
+    /// the first, and only for a sticky piston, when retracting).
+    fn initial_frontier<W: StructureWorld<State = S>>(
+        &self,
+        world: &W,
+        direction: Dir,
+        frontier: &mut VecDeque<Pos>,
+    ) -> Result<(), AssemblyError> {
+        let retracting = direction != self.orientation;
+        if retracting && !self.sticky {
+            return Ok(());
+        }
+        for offset in 0..=MAX_CHASSIS_RANGE {
+            if offset == 1 && retracting {
+                return Ok(());
+            }
+            let pos = step(
+                self.anchor,
+                self.orientation,
+                offset + self.initial_extension_progress,
+            );
+            if retracting && world.outside_height(pos) {
+                return Ok(());
+            }
+            if !world.loaded(pos) {
+                return Err(AssemblyError::Unloaded(pos));
+            }
+            let f = world.facts(pos);
+            if !f.necessary {
+                return Ok(());
+            }
+            if f.brittle && !f.carpet {
+                return Ok(());
+            }
+            if matches!(f.part, Some(PistonPart::Head { facing, .. }) if facing == direction.opposite())
+            {
+                return Ok(());
+            }
+            if !f.allowed() {
+                if retracting {
+                    return Ok(());
+                }
+                return Err(AssemblyError::Unmovable(pos));
+            }
+            if retracting && f.push_only {
+                return Ok(());
+            }
+            frontier.push_back(pos);
+            if f.not_supportive(self.orientation) {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    /// Where the piston itself stands.
+    pub fn piston_pos(&self) -> Pos {
+        step(self.anchor, self.orientation, -1)
+    }
+
+    /// The world place of a block at `offset` blocks out (`toPosition`).
+    pub fn world_pos(&self, local: Pos, offset: i32) -> Pos {
+        step(add(local, self.anchor), self.orientation, offset)
+    }
+
+    /// `createColliders`: blocks with collision whose next place along
+    /// `dir` isn't another such block of the contraption.
+    pub fn colliders(&self, dir: Dir) -> Vec<Pos> {
+        let solid: HashSet<Pos> = self
+            .blocks
+            .iter()
+            .filter(|b| b.solid)
+            .map(|b| b.local)
+            .collect();
+        solid
+            .iter()
+            .filter(|p| !solid.contains(&step(**p, dir, 1)))
+            .copied()
+            .collect()
+    }
+
+    /// `isCollidingWithWorld` with the colliders placed at `grid`.
+    pub fn colliding_with_world<W: StructureWorld<State = S>>(
+        &self,
+        world: &W,
+        grid: Pos,
+        dir: Dir,
+    ) -> bool {
+        self.colliders(dir).into_iter().any(|p| {
+            let at = add(p, grid);
+            !world.loaded(at) || world.facts(at).blocks_contraption()
+        })
+    }
+
+    /// Where the blocks go at `grid_offset` (`addBlocksToWorld`): non-brittle
+    /// blocks first, without the one landing in the piston
+    /// (`customBlockPlacement`, which retracts the piston for a head).
+    /// Answers the places with the blocks' indices, and whether the piston
+    /// is retracted.
+    pub fn placements(&self, grid_offset: i32) -> (Vec<(Pos, usize)>, bool) {
+        let piston = self.piston_pos();
+        let mut out = Vec::new();
+        let mut retracted = false;
+        for brittle in [false, true] {
+            for (i, b) in self
+                .blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.brittle == brittle)
+            {
+                let at = self.world_pos(b.local, grid_offset);
+                if at == piston {
+                    retracted |= !b.pole;
+                    continue;
+                }
+                out.push((at, i));
+            }
+        }
+        (out, retracted)
+    }
+
+    /// The world places the blocks are taken from (`removeBlocksFromWorld`
+    /// at the initial extension), the piston's own one excepted
+    /// (`customBlockRemoval` makes it MOVING instead).
+    pub fn removals(&self) -> Vec<Pos> {
+        let piston = self.piston_pos();
+        self.blocks
+            .iter()
+            .map(|b| self.world_pos(b.local, self.initial_extension_progress))
+            .filter(|p| *p != piston)
+            .collect()
+    }
+}
+
+/// `KineticBlockEntity.convertToLinear`.
+pub fn convert_to_linear(rpm: f32) -> f32 {
+    rpm / 512.0
+}
+
+/// What a linear actuator's tick asks of the world.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ActuatorStep {
+    Idle,
+    /// `assemble`: build the contraption and `start` it.
+    Assemble,
+    /// It moved to `offset` (draw it there).
+    Moved,
+    /// `disassemble` at `grid_offset`.
+    Disassemble {
+        grid_offset: i32,
+    },
+}
+
+/// `LinearActuatorBlockEntity` with `MechanicalPistonBlockEntity`'s speed,
+/// in the default movement mode (`MOVE_PLACE`: placed whenever it stops).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Actuator {
+    pub running: bool,
+    pub offset: f32,
+    pub extension_length: i32,
+    pub assemble_next_tick: bool,
+    pub waiting: bool,
+    pub last_rpm: f32,
+}
+
+impl Default for Actuator {
+    fn default() -> Self {
+        Actuator {
+            running: false,
+            offset: 0.0,
+            extension_length: 0,
+            assemble_next_tick: true,
+            waiting: false,
+            last_rpm: 0.0,
+        }
+    }
+}
+
+impl Actuator {
+    /// `MechanicalPistonBlockEntity.getMovementSpeed` on the server.
+    pub fn movement_speed(&self, rpm: f32, facing: Dir) -> f32 {
+        let speed = convert_to_linear(rpm).clamp(-0.49, 0.49);
+        let modifier = if facing.positive() { 1.0 } else { -1.0 }
+            * if facing.axis() == Axis::Z { -1.0 } else { 1.0 };
+        (speed * -modifier).clamp(-self.offset, self.extension_length as f32 - self.offset)
+    }
+
+    /// `getGridOffset`.
+    pub fn grid_offset(&self, offset: f32) -> i32 {
+        ((offset + 0.5) as i32).clamp(0, self.extension_length)
+    }
+
+    /// `onSpeedChanged`: called with the network's speed every tick; acts
+    /// when it changes.
+    pub fn speed(&mut self, rpm: f32) {
+        let prev = self.last_rpm;
+        if prev == rpm {
+            return;
+        }
+        self.last_rpm = rpm;
+        self.assemble_next_tick = true;
+        self.waiting = false;
+        if self.running && prev != 0.0 && prev.signum() != rpm.signum() {
+            // `Math.round(offset * 16) / 16`: an int division.
+            self.offset = ((self.offset * 16.0).round() as i32 / 16) as f32;
+        }
+    }
+
+    /// The direction a speed `rpm` moves the structure (`assemble`).
+    pub fn movement_direction(rpm: f32, facing: Dir) -> Dir {
+        let positive = Dir::positive_of(facing.axis());
+        if (rpm > 0.0) ^ (facing.axis() != Axis::Z) {
+            positive
+        } else {
+            positive.opposite()
+        }
+    }
+
+    /// The end of `assemble` once the contraption is built: false when it is
+    /// in the way of the world (`colliding`, asked with the colliders' place
+    /// and direction) or already at the end it moves to; else it runs.
+    pub fn start<S: Clone>(
+        &mut self,
+        c: &PistonContraption<S>,
+        rpm: f32,
+        facing: Dir,
+        colliding: impl Fn(Pos, Dir) -> bool,
+    ) -> bool {
+        let dir = Self::movement_direction(rpm, facing);
+        let anchor = step(c.anchor, c.orientation, c.initial_extension_progress);
+        if colliding(step(anchor, dir, 1), dir) {
+            return false;
+        }
+        self.extension_length = c.extension_length;
+        let speed = self.movement_speed(rpm, facing);
+        let resulting = c.initial_extension_progress as f32 + speed.signum() * 0.5;
+        if resulting <= 0.0 || resulting >= self.extension_length as f32 {
+            return false;
+        }
+        self.running = true;
+        self.offset = c.initial_extension_progress as f32;
+        true
+    }
+
+    /// `tick` on the server. `colliding` answers whether the contraption is
+    /// in the way of the world with its colliders at a grid place moving a
+    /// direction (`collideBlocks`); `anchor` and `orientation` place it.
+    pub fn tick(
+        &mut self,
+        rpm: f32,
+        facing: Dir,
+        anchor: Pos,
+        colliding: impl Fn(Pos, Dir) -> bool,
+    ) -> ActuatorStep {
+        if self.waiting {
+            return ActuatorStep::Idle;
+        }
+        if self.assemble_next_tick {
+            self.assemble_next_tick = false;
+            if self.running {
+                if rpm == 0.0 {
+                    return ActuatorStep::Disassemble {
+                        grid_offset: self.grid_offset(self.offset),
+                    };
+                }
+                return ActuatorStep::Idle;
+            }
+            return if rpm != 0.0 {
+                ActuatorStep::Assemble
+            } else {
+                ActuatorStep::Idle
+            };
+        }
+        if !self.running {
+            return ActuatorStep::Idle;
+        }
+        let speed = self.movement_speed(rpm, facing);
+        let new = self.offset + speed;
+        // moveAndCollideContraption: moved, then checked where it is.
+        if speed != 0.0 {
+            let dir = if speed > 0.0 {
+                facing
+            } else {
+                facing.opposite()
+            };
+            let n = facing.normal();
+            let mut grid = [0, 1, 2].map(|i| (anchor[i] as f32 + n[i] as f32 * new).floor() as i32);
+            if dir.positive() {
+                grid = step(grid, dir, 1);
+            }
+            if colliding(grid, dir) {
+                // collided(): back on the grid, then placed.
+                let at = self.grid_offset(self.offset);
+                return ActuatorStep::Disassemble {
+                    grid_offset: self.grid_offset(at as f32 - speed),
+                };
+            }
+        }
+        self.offset = new;
+        if self.offset <= 0.0 || self.offset >= self.extension_length as f32 {
+            self.offset = if self.offset <= 0.0 {
+                0.0
+            } else {
+                self.extension_length as f32
+            };
+            return ActuatorStep::Disassemble {
+                grid_offset: self.offset as i32,
+            };
+        }
+        ActuatorStep::Moved
+    }
+
+    /// `disassemble`: stopped, its contraption placed.
+    pub fn stopped(&mut self, grid_offset: i32) {
+        self.running = false;
+        self.offset = grid_offset as f32;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum B {
+        Stone,
+        Slime,
+        Torch(Dir),
+        Bedrock,
+        Part(PistonPart),
+    }
+
+    #[derive(Default)]
+    struct World(HashMap<Pos, B>);
+
+    impl StructureWorld for World {
+        type State = String;
+        fn loaded(&self, _: Pos) -> bool {
+            true
+        }
+        fn outside_height(&self, p: Pos) -> bool {
+            p[1] < -64 || p[1] >= 320
+        }
+        fn facts(&self, p: Pos) -> Facts {
+            let solid = Facts {
+                necessary: true,
+                allowed: true,
+                solid: true,
+                ..Facts::default()
+            };
+            match self.0.get(&p) {
+                None => Facts {
+                    allowed: true,
+                    replaceable: true,
+                    ..Facts::default()
+                },
+                Some(B::Stone) => solid,
+                Some(B::Slime) => Facts {
+                    sticky: Some(Sticky::Slime),
+                    ..solid
+                },
+                Some(B::Bedrock) => Facts {
+                    allowed: false,
+                    ..solid
+                },
+                Some(B::Torch(on)) => {
+                    let mut attached = [false; 6];
+                    attached[*on as usize] = true;
+                    Facts {
+                        necessary: true,
+                        allowed: true,
+                        brittle: true,
+                        attached,
+                        not_supportive: [true; 6],
+                        ..Facts::default()
+                    }
+                }
+                Some(B::Part(part)) => Facts {
+                    part: Some(*part),
+                    ..solid
+                },
+            }
+        }
+        fn state(&self, p: Pos) -> String {
+            format!("{:?}", self.0.get(&p))
+        }
+        fn head(&self, facing: Dir, sticky: bool) -> String {
+            format!("head {facing:?} {sticky}")
+        }
+        fn pole(&self, facing: Dir) -> String {
+            format!("pole {facing:?}")
+        }
+    }
+
+    /// A piston at the origin facing east with `poles` behind it.
+    fn rig(poles: i32, sticky: bool) -> World {
+        let mut w = World::default();
+        w.0.insert(
+            [0, 0, 0],
+            B::Part(PistonPart::Piston {
+                facing: Dir::East,
+                sticky,
+                state: PistonState::Retracted,
+            }),
+        );
+        for i in 1..=poles {
+            w.0.insert([-i, 0, 0], B::Part(PistonPart::Pole { facing: Dir::East }));
+        }
+        w
+    }
+
+    #[test]
+    fn a_retracted_piston_pushes_the_line_in_front() {
+        let mut w = rig(2, false);
+        w.0.insert([1, 0, 0], B::Stone);
+        w.0.insert([2, 0, 0], B::Stone);
+        w.0.insert([1, 1, 0], B::Stone); // beside, not attached: stays
+        w.0.insert([2, 0, 1], B::Torch(Dir::West)); // brittle, attached to nothing here
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.anchor, [1, 0, 0]);
+        assert_eq!(c.extension_length, 2);
+        assert_eq!(c.initial_extension_progress, 0);
+        // Head inside the piston, two poles behind, two stones.
+        let mut at: Vec<Pos> = c.blocks.iter().map(|b| c.world_pos(b.local, 0)).collect();
+        at.sort();
+        assert_eq!(
+            at,
+            vec![[-2, 0, 0], [-1, 0, 0], [0, 0, 0], [1, 0, 0], [2, 0, 0]]
+        );
+        assert_eq!(c.blocks[0].state, "head East false");
+        // Out two blocks: the head and stones moved on, nothing in the piston.
+        let (placed, retracted) = c.placements(2);
+        assert!(!retracted);
+        let mut at: Vec<Pos> = placed.iter().map(|(p, _)| *p).collect();
+        at.sort();
+        assert_eq!(at, vec![[1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0]]);
+        assert_eq!(c.removals().len(), 4);
+    }
+
+    #[test]
+    fn torches_on_the_moved_blocks_come_along() {
+        let mut w = rig(1, false);
+        w.0.insert([1, 0, 0], B::Stone);
+        // A torch on the stone's north side: attached towards the south.
+        w.0.insert([1, 0, -1], B::Torch(Dir::South));
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+            .unwrap()
+            .unwrap();
+        assert!(
+            c.blocks
+                .iter()
+                .any(|b| c.world_pos(b.local, 0) == [1, 0, -1] && b.brittle)
+        );
+        // Placed after the solid blocks.
+        let (placed, _) = c.placements(1);
+        assert!(c.blocks[placed.last().unwrap().1].brittle);
+    }
+
+    #[test]
+    fn slime_drags_its_neighbours_and_bedrock_stops_it() {
+        let mut w = rig(1, false);
+        w.0.insert([1, 0, 0], B::Slime);
+        w.0.insert([1, 1, 0], B::Stone);
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+            .unwrap()
+            .unwrap();
+        assert!(
+            c.blocks
+                .iter()
+                .any(|b| c.world_pos(b.local, 0) == [1, 1, 0])
+        );
+        w.0.insert([2, 0, 0], B::Bedrock);
+        assert_eq!(
+            PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false),
+            Err(AssemblyError::Unmovable([2, 0, 0]))
+        );
+    }
+
+    #[test]
+    fn an_extended_piston_takes_its_poles_and_a_sticky_one_pulls() {
+        let mut w = World::default();
+        let piston = |sticky| {
+            B::Part(PistonPart::Piston {
+                facing: Dir::Up,
+                sticky,
+                state: PistonState::Extended,
+            })
+        };
+        w.0.insert([0, 0, 0], piston(false));
+        w.0.insert([0, 1, 0], B::Part(PistonPart::Pole { facing: Dir::Up }));
+        w.0.insert(
+            [0, 2, 0],
+            B::Part(PistonPart::Head {
+                facing: Dir::Up,
+                sticky: false,
+            }),
+        );
+        w.0.insert([0, 3, 0], B::Stone);
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::Up, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!((c.extension_length, c.initial_extension_progress), (2, 2));
+        // Not sticky: the stone stays.
+        assert_eq!(c.blocks.len(), 3);
+        // Back in: the head lands in the piston (retracting it), the poles
+        // below it... the pole at the piston's place goes behind.
+        let (placed, retracted) = c.placements(0);
+        assert!(retracted);
+        let mut at: Vec<Pos> = placed.iter().map(|(p, _)| *p).collect();
+        at.sort();
+        assert_eq!(at, vec![[0, -2, 0], [0, -1, 0]]);
+        w.0.insert([0, 0, 0], piston(true));
+        w.0.insert(
+            [0, 2, 0],
+            B::Part(PistonPart::Head {
+                facing: Dir::Up,
+                sticky: true,
+            }),
+        );
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::Up, true)
+            .unwrap()
+            .unwrap();
+        assert!(
+            c.blocks
+                .iter()
+                .any(|b| c.world_pos(b.local, 2) == [0, 3, 0])
+        );
+        // No poles at all.
+        let w = rig(0, false);
+        assert_eq!(
+            PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false),
+            Err(AssemblyError::NoPoles)
+        );
+    }
+
+    #[test]
+    fn colliders_face_the_motion() {
+        let mut w = rig(1, false);
+        w.0.insert([1, 0, 0], B::Stone);
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+            .unwrap()
+            .unwrap();
+        let mut east = c.colliders(Dir::East);
+        east.sort();
+        assert_eq!(east, vec![[0, 0, 0]]); // the stone, at the anchor
+        // A wall two blocks out stops it once it gets there.
+        w.0.insert([3, 0, 0], B::Stone);
+        assert!(!c.colliding_with_world(&w, [2, 0, 0], Dir::East));
+        assert!(c.colliding_with_world(&w, [3, 0, 0], Dir::East));
+    }
+
+    #[test]
+    fn the_actuator_extends_and_places() {
+        let mut w = rig(2, false);
+        w.0.insert([1, 0, 0], B::Stone);
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+            .unwrap()
+            .unwrap();
+        let mut a = Actuator::default();
+        // 64 RPM east: a positive axis not Z, speed negated by the modifier...
+        let rpm = -64.0;
+        a.speed(rpm);
+        assert!(a.movement_speed(rpm, Dir::East) == 0.0); // no range yet
+        assert_eq!(
+            a.tick(rpm, Dir::East, c.anchor, |_, _| false),
+            ActuatorStep::Assemble
+        );
+        assert_eq!(Actuator::movement_direction(rpm, Dir::East), Dir::East);
+        assert!(a.start(&c, rpm, Dir::East, |_, _| false));
+        assert_eq!(a.movement_speed(rpm, Dir::East), 0.125);
+        let mut steps = 0;
+        loop {
+            match a.tick(rpm, Dir::East, c.anchor, |g, d| {
+                c.colliding_with_world(&w, g, d)
+            }) {
+                ActuatorStep::Moved => steps += 1,
+                ActuatorStep::Disassemble { grid_offset } => {
+                    assert_eq!(grid_offset, 2);
+                    break;
+                }
+                s => panic!("{s:?}"),
+            }
+        }
+        assert_eq!(steps, 15);
+        a.stopped(2);
+        assert!(!a.running);
+        // The other way at the start: nothing to do.
+        let mut b = Actuator::default();
+        b.speed(-rpm);
+        assert_eq!(
+            b.tick(-rpm, Dir::East, c.anchor, |_, _| false),
+            ActuatorStep::Assemble
+        );
+        assert!(!b.start(&c, -rpm, Dir::East, |_, _| false));
+    }
+
+    #[test]
+    fn a_wall_stops_it_on_the_grid() {
+        let mut w = rig(3, false);
+        for x in 1..=3 {
+            w.0.insert([x, 0, 0], B::Stone);
+        }
+        w.0.insert([4, 0, 0], B::Bedrock);
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false);
+        // Bedrock behind the stones in the line: unmovable.
+        assert_eq!(c, Err(AssemblyError::Unmovable([4, 0, 0])));
+        let mut w = rig(3, false);
+        w.0.insert([1, 0, 0], B::Stone);
+        // Not in the line (a gap), so the wall at x 3 is in the way.
+        w.0.insert([3, 0, 0], B::Bedrock);
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+            .unwrap()
+            .unwrap();
+        let mut a = Actuator::default();
+        a.speed(-64.0);
+        a.tick(-64.0, Dir::East, c.anchor, |_, _| false);
+        assert!(a.start(&c, -64.0, Dir::East, |g, d| {
+            c.colliding_with_world(&w, g, d)
+        }));
+        let end = loop {
+            if let ActuatorStep::Disassemble { grid_offset } =
+                a.tick(-64.0, Dir::East, c.anchor, |g, d| {
+                    c.colliding_with_world(&w, g, d)
+                })
+            {
+                break grid_offset;
+            }
+        };
+        assert_eq!(end, 1);
+        // Stopping the network places it where it is.
+        let mut a = Actuator::default();
+        a.speed(-64.0);
+        a.tick(-64.0, Dir::East, c.anchor, |_, _| false);
+        a.start(&c, -64.0, Dir::East, |_, _| false);
+        for _ in 0..3 {
+            a.tick(-64.0, Dir::East, c.anchor, |_, _| false);
+        }
+        a.speed(0.0);
+        assert_eq!(
+            a.tick(0.0, Dir::East, c.anchor, |_, _| false),
+            ActuatorStep::Disassemble { grid_offset: 0 }
+        );
+    }
+}

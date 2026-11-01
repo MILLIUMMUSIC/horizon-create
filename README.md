@@ -12,8 +12,9 @@ OBJ model) is checked in the game in part (see VALIDATION.md for what was seen).
 andesite funnel) is checked in the game. **Milestone 4, fluids** (straight fluid pipes, mechanical pump,
 single fluid tanks, basin fluids) and **milestone 4 part 2** (item vault, mechanical arm, deployer) are ported and
 unit-tested and checked in the game in part (VALIDATION.md says what was seen). **Milestone 4 part 3** (brass funnel
-with its filter, andesite and brass belt tunnels in Split and Round robin) is ported, unit-tested and compiled
-into the game, **not yet run in the game**. See
+with its filter, andesite and brass belt tunnels in Split and Round robin) is checked in the game in part.
+**Milestone 5 part 1** (mechanical and sticky pistons with their poles and head, the contraption core) is ported,
+unit-tested and checked in the game in part. See
 [docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next, and [VALIDATION.md](VALIDATION.md) for what was
 checked how.
 
