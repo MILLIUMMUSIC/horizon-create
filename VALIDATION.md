@@ -1,5 +1,20 @@
 # Validation
 
+## Milestone 5, part 3: gantries (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`. 144 unit tests pass (2 new in `contraption.rs`), clippy has no
+warnings.
+
+Seen working: five gantry shafts facing east (start, three middles, end) with a carriage facing up on the middle
+one, a slime block on the carriage and a stone beside the slime. A creative motor placed at the west end (+16
+RPM): the carriage with the slime and the stone runs west (drawn moving) and stops on the start shaft. The motor
+moved to the east end (-16 RPM): it runs east and stops on the end shaft. The shaft turns, drawn from its parts'
+models; the carriage shows its wheels. A carriage whose load would hit a block (here wool above the slime) doesn't
+start.
+
+Not checked yet: placing shafts and carriages by hand (facing, parts, the carriage's axis), a player riding, saving
+mid-move, glue and chassis on a gantry, vertical shafts, crafting them.
+
 ## Milestone 5, part 3: rope pulley (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`. 142 unit tests pass (2 new in `contraption.rs`), clippy has no

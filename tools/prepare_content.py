@@ -219,6 +219,8 @@ PARTIALS = {
     "rope_coil": "create:block/rope_pulley/rope_coil",
     "rope_half": "create:block/rope_pulley/rope_half",
     "rope_half_magnet": "create:block/rope_pulley/rope_half_magnet",
+    # GantryCarriageRenderer's wheels.
+    "gantry_carriage_wheels": "create:block/gantry_carriage/wheels",
     # BearingRenderer's tops.
     "bearing_top": "create:block/bearing/top",
     "bearing_top_wooden": "create:block/bearing/top_wooden",
@@ -537,6 +539,7 @@ def fit_logistics(content, names):
     fit_pistons(content, names)
     fit_chassis(content, names)
     fit_rope(content)
+    fit_gantry(content, names)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -549,6 +552,8 @@ def fit_logistics(content, names):
         **{name: f"create:{piston}" for name, (piston, _, _) in piston_blocks().items() if name != piston},
         "hz_mechanical_piston_head_sticky": "create:mechanical_piston_head",
         **{name: f"create:{base}" for name, (base, _) in chassis_blocks().items() if name != base},
+        **{f"hz_gantry_shaft_{part}": "create:gantry_shaft" for part in ("start", "middle", "end")},
+        "hz_gantry_carriage_along": "create:gantry_carriage",
     })
 
 
@@ -796,6 +801,66 @@ def fit_rope(content):
         write_json(blocks / f"{name}.json", decl)
         model = f"create:block/rope_pulley/{name}"
         write_json(states / f"{name}.json", {"variants": {f"facing={f}": {"model": model} for f in FACINGS}})
+
+
+# Gantries. GantryShaftBlock's `part` (start, middle, end, single) makes a
+# block each on a lightning rod's template (`facing`; its `powered` is the
+# lightning's, so shafts are never powered here): `create:gantry_shaft` alone,
+# `create:hz_gantry_shaft_<part>` in a line (contraption.rs's
+# `gantry_shaft_block`). Their model turns (ENTITYBLOCK_ANIMATED): the
+# blocks show particles only and hidden `create:hz_gantry_shaft_holder_<part>`
+# blocks keep the models for the native mod. The carriage is a
+# DirectionalAxisKineticBlock, as the deployer.
+GANTRY_POLE = box(4, 0, 4, 12, 16, 12)
+
+
+def fit_gantry(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    models = content / "assets" / "create" / "models" / "block"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    originals = {n: read_json(states / f"{n}.json") for n in ("gantry_shaft", "gantry_carriage")
+                 if (states / f"{n}.json").exists()}
+
+    def declare(name, base, shape, item):
+        decl = read_json(blocks / f"{base}.json") if (blocks / f"{base}.json").exists() else {}
+        decl = dict(decl)
+        decl["template"] = "minecraft:lightning_rod"
+        decl.pop("default_state", None)
+        decl["shapes"] = {"property": "facing", "values": {f: [facing_box(f, b) for b in shape] for f in FACINGS}}
+        decl.setdefault("properties", {})["light"] = 0
+        if not item:
+            decl["item"] = False
+            names[f"block.create.{name}"] = names.get(f"block.create.{base}", base)
+            write_json(loot_tables / f"{name}.json", loot(name, [f"create:{base}"]))
+        write_json(blocks / f"{name}.json", decl)
+
+    def variants(original, keep):
+        out = {}
+        for key, model in original.get("variants", {}).items():
+            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            if keep(props) and "facing" in props:
+                out[f"facing={props['facing']}"] = model
+        return out
+
+    write_json(models / "hz_blank_gantry_shaft.json", {"textures": {"particle": "create:block/gantry_shaft"}})
+    blank = {"variants": {f"facing={f}": {"model": "create:block/hz_blank_gantry_shaft"} for f in FACINGS}}
+    for part in ("single", "start", "middle", "end"):
+        name = "gantry_shaft" if part == "single" else f"hz_gantry_shaft_{part}"
+        declare(name, "gantry_shaft", [GANTRY_POLE], item=part == "single")
+        write_json(states / f"{name}.json", blank)
+        holder = f"hz_gantry_shaft_holder_{part}"
+        write_json(blocks / f"{holder}.json", {"template": "minecraft:lightning_rod", "item": False})
+        names[f"block.create.{holder}"] = names.get("block.create.gantry_shaft", "gantry_shaft")
+        if "gantry_shaft" in originals:
+            write_json(states / f"{holder}.json", {"variants": variants(
+                originals["gantry_shaft"], lambda p, part=part: p.get("part") == part and p.get("powered") == "false")})
+    for along in ("false", "true"):
+        name = "gantry_carriage" if along == "false" else "hz_gantry_carriage_along"
+        declare(name, "gantry_carriage", [box(0, 0, 0, 16, 16, 16)], item=along == "false")
+        if "gantry_carriage" in originals:
+            write_json(states / f"{name}.json", {"variants": variants(
+                originals["gantry_carriage"], lambda p, along=along: p.get("axis_along_first") == along)})
 
 
 def share_block_tags(content, bases):

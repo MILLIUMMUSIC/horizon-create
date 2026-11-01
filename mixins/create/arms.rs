@@ -134,6 +134,7 @@ fn with_count(stack: &ItemStack, count: u32) -> ItemStack {
 
 /// Blocks of ours this module answers for.
 const ROPE_PULLEY: &str = "create:rope_pulley";
+const GANTRY_CARRIAGE: &str = "create:gantry_carriage";
 
 pub(super) fn is_ours(name: &str) -> bool {
     name == VAULT || name == ARM || name == DEPLOYER || name == DEPLOYER_ALONG
@@ -1145,6 +1146,8 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
         && super::create_contraption::piston_of(&name).is_none()
         && super::create_contraption::chassis_of(&name).is_none()
         && name != ROPE_PULLEY
+        && name != super::create_contraption::gantry_shaft_block(super::create_contraption::GantryPart::Single)
+        && name != GANTRY_CARRIAGE
     {
         return;
     }
@@ -1305,6 +1308,42 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
             with_state(|s| {
                 s.deployers.entry((dim, pos)).or_default();
             });
+        }
+        n if super::create_contraption::gantry_shaft_of(n).is_some() => {
+            super::create_contraptions::placed_gantry_shaft(game, pos, p.sneaking, nearest_looking(p.yaw, p.pitch));
+        }
+        GANTRY_CARRIAGE => {
+            // DirectionalAxisKineticBlock with the clicked face (the
+            // template's) and cycleAxisIfNecessary: its pinion's axis across
+            // the shaft behind it.
+            let Some(facing) = game
+                .pack
+                .assets
+                .registry
+                .state(game.world.block(pos[0], pos[1], pos[2]))
+                .and_then(|s| s.properties.get("facing").and_then(|f| Dir::parse(f)))
+            else {
+                return;
+            };
+            let behind = add(pos, facing.opposite().normal());
+            let shaft_axis = game
+                .pack
+                .assets
+                .registry
+                .state(game.world.block(behind[0], behind[1], behind[2]))
+                .filter(|s| super::create_contraption::gantry_shaft_of(&s.name).is_some())
+                .and_then(|s| s.properties.get("facing").and_then(|f| Dir::parse(f)))
+                .map(|d| d.axis());
+            let along = shaft_axis.is_some_and(|shaft| {
+                let rotation = super::create_deployer::rotation_axis(facing, false);
+                // getValidGantryShaftAxis: neither the pinion's nor the facing's.
+                let valid = Axis::ALL.into_iter().find(|a| *a != rotation && *a != facing.axis());
+                valid != Some(shaft)
+            });
+            if along {
+                set_block(game, pos, super::create_kinetics::GANTRY_CARRIAGE_ALONG, &[("facing", facing.name())]);
+            }
+            super::create_contraptions::queue_carriage(game, pos);
         }
         ROPE_PULLEY => {
             // HorizontalAxisKineticBlock.getStateForPlacement: the axis of a

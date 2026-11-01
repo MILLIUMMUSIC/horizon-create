@@ -1003,6 +1003,26 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             let a = view.kind.rotation_axis();
             want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
         }
+        // KineticBlockEntityRenderer draws a gantry shaft's own model
+        // turning (its part from the block); GantryCarriageRenderer the
+        // carriage's wheels.
+        Kind::GantryShaft(f) => {
+            let block = game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2]));
+            let part = block
+                .and_then(|s| super::create_contraption::gantry_shaft_of(&s.name))
+                .unwrap_or(super::create_contraption::GantryPart::Single);
+            let holder = match part {
+                super::create_contraption::GantryPart::Start => "create:hz_gantry_shaft_holder_start",
+                super::create_contraption::GantryPart::Middle => "create:hz_gantry_shaft_holder_middle",
+                super::create_contraption::GantryPart::End => "create:hz_gantry_shaft_holder_end",
+                super::create_contraption::GantryPart::Single => "create:hz_gantry_shaft_holder_single",
+            };
+            want.push((holder, Some(("facing", f.name())), id, f.axis(), standard, 0.0));
+        }
+        Kind::GantryCarriage(f, _) => {
+            let a = view.kind.rotation_axis();
+            want.push(("create:hz_part_gantry_carriage_wheels", None, rotate_to_face_vertical(f), a, standard, 0.0));
+        }
         // PulleyRenderer (AbstractPulleyRenderer): the shaft, the coil, and
         // below it the rope and magnet as far as the rope runs (blocks of
         // their own while it stands, but for the half at the top).

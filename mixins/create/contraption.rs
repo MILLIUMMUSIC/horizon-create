@@ -1431,6 +1431,197 @@ impl Pulley {
     }
 }
 
+// ---- Gantries --------------------------------------------------------------------
+
+/// `GantryShaftBlock.Part`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GantryPart {
+    Start,
+    Middle,
+    End,
+    Single,
+}
+
+impl GantryPart {
+    pub const ALL: [GantryPart; 4] = [
+        GantryPart::Start,
+        GantryPart::Middle,
+        GantryPart::End,
+        GantryPart::Single,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            GantryPart::Start => "start",
+            GantryPart::Middle => "middle",
+            GantryPart::End => "end",
+            GantryPart::Single => "single",
+        }
+    }
+
+    /// `updateShape` along the shaft: `front` and `back` tell whether a
+    /// shaft of the same facing joins it towards its facing and away.
+    pub fn of(front: bool, back: bool) -> GantryPart {
+        match (front, back) {
+            (true, true) => GantryPart::Middle,
+            (true, false) => GantryPart::Start,
+            (false, true) => GantryPart::End,
+            (false, false) => GantryPart::Single,
+        }
+    }
+
+    /// `GantryShaftBlockEntity.canAssembleOn` (unpowered) with the pinion
+    /// moving at `speed`.
+    pub fn can_assemble_on(self, speed: f32) -> bool {
+        match self {
+            GantryPart::End => speed < 0.0,
+            GantryPart::Middle => speed != 0.0,
+            GantryPart::Start => speed > 0.0,
+            GantryPart::Single => false,
+        }
+    }
+}
+
+/// A gantry shaft's block name: `create:gantry_shaft` alone, a hidden
+/// `create:hz_gantry_shaft_<part>` in a line (the template keeps `facing`).
+pub fn gantry_shaft_block(part: GantryPart) -> String {
+    match part {
+        GantryPart::Single => "create:gantry_shaft".to_owned(),
+        p => format!("create:hz_gantry_shaft_{}", p.name()),
+    }
+}
+
+pub fn gantry_shaft_of(name: &str) -> Option<GantryPart> {
+    GantryPart::ALL
+        .into_iter()
+        .find(|p| gantry_shaft_block(*p) == name)
+}
+
+/// `GantryShaftBlockEntity.getPinionMovementSpeed`: blocks a tick along
+/// the shaft's facing.
+pub fn pinion_speed(shaft_rpm: f32) -> f32 {
+    convert_to_linear(-shaft_rpm).clamp(-0.49, 0.49)
+}
+
+/// `GantryContraption`: the carriage and what it holds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GantryContraption<S> {
+    /// The carriage's facing (away from its shaft).
+    pub facing: Dir,
+    /// The carriage's place when it was assembled.
+    pub anchor: Pos,
+    pub blocks: Vec<Moved<S>>,
+    pub glue: Vec<usize>,
+}
+
+impl<S: Clone> GantryContraption<S> {
+    /// `GantryContraption.assemble` from the carriage at `pos`: the shaft
+    /// behind it anchors.
+    pub fn assemble<W: StructureWorld<State = S>>(
+        world: &W,
+        pos: Pos,
+        facing: Dir,
+    ) -> Result<Option<Self>, AssemblyError> {
+        let mut frontier = VecDeque::new();
+        if !world.facts(pos).brittle {
+            frontier.push_back(pos);
+        }
+        let anchoring = HashSet::from([step(pos, facing, -1)]);
+        let mut glue = Vec::new();
+        let found = search_structure(world, frontier, &anchoring, None, &mut glue, 0)?;
+        if found.is_empty() {
+            return Ok(None);
+        }
+        let blocks = found
+            .into_iter()
+            .map(|(p, f)| Moved {
+                local: sub(p, pos),
+                state: world.state(p),
+                solid: f.solid,
+                brittle: f.brittle,
+                pole: false,
+            })
+            .collect();
+        Ok(Some(GantryContraption {
+            facing,
+            anchor: pos,
+            blocks,
+            glue,
+        }))
+    }
+}
+
+/// What a moving gantry does this tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GantryStep {
+    /// Moved by this much.
+    Moved([f64; 3]),
+    /// Put back with the anchor at this place.
+    Disassemble(Pos),
+}
+
+/// The shaft under a moving carriage, as `checkPinionShaft` reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShaftUnder {
+    pub facing: Dir,
+    pub part: GantryPart,
+    pub rpm: f32,
+}
+
+/// `GantryContraptionEntity.tickContraption` on the server: `at` the
+/// anchor's corner, `facing` the carriage's; `shaft(pos)` reads a gantry
+/// shaft, `colliding(grid, dir)` the world in the way. The structure stays
+/// put its first two ticks (`tickCount > 2`).
+pub fn gantry_tick(
+    at: [f64; 3],
+    facing: Dir,
+    ticks: u32,
+    shaft: impl Fn(Pos) -> Option<ShaftUnder>,
+    colliding: impl Fn(Pos, Dir) -> bool,
+) -> GantryStep {
+    let rounded = at.map(|c| (c + 0.5).floor() as i32);
+    let centre = at.map(|c| c + 0.5);
+    let shaft_pos = step(centre.map(|c| c.floor() as i32), facing, -1);
+    // checkPinionShaft.
+    let Some(under) = shaft(shaft_pos) else {
+        return GantryStep::Disassemble(rounded);
+    };
+    let speed = pinion_speed(under.rpm);
+    if speed == 0.0 {
+        return GantryStep::Disassemble(rounded);
+    }
+    let n = under.facing.normal();
+    let motion = [0, 1, 2].map(|k| f64::from(n[k]) * f64::from(speed));
+    let next = [0, 1, 2].map(|k| centre[k] + motion[k]);
+    let axis = under.facing.axis();
+    let current_coord = f64::from(axis.choose([0, 1, 2].map(|k| centre[k].floor() as i32)));
+    let next_coord = match axis {
+        Axis::X => next[0],
+        Axis::Y => next[1],
+        Axis::Z => next[2],
+    };
+    let backwards = speed * if under.facing.positive() { 1.0 } else { -1.0 } < 0.0;
+    if (current_coord + 0.5 < next_coord) != backwards && !under.part.can_assemble_on(speed) {
+        return GantryStep::Disassemble(rounded);
+    }
+    // collideBlocks: in the way where it moves to.
+    let dir = if speed > 0.0 {
+        under.facing
+    } else {
+        under.facing.opposite()
+    };
+    let mut grid = [0, 1, 2].map(|k| (at[k] + motion[k]).floor() as i32);
+    if dir.positive() {
+        grid = step(grid, dir, 1);
+    }
+    if colliding(grid, dir) {
+        return GantryStep::Disassemble(rounded);
+    }
+    if ticks <= 2 {
+        return GantryStep::Moved([0.0; 3]);
+    }
+    GantryStep::Moved(motion)
+}
+
 // ---- Bearings ------------------------------------------------------------------
 
 /// `BearingContraption`: what a mechanical or windmill bearing turns, the
@@ -2504,5 +2695,59 @@ mod tests {
         assert!(!p.start(-64.0, 0, Some(true)));
         // Going down unable to take the block can't either.
         assert!(!p.start(64.0, 3, None));
+    }
+
+    #[test]
+    fn gantry_parts_and_assembly() {
+        assert_eq!(GantryPart::of(true, false), GantryPart::Start);
+        assert_eq!(GantryPart::of(true, true), GantryPart::Middle);
+        for p in GantryPart::ALL {
+            assert_eq!(gantry_shaft_of(&gantry_shaft_block(p)), Some(p));
+        }
+        assert!(GantryPart::Start.can_assemble_on(0.1) && !GantryPart::Start.can_assemble_on(-0.1));
+        assert!(!GantryPart::Single.can_assemble_on(0.1));
+        // A positive shaft speed drives the pinion backwards.
+        assert_eq!(pinion_speed(64.0), -0.125);
+        let mut w = World::default();
+        w.0.insert([0, 1, 0], B::Slime);
+        w.0.insert([1, 1, 0], B::Stone);
+        w.0.insert([0, 0, 0], B::Stone);
+        let c = GantryContraption::assemble(&w, [0, 1, 0], Dir::Up)
+            .unwrap()
+            .unwrap();
+        let locals: Vec<Pos> = c.blocks.iter().map(|b| b.local).collect();
+        // The shaft below (anchoring) stays.
+        assert_eq!(locals, vec![[0, 0, 0], [1, 0, 0]]);
+    }
+
+    #[test]
+    fn a_carriage_runs_to_the_end_of_its_shaft() {
+        // Shafts facing east along x 0..=3 under the carriage (y 0), the
+        // carriage at y 1 facing up; -64 RPM: an eighth of a block a tick east.
+        let shaft = |p: Pos| {
+            (p[1] == 0 && p[2] == 0 && (0..=3).contains(&p[0])).then(|| ShaftUnder {
+                facing: Dir::East,
+                part: match p[0] {
+                    0 => GantryPart::Start,
+                    3 => GantryPart::End,
+                    _ => GantryPart::Middle,
+                },
+                rpm: -64.0,
+            })
+        };
+        let mut at = [0.0, 1.0, 0.0];
+        let mut ticks = 0;
+        let end = loop {
+            ticks += 1;
+            match gantry_tick(at, Dir::Up, ticks, shaft, |_, _| false) {
+                GantryStep::Moved(m) => at = [at[0] + m[0], at[1] + m[1], at[2] + m[2]],
+                GantryStep::Disassemble(p) => break p,
+            }
+            assert!(ticks < 100);
+        };
+        assert_eq!(end, [3, 1, 0]);
+        // A wall in the way stops it on the grid.
+        let end = gantry_tick([1.9, 1.0, 0.0], Dir::Up, 9, shaft, |g, _| g[0] >= 3);
+        assert_eq!(end, GantryStep::Disassemble([2, 1, 0]));
     }
 }

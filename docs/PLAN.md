@@ -295,6 +295,17 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       rod's template for their shapes; the pulley is placed as `HorizontalAxisKineticBlock` places it. Not yet:
       mirrored pulleys sharing one load (`startMirroringOther`), the coil's scrolling texture, the movement mode
       box, the threshold switch reading it, breaking the rope, the elevator pulley.
+      Gantry shaft and carriage (**done, checked in the game in part**): `contraption.rs` has the shaft's parts
+      (`updateShape`), `canAssembleOn`, `getPinionMovementSpeed`, `GantryContraption` (from the carriage, the
+      shaft behind anchoring) and `GantryContraptionEntity`'s tick (`checkPinionShaft`: no shaft or no speed
+      puts it back, passing the centre of a shaft it can't go on from puts it back; the world in the way puts it
+      back; still for two ticks). `contraptions.rs` queues carriages when their shaft's speed changes, when
+      placed or clicked with an empty hand, moves the structure along the shaft, draws it and carries what
+      stands on it, saves moving gantries. Blocks: each shaft part on a lightning rod's template, drawn turning
+      from hidden holders; the carriage as the deployer (`AXIS_ALONG_FIRST_COORDINATE` cycled to fit the shaft);
+      its wheels a partial. Not yet: powered shafts (redstone, and the carriage driving the shaft through its
+      pinion: the template's `powered` is the lightning's), sequenced gearshift distances, gantries on
+      contraptions, the wheels' exact turn, the carriage breaking when its shaft goes.
    4. Actors on contraptions (drill, saw, harvester, plough, deployer, portable storage interfaces).
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.

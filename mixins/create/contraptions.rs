@@ -8,7 +8,8 @@
 
 use super::Game;
 use super::create_contraption::{
-    Actuator, ActuatorStep, Bearing, BearingContraption, BearingStep, Chassis, Pulley, PulleyContraption, PulleyStep, ChassisKind, Facts, HEAD, MAX_CHASSIS_RANGE, POLE, PistonContraption,
+    Actuator, ActuatorStep, Bearing, BearingContraption, BearingStep, Chassis, GantryContraption, GantryStep, Pulley,
+    PulleyContraption, PulleyStep, ShaftUnder, ChassisKind, Facts, HEAD, MAX_CHASSIS_RANGE, POLE, PistonContraption,
     PistonPart, PistonState, STICKY_HEAD, StructureWorld, Sticky, attached_chassis, chassis_block, chassis_of,
     glue_group, in_span, piston_block, piston_of,
 };
@@ -100,6 +101,28 @@ struct State {
     clicked: Vec<(String, Pos)>,
     /// Rope pulleys.
     pulleys: HashMap<(String, Pos), PulleyEntry>,
+    /// Moving gantries, by dimension.
+    gantries: Vec<(String, GantryMove)>,
+    /// Carriages to try assembling at the next tick (`queueAssembly`).
+    gantry_queue: Vec<(String, Pos)>,
+    /// Gantry shafts' speeds last tick (`onSpeedChanged`).
+    shaft_rpm: HashMap<(String, Pos), f32>,
+    next_gantry: u32,
+}
+
+/// A moving gantry (`GantryContraptionEntity`).
+struct GantryMove {
+    id: u32,
+    contraption: GantryContraption<BlockStateId>,
+    /// The anchor's corner now.
+    at: [f64; 3],
+    /// Its motion last tick.
+    motion: [f64; 3],
+    ticks: u32,
+    texts: Vec<String>,
+    entities: Vec<Option<horizon_world::nbt::Compound>>,
+    ranges: Vec<(usize, i32)>,
+    glue: Vec<(Pos, Pos)>,
 }
 
 /// What hangs on a pulley's rope, out of the world.
@@ -706,6 +729,25 @@ fn save_text(s: &State, dimension: &str) -> String {
             out += &cargo_text(&c.blocks, &h.texts, &h.entities, &h.ranges, &h.glue);
         }
     }
+    // `gantry ax ay az ticks facing cx cy cz`, then its blocks.
+    for (d, g) in &s.gantries {
+        if d != dimension {
+            continue;
+        }
+        let c = &g.contraption;
+        out += &format!(
+            "gantry {} {} {} {} {} {} {} {}\n",
+            g.at[0],
+            g.at[1],
+            g.at[2],
+            g.ticks,
+            c.facing.name(),
+            c.anchor[0],
+            c.anchor[1],
+            c.anchor[2]
+        );
+        out += &cargo_text(&c.blocks, &g.texts, &g.entities, &g.ranges, &g.glue);
+    }
     out
 }
 
@@ -754,6 +796,7 @@ fn save(s: &State) {
         .chain(s.glue.keys())
         .chain(s.bearings.keys().map(|(d, _)| d))
         .chain(s.pulleys.keys().map(|(d, _)| d))
+        .chain(s.gantries.iter().map(|(d, _)| d))
         .collect();
     for d in dims {
         if let Err(e) = std::fs::write(save_path(root, d), save_text(s, d)) {
@@ -829,6 +872,36 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                 entry.pulley.last_rpm = f[7].parse().unwrap_or(0.0);
                 entry.pulley.assemble_next_tick = false;
                 current = Some(Target::Pulley(pos));
+            }
+            Some("gantry") if f.len() >= 9 => {
+                let at: Vec<f64> = f[1..4].iter().filter_map(|v| v.parse().ok()).collect();
+                let anchor: Vec<i32> = f[6..9].iter().filter_map(|v| v.parse().ok()).collect();
+                let Some(facing) = Dir::parse(f[5]) else { continue };
+                if at.len() != 3 || anchor.len() != 3 {
+                    continue;
+                }
+                let id = s.next_gantry;
+                s.next_gantry = s.next_gantry.wrapping_add(1);
+                s.gantries.push((
+                    dimension.to_owned(),
+                    GantryMove {
+                        id,
+                        contraption: GantryContraption {
+                            facing,
+                            anchor: [anchor[0], anchor[1], anchor[2]],
+                            blocks: Vec::new(),
+                            glue: Vec::new(),
+                        },
+                        at: [at[0], at[1], at[2]],
+                        motion: [0.0; 3],
+                        ticks: f[4].parse().unwrap_or(3),
+                        texts: Vec::new(),
+                        entities: Vec::new(),
+                        ranges: Vec::new(),
+                        glue: Vec::new(),
+                    },
+                ));
+                current = Some(Target::Gantry(s.gantries.len() - 1));
             }
             Some("h") if f.len() >= 5 => {
                 let Some(Target::Pulley(pos)) = current else { continue };
@@ -945,6 +1018,7 @@ enum Target {
     Piston(Pos),
     Bearing(Pos),
     Pulley(Pos),
+    Gantry(usize),
 }
 
 /// A moved structure's parts, a piston's or a bearing's.
@@ -966,6 +1040,16 @@ fn cargo<'a>(s: &'a mut State, dimension: &str, target: Option<Target>) -> Optio
                 entities: &mut r.entities,
                 ranges: &mut r.ranges,
                 glue: &mut r.glue,
+            })
+        }
+        Target::Gantry(i) => {
+            let g = &mut s.gantries.get_mut(i)?.1;
+            Some(Cargo {
+                blocks: &mut g.contraption.blocks,
+                texts: &mut g.texts,
+                entities: &mut g.entities,
+                ranges: &mut g.ranges,
+                glue: &mut g.glue,
             })
         }
         Target::Pulley(pos) => {
@@ -1096,6 +1180,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     }
     bearings_tick(game, dimension, &mut changed);
     pulleys_tick(game, dimension, &mut changed);
+    gantries_tick(game, dimension);
     let message = {
         let mut guard = state();
         let s = guard.get_or_insert_with(State::default);
@@ -1143,6 +1228,7 @@ pub(super) fn world_phase(closing: bool) {
     CLIENT_GLUE.lock().unwrap_or_else(|e| e.into_inner()).clear();
     *CLIENT_BEARINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *CLIENT_PULLEYS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *CLIENT_GANTRIES.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 // ---- Clients -------------------------------------------------------------------
@@ -1255,6 +1341,29 @@ fn encode(game: &Game<'_>, s: &mut State, dimension: &str) -> Vec<u8> {
         push_i(&mut out, initial);
         let full = s.changed.contains(&(dimension.to_owned(), **pos)) || s.ticks % 100 == 0;
         if full {
+            out.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+            for m in blocks {
+                for v in m.local {
+                    push_i(&mut out, v);
+                }
+                out.extend_from_slice(&m.state.0.to_le_bytes());
+                out.push(u8::from(m.solid));
+            }
+        } else {
+            out.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
+    }
+    // Then the moving gantries: id, anchor corner and motion, and their
+    // blocks on their first ticks and every 20.
+    let moving: Vec<&GantryMove> = s.gantries.iter().filter(|(d, _)| d == dimension).map(|(_, g)| g).collect();
+    out.extend_from_slice(&(moving.len() as u32).to_le_bytes());
+    for g in moving {
+        out.extend_from_slice(&g.id.to_le_bytes());
+        for v in g.at.iter().chain(&g.motion) {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        if g.ticks <= 3 || s.ticks % 20 == 0 {
+            let blocks = &g.contraption.blocks;
             out.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
             for m in blocks {
                 for v in m.local {
@@ -1426,6 +1535,44 @@ pub(super) fn from_server(data: &[u8]) {
         seen.push(pos);
     }
     views.retain(|p, _| seen.contains(p));
+    drop(guard);
+    let Some(n) = r.u32() else { return };
+    let mut guard = CLIENT_GANTRIES.lock().unwrap_or_else(|e| e.into_inner());
+    let views = guard.get_or_insert_with(HashMap::new);
+    let mut seen = Vec::new();
+    for _ in 0..n {
+        let Some(id) = r.u32() else { return };
+        let v: Vec<f64> = (0..6).filter_map(|_| r.f64()).collect();
+        let Some(count) = r.u32() else { return };
+        if v.len() != 6 {
+            return;
+        }
+        let mut blocks = None;
+        if count != u32::MAX {
+            let mut list = Vec::with_capacity(count.min(4096) as usize);
+            for _ in 0..count {
+                let (Some(lx), Some(ly), Some(lz), Some(state), Some(solid)) = (r.i32(), r.i32(), r.i32(), r.u32(), r.u8())
+                else {
+                    return;
+                };
+                list.push(([lx, ly, lz], BlockStateId(state), solid != 0));
+            }
+            blocks = Some(list);
+        }
+        let old = views.get(&id).map(|g| g.blocks.clone());
+        let Some(blocks) = blocks.or(old) else { continue };
+        views.insert(
+            id,
+            GantryView {
+                at: [v[0], v[1], v[2]],
+                motion: [v[3], v[4], v[5]],
+                blocks,
+                received: Instant::now(),
+            },
+        );
+        seen.push(id);
+    }
+    views.retain(|id, _| seen.contains(id));
 }
 
 struct Reader<'a> {
@@ -1450,6 +1597,9 @@ impl Reader<'_> {
     }
     fn f32(&mut self) -> Option<f32> {
         self.u32().map(f32::from_bits)
+    }
+    fn f64(&mut self) -> Option<f64> {
+        self.take(8).map(|b| f64::from_le_bytes(b.try_into().expect("8 bytes")))
     }
 }
 
@@ -1484,6 +1634,23 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
             .collect();
         let speed = if moving { v.speed } else { 0.0 };
         carry(game, None, &blocks, [0.0, -f64::from(speed), 0.0]);
+    }
+    // And on a moving gantry.
+    let gantries: Vec<GantryView> = CLIENT_GANTRIES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
+    for v in gantries {
+        let at = v.at_now();
+        let blocks: Vec<[f64; 3]> = v
+            .blocks
+            .iter()
+            .filter(|b| b.2)
+            .map(|(l, ..)| [0, 1, 2].map(|k| f64::from(l[k]) + at[k]))
+            .collect();
+        carry(game, None, &blocks, v.motion);
     }
     // Riders turn by what the drawn structure turned since the last tick.
     let mut last = RIDDEN.lock().unwrap_or_else(|e| e.into_inner());
@@ -1535,6 +1702,7 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
     draw_glue(game, camera, out);
     draw_bearings(game, camera, out);
     draw_pulleys(game, camera, out);
+    draw_gantries(game, camera, out);
     let views: Vec<ClientView> = match client().as_ref() {
         Some(v) => v.values().cloned().collect(),
         None => return,
@@ -1606,7 +1774,7 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
     let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let face = Dir::nearest(face);
     let glue = held.as_deref() == Some(SUPER_GLUE);
-    if click_bearing(game, pos) {
+    if click_bearing(game, pos) || click_carriage(game, pos) {
         return true;
     }
     if let Some(c) = chassis_at(game, pos, DEFAULT_RANGE) {
@@ -2557,6 +2725,315 @@ fn draw_pulleys(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_clie
             }
             let lit = [cell[0], (corner.y + 0.5).floor() as i32, cell[2]];
             let light = game.world.light(lit[0], lit[1], lit[2]);
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
+            let m = glam::Mat4::from_translation((corner - camera).as_vec3());
+            game.block_model_vertices(*state, seed, m, packed, false, out);
+        }
+    }
+}
+
+// ---- Gantries ---------------------------------------------------------------------
+
+const GANTRY_CARRIAGE: &str = "create:gantry_carriage";
+
+/// The gantry shaft at `pos`: its facing and part.
+fn shaft_at(game: &Game<'_>, pos: Pos) -> Option<(Dir, super::create_contraption::GantryPart)> {
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    let part = super::create_contraption::gantry_shaft_of(&game.res.facts().get(id).name)?;
+    let facing = prop(game, id, "facing").and_then(|f| Dir::parse(&f))?;
+    Some((facing, part))
+}
+
+/// The carriage at `pos`: its facing.
+fn carriage_at(game: &Game<'_>, pos: Pos) -> Option<Dir> {
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    let name = &game.res.facts().get(id).name;
+    if &**name != GANTRY_CARRIAGE && &**name != super::create_kinetics::GANTRY_CARRIAGE_ALONG {
+        return None;
+    }
+    prop(game, id, "facing").and_then(|f| Dir::parse(&f))
+}
+
+/// `updateShape` for the gantry shaft at `pos`: its part from the shafts
+/// of its facing on either side.
+pub(super) fn fix_gantry_part(game: &mut Game<'_>, pos: Pos) {
+    let Some((facing, part)) = shaft_at(game, pos) else {
+        return;
+    };
+    let joins = |d: Dir| shaft_at(game, add(pos, d)).is_some_and(|(f, _)| f == facing);
+    let next = super::create_contraption::GantryPart::of(joins(facing), joins(facing.opposite()));
+    if next != part {
+        set_named(game, pos, &super::create_contraption::gantry_shaft_block(next), &[("facing", facing.name())]);
+    }
+}
+
+/// `GantryShaftBlock.getStateForPlacement` a tick after a player placed
+/// one: facing the way they look (away; towards when sneaking), or as a
+/// shaft along that axis behind it; then the parts around it.
+pub(super) fn placed_gantry_shaft(game: &mut Game<'_>, pos: Pos, sneaking: bool, looking: Dir) {
+    let Some((current, _)) = shaft_at(game, pos) else {
+        return;
+    };
+    let mut facing = if sneaking { looking } else { looking.opposite() };
+    let beside = [facing.opposite(), facing]
+        .into_iter()
+        .find_map(|d| shaft_at(game, add(pos, d)).filter(|(f, _)| f.axis() == facing.axis()));
+    if let Some((f, _)) = beside {
+        facing = if sneaking { f.opposite() } else { f };
+    }
+    if facing != current {
+        let name = name_at(game, pos);
+        set_named(game, pos, &name, &[("facing", facing.name())]);
+    }
+    for at in [pos, add(pos, facing), add(pos, facing.opposite())] {
+        fix_gantry_part(game, at);
+    }
+}
+
+/// A carriage placed, or clicked with an empty hand
+/// (`checkValidGantryShaft`): it tries to assemble next tick.
+pub(super) fn queue_carriage(game: &Game<'_>, pos: Pos) {
+    let dimension = game.dim.id().to_owned();
+    state().get_or_insert_with(State::default).gantry_queue.push((dimension, pos));
+}
+
+fn click_carriage(game: &mut Game<'_>, pos: Pos) -> bool {
+    if carriage_at(game, pos).is_none()
+        || game.held().is_some()
+        || game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+    {
+        return false;
+    }
+    queue_carriage(game, pos);
+    true
+}
+
+/// `GantryCarriageBlockEntity.tryAssemble`.
+fn assemble_gantry(game: &mut Game<'_>, pos: Pos, rpm: &HashMap<Pos, f32>, id: u32) -> Option<GantryMove> {
+    let facing = carriage_at(game, pos)?;
+    let shaft = add(pos, facing.opposite());
+    let (shaft_facing, part) = shaft_at(game, shaft)?;
+    if shaft_facing.axis() == facing.axis() {
+        return None;
+    }
+    let speed = super::create_contraption::pinion_speed(rpm.get(&shaft).copied().unwrap_or(0.0));
+    // shouldAssemble.
+    if !part.can_assemble_on(speed) {
+        return None;
+    }
+    let dir = if speed < 0.0 { shaft_facing.opposite() } else { shaft_facing };
+    let contraption = {
+        let scan = scan(game);
+        let c = match GantryContraption::assemble(&scan, pos, facing) {
+            Ok(Some(c)) => c,
+            Ok(None) => return None,
+            Err(e) => {
+                log::debug!("Create: gantry at {pos:?} can't move: {e:?}");
+                return None;
+            }
+        };
+        if super::create_contraption::colliding_with_world(&c.blocks, &scan, add(pos, dir), dir) {
+            return None;
+        }
+        c
+    };
+    let at: Vec<Pos> = contraption
+        .blocks
+        .iter()
+        .map(|b| [0, 1, 2].map(|k| b.local[k] + pos[k]))
+        .collect();
+    let mut texts = Vec::with_capacity(at.len());
+    let mut entities = Vec::with_capacity(at.len());
+    for (b, &p) in contraption.blocks.iter().zip(&at) {
+        texts.push(state_text(game, b.state));
+        entities.push(capture(game, p, b.state));
+    }
+    remove_blocks(game, &at);
+    let dimension = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let mut ranges = Vec::new();
+    for (i, p) in at.iter().enumerate() {
+        if let Some(r) = s.ranges.remove(&(dimension.clone(), *p)) {
+            ranges.push((i, r));
+        }
+    }
+    let all = s.glue.entry(dimension).or_default();
+    let glue: Vec<(Pos, Pos)> = contraption.glue.iter().filter_map(|&g| all.get(g).copied()).collect();
+    all.retain(|g| !glue.contains(g));
+    Some(GantryMove {
+        id,
+        contraption,
+        at: pos.map(f64::from),
+        motion: [0.0; 3],
+        ticks: 0,
+        texts,
+        entities,
+        ranges,
+        glue,
+    })
+}
+
+/// `AbstractContraptionEntity.disassemble` for a gantry: the structure put
+/// back with its anchor at `grid`.
+fn disassemble_gantry(game: &mut Game<'_>, g: GantryMove, grid: Pos) {
+    let c = &g.contraption;
+    let mut placed = vec![[0; 3]; c.blocks.len()];
+    for i in super::create_contraption::placing_order(&c.blocks) {
+        let b = &c.blocks[i];
+        let at = [0, 1, 2].map(|k| b.local[k] + grid[k]);
+        put_back(game, at, b.state, b.solid, g.entities[i].clone());
+        placed[i] = at;
+    }
+    let shift = [0, 1, 2].map(|k| grid[k] - c.anchor[k]);
+    let dimension = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    for &(i, r) in &g.ranges {
+        if let Some(at) = placed.get(i) {
+            s.ranges.insert((dimension.clone(), *at), r);
+        }
+    }
+    let moved = |p: Pos| [0, 1, 2].map(|k| p[k] + shift[k]);
+    s.glue
+        .entry(dimension)
+        .or_default()
+        .extend(g.glue.iter().map(|&(a, b)| (moved(a), moved(b))));
+}
+
+/// After the kinetics' tick of `dimension`: carriages assembled whose shaft
+/// changed speed or that were queued, then every moving gantry's tick.
+fn gantries_tick(game: &mut Game<'_>, dimension: &str) {
+    let shafts: HashMap<Pos, f32> = super::create_glue::with_kinetics(game, |k, level| {
+        k.positions()
+            .into_iter()
+            .filter_map(|p| match k.get(p).map(|e| e.kind) {
+                Some(Kind::GantryShaft(_)) => Some((p, k.speed_of(level, p))),
+                _ => None,
+            })
+            .collect()
+    });
+    let (queue, mut moving, mut next_id) = {
+        let mut guard = state();
+        let s = guard.get_or_insert_with(State::default);
+        let mut queue: Vec<Pos> = s.gantry_queue.iter().filter(|(d, _)| d == dimension).map(|(_, p)| *p).collect();
+        s.gantry_queue.retain(|(d, _)| d != dimension);
+        // GantryShaftBlockEntity.onSpeedChanged: checkAttachedCarriageBlocks.
+        let mut changed_shafts = Vec::new();
+        for (p, rpm) in &shafts {
+            let key = (dimension.to_owned(), *p);
+            if s.shaft_rpm.get(&key) != Some(rpm) {
+                s.shaft_rpm.insert(key, *rpm);
+                changed_shafts.push(*p);
+            }
+        }
+        s.shaft_rpm.retain(|(d, p), _| d != dimension || shafts.contains_key(p));
+        let all = std::mem::take(&mut s.gantries);
+        let (mine, others): (Vec<_>, Vec<_>) = all.into_iter().partition(|(d, _)| d == dimension);
+        s.gantries = others;
+        drop(guard);
+        for p in changed_shafts {
+            if let Some((f, _)) = shaft_at(game, p) {
+                for d in Dir::ALL {
+                    let c = add(p, d);
+                    if d.axis() != f.axis() && carriage_at(game, c) == Some(d) && !queue.contains(&c) {
+                        queue.push(c);
+                    }
+                }
+            }
+        }
+        let next = state().as_ref().map_or(0, |s| s.next_gantry);
+        (queue, mine.into_iter().map(|(_, g)| g).collect::<Vec<_>>(), next)
+    };
+    for pos in queue {
+        if let Some(g) = assemble_gantry(game, pos, &shafts, next_id) {
+            next_id = next_id.wrapping_add(1);
+            moving.push(g);
+        }
+    }
+    let mut still = Vec::new();
+    for mut g in moving {
+        g.ticks += 1;
+        let step = {
+            let scan = scan(game);
+            let blocks = &g.contraption.blocks;
+            super::create_contraption::gantry_tick(
+                g.at,
+                g.contraption.facing,
+                g.ticks,
+                |p| {
+                    let (facing, part) = shaft_at(game, p)?;
+                    Some(ShaftUnder {
+                        facing,
+                        part,
+                        rpm: shafts.get(&p).copied().unwrap_or(0.0),
+                    })
+                },
+                |grid, dir| super::create_contraption::colliding_with_world(blocks, &scan, grid, dir),
+            )
+        };
+        match step {
+            GantryStep::Moved(m) => {
+                let blocks: Vec<[f64; 3]> = g
+                    .contraption
+                    .blocks
+                    .iter()
+                    .filter(|b| b.solid)
+                    .map(|b| [0, 1, 2].map(|k| f64::from(b.local[k]) + g.at[k]))
+                    .collect();
+                carry(game, Some(dimension), &blocks, m);
+                g.at = [0, 1, 2].map(|k| g.at[k] + m[k]);
+                g.motion = m;
+                still.push(g);
+            }
+            GantryStep::Disassemble(grid) => disassemble_gantry(game, g, grid),
+        }
+    }
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    s.next_gantry = next_id;
+    s.gantries.extend(still.into_iter().map(|g| (dimension.to_owned(), g)));
+}
+
+#[derive(Clone)]
+struct GantryView {
+    at: [f64; 3],
+    motion: [f64; 3],
+    blocks: Vec<(Pos, BlockStateId, bool)>,
+    received: Instant,
+}
+
+static CLIENT_GANTRIES: Mutex<Option<HashMap<u32, GantryView>>> = Mutex::new(None);
+
+impl GantryView {
+    fn at_now(&self) -> [f64; 3] {
+        let ticks = f64::from(self.received.elapsed().as_secs_f32().min(0.5) * 20.0);
+        [0, 1, 2].map(|k| self.at[k] + self.motion[k] * ticks)
+    }
+}
+
+/// `ContraptionRenderer` for gantries.
+fn draw_gantries(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
+    let views: Vec<GantryView> = CLIENT_GANTRIES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
+    for v in views {
+        let at = v.at_now();
+        for (local, state, _) in &v.blocks {
+            let corner = glam::DVec3::new(
+                f64::from(local[0]) + at[0],
+                f64::from(local[1]) + at[1],
+                f64::from(local[2]) + at[2],
+            );
+            if (corner + glam::DVec3::splat(0.5)).distance_squared(camera) > VIEW_DISTANCE * VIEW_DISTANCE {
+                continue;
+            }
+            let cell = [0, 1, 2].map(|k| (corner.to_array()[k] + 0.5).floor() as i32);
+            let light = game.world.light(cell[0], cell[1], cell[2]);
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = glam::Mat4::from_translation((corner - camera).as_vec3());
