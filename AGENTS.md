@@ -13,6 +13,11 @@ tests; Horizon-specific code goes in glue.rs. The Cargo library and the
 injected `create_kinetics` module share kinetics.rs. Module payloads cannot
 use `//!` comments, external `mod` files or `include!`.
 
+Every commit pushed to `main` updates the progress estimate in README.md
+("Progress: about N %" and its table): adjust the milestone's "Done" share for
+what the push ports or fixes, recompute the total, and keep the weights unless
+docs/PLAN.md's milestones change.
+
 Validate with cargo fmt, clippy with warnings denied, cargo test, then
 `python3 tools/horizon.py check|build --horizon ../horizon` (Python 3.12) for
 the full game. Keep validation claims and supported revisions honest.
