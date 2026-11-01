@@ -105,6 +105,8 @@ DIRECTIONAL = {
     # DrillBlock: AllShapes.CASING_12PX; the casing stays in the chunk mesh,
     # its head is a partial turning with the kinetics.
     "mechanical_drill": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 12, 16)},
+    # NozzleBlock: AllShapes.NOZZLE, facing the clicked face (as the template).
+    "nozzle": {"template": "minecraft:lightning_rod", "shapes": [box(2, 0, 2, 14, 14, 14), box(1, 13, 1, 15, 15, 15)]},
     # SailBlock (a WrenchableDirectionalBlock): AllShapes.SAIL.
     **{name: {"template": "minecraft:lightning_rod", "shape": box(0, 5, 0, 16, 10, 16)}
        for name in ["sail_frame"] + [f"{c}_sail" for c in [
@@ -372,7 +374,7 @@ def fit(content):
         decl.pop("default_state", None)
         decl["shapes"] = {
             "property": "facing",
-            "values": {f: [facing_box(f, spec["shape"])] for f in FACINGS},
+            "values": {f: [facing_box(f, b) for b in spec.get("shapes", [spec.get("shape")])] for f in FACINGS},
         }
         props = decl.setdefault("properties", {})
         props["light"] = 0

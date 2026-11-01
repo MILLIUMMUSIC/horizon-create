@@ -414,6 +414,23 @@ pub fn push(motion: [f64; 3], flow: Dir, speed: f32, distance: f64, max_distance
     out
 }
 
+/// `NozzleBlockEntity.tick`'s push on an entity `diff` from the nozzle's
+/// centre (`range` the fan's `getMaxDistance`; `pushing` out or drawing
+/// in; items pushed a quarter as hard): the motion it gains, if any.
+pub fn nozzle_push(diff: [f64; 3], range: f32, pushing: bool, item: bool) -> Option<[f64; 3]> {
+    let distance = (diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2]).sqrt();
+    let range = f64::from(range);
+    if range == 0.0 || distance > range || distance == 0.0 {
+        return None;
+    }
+    if !pushing && distance < 1.5 {
+        return None;
+    }
+    let factor = if item { 1.0 / 128.0 } else { 1.0 / 32.0 };
+    let scale = (range - distance) * if pushing { 1.0 } else { -1.0 } / distance * factor;
+    Some(diff.map(|d| d * scale))
+}
+
 /// What `FanProcessingType.affectEntity` does to an entity in the current.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EntityEffect {
@@ -766,6 +783,16 @@ mod tests {
                 || false
             ));
         }
+    }
+
+    #[test]
+    fn nozzles_push_out_and_draw_in() {
+        let v = nozzle_push([2.0, 0.0, 0.0], 10.0, true, false).unwrap();
+        assert!((v[0] - 8.0 / 32.0).abs() < 1e-9);
+        let v = nozzle_push([2.0, 0.0, 0.0], 10.0, false, true).unwrap();
+        assert!((v[0] + 8.0 / 128.0).abs() < 1e-9);
+        assert_eq!(nozzle_push([1.0, 0.0, 0.0], 10.0, false, false), None);
+        assert_eq!(nozzle_push([11.0, 0.0, 0.0], 10.0, true, false), None);
     }
 
     #[test]

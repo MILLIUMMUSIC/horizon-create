@@ -250,6 +250,22 @@ fn ingredient(game: &Game<'_>, json: &serde_json::Value) -> Option<Ingredient> {
     (!known.is_empty()).then(|| Ingredient::of(known))
 }
 
+/// `RecipeApplier.applyRecipeOn(.., returnProcessingRemainder)`: one
+/// processed `input`'s crafting remainder (a bucket, a bottle) joins the
+/// results (`ItemHelper.addToList`).
+pub(super) fn with_remainder(game: &Game<'_>, input: &str, mut results: Vec<ItemStack>) -> Vec<ItemStack> {
+    let Some(rem) = game.items().get(input).and_then(|i| i.crafting_remainder.clone()) else {
+        return results;
+    };
+    let max = game.items().get(&rem).map_or(64, |i| i.max_stack);
+    if let Some(r) = results.iter_mut().find(|r| *r.item == *rem && r.count < max) {
+        r.count += 1;
+    } else {
+        results.push(ItemStack::new(&rem, 1));
+    }
+    results
+}
+
 fn roll(r: &Recipe) -> Vec<ItemStack> {
     let mut guard = machines();
     let m = guard.get_or_insert_with(Machines::default);
@@ -411,7 +427,7 @@ pub(super) fn press_held(game: &Game<'_>, press_pos: Pos, held: &ItemStack) -> O
     let Some(recipe) = find_recipe(game, "create:pressing", held) else {
         return Some((false, None));
     };
-    let results = roll(&recipe);
+    let results = with_remainder(game, &held.item, roll(&recipe));
     let left = (held.count > 1).then(|| {
         let mut l = held.clone();
         l.count -= 1;
@@ -563,7 +579,7 @@ pub(super) fn press_world_step(game: &mut Game<'_>, pos: Pos, step: PressStep, m
                     continue;
                 };
                 let at = game.dropped[i].position;
-                let results = roll(&recipe);
+                let results = with_remainder(game, &stack.item, roll(&recipe));
                 if stack.count == 1 {
                     // RecipeApplier.applyRecipeOn(itemEntity): it becomes the
                     // first result, the others drop beside it.
@@ -1364,7 +1380,11 @@ fn fan_process(game: &Game<'_>, kind: FanType, stack: &ItemStack) -> Option<Vec<
                 },
                 max,
             );
-            Some(stacks(list))
+            let mut out: Vec<ItemStack> = stacks(list);
+            for _ in 0..stack.count {
+                out = with_remainder(game, &stack.item, out);
+            }
+            Some(out)
         }
         FanType::Smoking => recipes.cook("minecraft:smoking", stack).map(cooked),
         FanType::Blasting => {
@@ -1526,6 +1546,10 @@ pub(super) fn fan_tick(game: &mut Game<'_>, dimension: &str, fans: &[(Pos, Dir, 
             fan.speed = speed;
             fan.current.rebuild(&FanWorld { game }, pos, facing, speed);
         }
+        if speed != 0.0 {
+            let current = fan.current.clone();
+            fan_nozzle(game, dimension, pos, facing, speed, &current);
+        }
         if speed == 0.0 || fan.current.max_distance <= 0.0 {
             continue;
         }
@@ -1651,6 +1675,38 @@ fn fan_entities(game: &mut Game<'_>, dimension: &str, pos: Pos, facing: Dir, spe
                 level.native_play_sound(sound, at, 6, volume, pitch);
             }
         });
+    }
+}
+
+/// `NozzleBlockEntity`: a nozzle on the fan's face pushes mobs and items
+/// around it away (or draws them in) as far as the current reaches; players
+/// aren't moved (no hook moves them), sight isn't checked.
+fn fan_nozzle(game: &mut Game<'_>, dimension: &str, pos: Pos, facing: Dir, speed: f32, current: &AirCurrent) {
+    let n = facing.normal();
+    let at = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+    let id = game.world.block(at[0], at[1], at[2]);
+    let Some(s) = game.pack.assets.registry.state(id) else {
+        return;
+    };
+    if s.name != "create:nozzle" || s.properties.get("facing").map(String::as_str) != Some(facing.name()) {
+        return;
+    }
+    // IAirCurrentSource.getMaxDistance: the reach for the speed, not what
+    // the nozzle leaves of the current.
+    let range = super::create_fan::max_distance(speed);
+    let pushing = current.pushing;
+    let centre = at.map(|v| f64::from(v) + 0.5);
+    for m in game.native_mobs(dimension) {
+        let diff = [0, 1, 2].map(|k| m.pos[k] - centre[k]);
+        if let Some(v) = super::create_fan::nozzle_push(diff, range, pushing, false) {
+            game.native_push_mob(dimension, m.id, v);
+        }
+    }
+    for d in game.dropped.iter_mut() {
+        let diff = [d.position.x - centre[0], d.position.y - centre[1], d.position.z - centre[2]];
+        if let Some(v) = super::create_fan::nozzle_push(diff, range, pushing, true) {
+            d.velocity = horizon_core::geometry::Vec3::new(d.velocity.x + v[0], d.velocity.y + v[1], d.velocity.z + v[2]);
+        }
     }
 }
 

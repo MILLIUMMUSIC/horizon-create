@@ -1,5 +1,13 @@
 # Validation
 
+## Nozzle, crafting remainders (macOS, offscreen)
+
+Seen working: a nozzle on an encased fan facing up (16 RPM) pushes a pig beside it away, out to the edge of its
+reach. 169 unit tests pass (1 new).
+
+Not checked yet: a pulling nozzle drawing things in, items pushed, crafting remainders (no recipe of Create's own
+takes an item with one).
+
 ## Fan on entities, water wheel woods (macOS, offscreen)
 
 Seen working: a pig in an encased fan's current through a lit campfire (smoking) is pushed along, set on fire and

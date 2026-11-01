@@ -2428,6 +2428,7 @@ pub(super) fn deployer_held(
                 .map(|(id, count)| ItemStack::new(&id, count))
                 .collect()
             };
+            let results = super::create_machines::with_remainder(game, &item.item, results);
             let left = (item.count > 1).then(|| with_count(item, item.count - 1));
             // The held item is used (`keep_held_item`, damage, or one less).
             let held_stack = held?;
