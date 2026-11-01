@@ -8,7 +8,7 @@
 
 use super::Game;
 use super::create_contraption::{
-    Actuator, ActuatorStep, Bearing, BearingContraption, BearingStep, Chassis, ChassisKind, Facts, HEAD, MAX_CHASSIS_RANGE, POLE, PistonContraption,
+    Actuator, ActuatorStep, Bearing, BearingContraption, BearingStep, Chassis, Pulley, PulleyContraption, PulleyStep, ChassisKind, Facts, HEAD, MAX_CHASSIS_RANGE, POLE, PistonContraption,
     PistonPart, PistonState, STICKY_HEAD, StructureWorld, Sticky, attached_chassis, chassis_block, chassis_of,
     glue_group, in_span, piston_block, piston_of,
 };
@@ -98,6 +98,23 @@ struct State {
     /// Bearings clicked with an empty hand (`useItemOn`), handled at the
     /// next tick.
     clicked: Vec<(String, Pos)>,
+    /// Rope pulleys.
+    pulleys: HashMap<(String, Pos), PulleyEntry>,
+}
+
+/// What hangs on a pulley's rope, out of the world.
+struct Hanging {
+    contraption: PulleyContraption<BlockStateId>,
+    texts: Vec<String>,
+    entities: Vec<Option<horizon_world::nbt::Compound>>,
+    ranges: Vec<(usize, i32)>,
+    glue: Vec<(Pos, Pos)>,
+}
+
+#[derive(Default)]
+struct PulleyEntry {
+    pulley: Pulley,
+    hanging: Option<Hanging>,
 }
 
 /// A bearing's turning structure, out of the world.
@@ -297,6 +314,7 @@ impl StructureWorld for Scan<'_, '_> {
             part: part_of(game, id),
             chassis: chassis_at(game, pos, self.ranges.get(&pos).copied().unwrap_or(DEFAULT_RANGE)),
             sail: game.block_in_tag("create:windmill_sails", &f.name),
+            magnet: &*f.name == MAGNET,
         }
     }
     fn glue(&self, pos: Pos, dir: Dir) -> Option<usize> {
@@ -665,6 +683,29 @@ fn save_text(s: &State, dimension: &str) -> String {
             out += &cargo_text(&c.blocks, &t.texts, &t.entities, &t.ranges, &t.glue);
         }
     }
+    // `pulley x y z offset running carrying speed`, then for a loaded one
+    // `h ax ay az initial` and its blocks.
+    for ((d, p), e) in &s.pulleys {
+        if d != dimension {
+            continue;
+        }
+        let q = &e.pulley;
+        out += &format!(
+            "pulley {} {} {} {} {} {} {}\n",
+            p[0],
+            p[1],
+            p[2],
+            q.offset,
+            u8::from(q.running),
+            u8::from(q.carrying),
+            q.last_rpm
+        );
+        if let Some(h) = &e.hanging {
+            let c = &h.contraption;
+            out += &format!("h {} {} {} {}\n", c.anchor[0], c.anchor[1], c.anchor[2], c.initial_offset);
+            out += &cargo_text(&c.blocks, &h.texts, &h.entities, &h.ranges, &h.glue);
+        }
+    }
     out
 }
 
@@ -712,6 +753,7 @@ fn save(s: &State) {
         .chain(s.ranges.keys().map(|(d, _)| d))
         .chain(s.glue.keys())
         .chain(s.bearings.keys().map(|(d, _)| d))
+        .chain(s.pulleys.keys().map(|(d, _)| d))
         .collect();
     for d in dims {
         if let Err(e) = std::fs::write(save_path(root, d), save_text(s, d)) {
@@ -767,6 +809,39 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                         anchor: [0, 1, 2].map(|k| pos[k] + facing.normal()[k]),
                         blocks: Vec::new(),
                         sails: f[2].parse().unwrap_or(0),
+                        glue: Vec::new(),
+                    },
+                    texts: Vec::new(),
+                    entities: Vec::new(),
+                    ranges: Vec::new(),
+                    glue: Vec::new(),
+                });
+            }
+            Some("pulley") if f.len() >= 8 => {
+                let (Ok(x), Ok(y), Ok(z)) = (f[1].parse(), f[2].parse(), f[3].parse()) else {
+                    continue;
+                };
+                let pos = [x, y, z];
+                let entry = s.pulleys.entry((dimension.to_owned(), pos)).or_default();
+                entry.pulley.offset = f[4].parse().unwrap_or(0.0);
+                entry.pulley.running = f[5] == "1";
+                entry.pulley.carrying = f[6] == "1";
+                entry.pulley.last_rpm = f[7].parse().unwrap_or(0.0);
+                entry.pulley.assemble_next_tick = false;
+                current = Some(Target::Pulley(pos));
+            }
+            Some("h") if f.len() >= 5 => {
+                let Some(Target::Pulley(pos)) = current else { continue };
+                let n: Vec<i32> = f[1..5].iter().filter_map(|v| v.parse().ok()).collect();
+                if n.len() != 4 {
+                    continue;
+                }
+                let entry = s.pulleys.entry((dimension.to_owned(), pos)).or_default();
+                entry.hanging = Some(Hanging {
+                    contraption: PulleyContraption {
+                        anchor: [n[0], n[1], n[2]],
+                        initial_offset: n[3],
+                        blocks: Vec::new(),
                         glue: Vec::new(),
                     },
                     texts: Vec::new(),
@@ -869,6 +944,7 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
 enum Target {
     Piston(Pos),
     Bearing(Pos),
+    Pulley(Pos),
 }
 
 /// A moved structure's parts, a piston's or a bearing's.
@@ -890,6 +966,16 @@ fn cargo<'a>(s: &'a mut State, dimension: &str, target: Option<Target>) -> Optio
                 entities: &mut r.entities,
                 ranges: &mut r.ranges,
                 glue: &mut r.glue,
+            })
+        }
+        Target::Pulley(pos) => {
+            let h = s.pulleys.get_mut(&(dimension.to_owned(), pos))?.hanging.as_mut()?;
+            Some(Cargo {
+                blocks: &mut h.contraption.blocks,
+                texts: &mut h.texts,
+                entities: &mut h.entities,
+                ranges: &mut h.ranges,
+                glue: &mut h.glue,
             })
         }
         Target::Bearing(pos) => {
@@ -1009,6 +1095,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
     }
     bearings_tick(game, dimension, &mut changed);
+    pulleys_tick(game, dimension, &mut changed);
     let message = {
         let mut guard = state();
         let s = guard.get_or_insert_with(State::default);
@@ -1055,6 +1142,7 @@ pub(super) fn world_phase(closing: bool) {
     *client() = None;
     CLIENT_GLUE.lock().unwrap_or_else(|e| e.into_inner()).clear();
     *CLIENT_BEARINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *CLIENT_PULLEYS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 // ---- Clients -------------------------------------------------------------------
@@ -1131,6 +1219,44 @@ fn encode(game: &Game<'_>, s: &mut State, dimension: &str) -> Vec<u8> {
         if full {
             out.extend_from_slice(&(c.blocks.len() as u32).to_le_bytes());
             for m in &c.blocks {
+                for v in m.local {
+                    push_i(&mut out, v);
+                }
+                out.extend_from_slice(&m.state.0.to_le_bytes());
+                out.push(u8::from(m.solid));
+            }
+        } else {
+            out.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
+    }
+    // Then the running pulleys: place, rope length, blocks a tick down,
+    // range, what hangs (anchor, initial length, blocks as above).
+    let running: Vec<(&Pos, &PulleyEntry)> = s
+        .pulleys
+        .iter()
+        .filter(|((d, _), e)| d == dimension && e.pulley.running)
+        .map(|((_, p), e)| (p, e))
+        .collect();
+    out.extend_from_slice(&(running.len() as u32).to_le_bytes());
+    for (pos, e) in &running {
+        for v in **pos {
+            push_i(&mut out, v);
+        }
+        push_f(&mut out, e.pulley.offset);
+        push_f(&mut out, Pulley::movement_speed(e.pulley.last_rpm));
+        push_i(&mut out, e.pulley.range);
+        let (anchor, initial, blocks) = e
+            .hanging
+            .as_ref()
+            .map_or(([0; 3], 0, &[][..]), |h| (h.contraption.anchor, h.contraption.initial_offset, &h.contraption.blocks[..]));
+        for v in anchor {
+            push_i(&mut out, v);
+        }
+        push_i(&mut out, initial);
+        let full = s.changed.contains(&(dimension.to_owned(), **pos)) || s.ticks % 100 == 0;
+        if full {
+            out.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+            for m in blocks {
                 for v in m.local {
                     push_i(&mut out, v);
                 }
@@ -1258,6 +1384,48 @@ pub(super) fn from_server(data: &[u8]) {
         seen.push(pos);
     }
     views.retain(|p, _| seen.contains(p));
+    drop(guard);
+    let Some(n) = r.u32() else { return };
+    let mut guard = CLIENT_PULLEYS.lock().unwrap_or_else(|e| e.into_inner());
+    let views = guard.get_or_insert_with(HashMap::new);
+    let mut seen = Vec::new();
+    for _ in 0..n {
+        let (Some(x), Some(y), Some(z)) = (r.i32(), r.i32(), r.i32()) else { return };
+        let (Some(offset), Some(speed), Some(range)) = (r.f32(), r.f32(), r.i32()) else { return };
+        let (Some(ax), Some(ay), Some(az), Some(initial), Some(count)) = (r.i32(), r.i32(), r.i32(), r.i32(), r.u32())
+        else {
+            return;
+        };
+        let pos = [x, y, z];
+        let mut blocks = None;
+        if count != u32::MAX {
+            let mut list = Vec::with_capacity(count.min(4096) as usize);
+            for _ in 0..count {
+                let (Some(lx), Some(ly), Some(lz), Some(id), Some(solid)) = (r.i32(), r.i32(), r.i32(), r.u32(), r.u8())
+                else {
+                    return;
+                };
+                list.push(([lx, ly, lz], BlockStateId(id), solid != 0));
+            }
+            blocks = Some(list);
+        }
+        let old = views.get(&pos).map(|v| v.blocks.clone());
+        let Some(blocks) = blocks.or(old) else { continue };
+        views.insert(
+            pos,
+            PulleyView {
+                offset,
+                speed,
+                range,
+                anchor: [ax, ay, az],
+                initial,
+                blocks,
+                at: Instant::now(),
+            },
+        );
+        seen.push(pos);
+    }
+    views.retain(|p, _| seen.contains(p));
 }
 
 struct Reader<'a> {
@@ -1297,6 +1465,26 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         .as_ref()
         .map(|m| m.iter().map(|(p, v)| (*p, v.clone())).collect())
         .unwrap_or_default();
+    // What stands on a pulley's load goes up and down with it.
+    let hanging: Vec<PulleyView> = CLIENT_PULLEYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
+    for v in hanging {
+        let offset = v.offset_now();
+        let moving = offset > 0.0 && offset < v.range as f32;
+        let y = f64::from(v.initial) - f64::from(offset);
+        let blocks: Vec<[f64; 3]> = v
+            .blocks
+            .iter()
+            .filter(|b| b.2)
+            .map(|(l, ..)| [f64::from(l[0] + v.anchor[0]), f64::from(l[1] + v.anchor[1]) + y, f64::from(l[2] + v.anchor[2])])
+            .collect();
+        let speed = if moving { v.speed } else { 0.0 };
+        carry(game, None, &blocks, [0.0, -f64::from(speed), 0.0]);
+    }
     // Riders turn by what the drawn structure turned since the last tick.
     let mut last = RIDDEN.lock().unwrap_or_else(|e| e.into_inner());
     let previous = std::mem::take(&mut *last);
@@ -1346,6 +1534,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
 pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
     draw_glue(game, camera, out);
     draw_bearings(game, camera, out);
+    draw_pulleys(game, camera, out);
     let views: Vec<ClientView> = match client().as_ref() {
         Some(v) => v.values().cloned().collect(),
         None => return,
@@ -1747,8 +1936,9 @@ fn disassemble_bearing(game: &mut Game<'_>, t: Turning, angle: f32) {
     let axis = c.facing.axis();
     let quarter = rounded_angle(angle);
     let registry = game.pack.assets.registry;
-    let mut placed = Vec::with_capacity(c.blocks.len());
-    for (i, b) in c.blocks.iter().enumerate() {
+    let mut placed = vec![[0; 3]; c.blocks.len()];
+    for i in super::create_contraption::placing_order(&c.blocks) {
+        let b = &c.blocks[i];
         let at = c.placed_at(b.local, angle);
         let mut state = b.state;
         if quarter != 0
@@ -1774,7 +1964,7 @@ fn disassemble_bearing(game: &mut Game<'_>, t: Turning, angle: f32) {
             }
         }
         put_back(game, at, state, b.solid, t.entities[i].clone());
-        placed.push(at);
+        placed[i] = at;
     }
     let dimension = game.dim.id().to_owned();
     let mut guard = state();
@@ -2050,6 +2240,326 @@ fn draw_bearings(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_cli
             let cell = [0, 1, 2].map(|k| local[k] + anchor[k]);
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = turn * glam::Mat4::from_translation(glam::Vec3::new(local[0] as f32, local[1] as f32, local[2] as f32) - 0.5);
+            game.block_model_vertices(*state, seed, m, packed, false, out);
+        }
+    }
+}
+
+// ---- Rope pulleys ----------------------------------------------------------------
+
+const ROPE: &str = "create:rope";
+const MAGNET: &str = "create:pulley_magnet";
+
+fn below(pos: Pos, n: i32) -> Pos {
+    [pos[0], pos[1] - n, pos[2]]
+}
+
+fn name_at(game: &Game<'_>, pos: Pos) -> String {
+    game.res.facts().get(game.world.block(pos[0], pos[1], pos[2])).name.to_string()
+}
+
+/// `PulleyBlockEntity.assemble`'s rope count: rope and magnet blocks below.
+fn count_ropes(game: &Game<'_>, pos: Pos, range: i32) -> i32 {
+    let mut i = 1;
+    while i <= range {
+        let n = name_at(game, below(pos, i));
+        if n != ROPE && n != MAGNET {
+            break;
+        }
+        i += 1;
+    }
+    i - 1
+}
+
+/// `PulleyBlockEntity.assemble`: the rope counted and taken in, what hangs
+/// below taken out of the world. False when the pulley doesn't start.
+fn assemble_pulley(game: &mut Game<'_>, pos: Pos, rpm: f32, entry: &mut PulleyEntry) -> bool {
+    let ropes = count_ropes(game, pos, entry.pulley.range);
+    let built = {
+        let scan = scan(game);
+        match PulleyContraption::assemble(&scan, pos, ropes) {
+            Ok(Some(c)) => {
+                let dir = if rpm > 0.0 { Dir::Down } else { Dir::Up };
+                let next = [0, 1, 2].map(|k| c.anchor[k] + dir.normal()[k]);
+                if super::create_contraption::colliding_with_world(&c.blocks, &scan, next, dir) {
+                    (None, Some(c))
+                } else {
+                    (Some(true), Some(c))
+                }
+            }
+            Ok(None) => (Some(false), None),
+            Err(e) => {
+                log::debug!("Create: pulley at {pos:?} can't take its load: {e:?}");
+                (None, None)
+            }
+        }
+    };
+    let (mut built, contraption) = built;
+    // Going up, what hangs there is taken even when it couldn't move.
+    if rpm < 0.0 && contraption.is_some() {
+        built = Some(true);
+    }
+    if !entry.pulley.start(rpm, ropes, built) {
+        return false;
+    }
+    // removeRopes.
+    let air = game.res.facts().air;
+    use super::native_hooks::flags;
+    for i in 1..=ropes {
+        set(game, below(pos, i), air, flags::UPDATE_MOVE_BY_PISTON | flags::UPDATE_ALL);
+    }
+    let Some(contraption) = contraption.filter(|_| built == Some(true)) else {
+        return true;
+    };
+    let at: Vec<Pos> = contraption
+        .blocks
+        .iter()
+        .map(|b| [0, 1, 2].map(|k| b.local[k] + contraption.anchor[k]))
+        .collect();
+    let mut texts = Vec::with_capacity(at.len());
+    let mut entities = Vec::with_capacity(at.len());
+    for (b, &p) in contraption.blocks.iter().zip(&at) {
+        texts.push(state_text(game, b.state));
+        entities.push(capture(game, p, b.state));
+    }
+    remove_blocks(game, &at);
+    let dimension = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let mut ranges = Vec::new();
+    for (i, p) in at.iter().enumerate() {
+        if let Some(r) = s.ranges.remove(&(dimension.clone(), *p)) {
+            ranges.push((i, r));
+        }
+    }
+    let all = s.glue.entry(dimension).or_default();
+    let glue: Vec<(Pos, Pos)> = contraption.glue.iter().filter_map(|&g| all.get(g).copied()).collect();
+    all.retain(|g| !glue.contains(g));
+    entry.hanging = Some(Hanging {
+        contraption,
+        texts,
+        entities,
+        ranges,
+        glue,
+    });
+    true
+}
+
+/// `PulleyBlockEntity.disassemble` at `grid` (rope and magnet put down to
+/// there unless the pulley is gone: `ropes`), what hung put back.
+fn disassemble_pulley(game: &mut Game<'_>, pos: Pos, hanging: Option<Hanging>, grid: i32, ropes: bool) {
+    use super::native_hooks::flags;
+    let flag = flags::UPDATE_MOVE_BY_PISTON | flags::UPDATE_ALL;
+    if ropes {
+        let named = |game: &Game<'_>, name: &str| game.pack.assets.registry.default_state(name);
+        if grid > 0 {
+            let at = below(pos, grid);
+            let here = game.res.facts().get(game.world.block(at[0], at[1], at[2]));
+            if here.hardness != -1.0
+                && let Some(magnet) = named(game, MAGNET)
+            {
+                if !game.world.is_air(game.world.block(at[0], at[1], at[2])) {
+                    let _ = game.destroy_block_dropping(at);
+                }
+                set(game, at, magnet, flag);
+            }
+        }
+        for i in 1..grid {
+            let at = below(pos, i);
+            let here = game.res.facts().get(game.world.block(at[0], at[1], at[2]));
+            if here.hardness == -1.0 {
+                continue;
+            }
+            if !game.world.is_air(game.world.block(at[0], at[1], at[2])) {
+                let _ = game.destroy_block_dropping(at);
+            }
+            if let Some(rope) = named(game, ROPE) {
+                set(game, at, rope, flag);
+            }
+        }
+    }
+    let Some(h) = hanging else {
+        return;
+    };
+    let c = &h.contraption;
+    let anchor = c.anchor_at(grid);
+    let shift = anchor[1] - c.anchor[1];
+    let mut placed = vec![[0; 3]; c.blocks.len()];
+    for i in super::create_contraption::placing_order(&c.blocks) {
+        let b = &c.blocks[i];
+        let at = [0, 1, 2].map(|k| b.local[k] + anchor[k]);
+        put_back(game, at, b.state, b.solid, h.entities[i].clone());
+        placed[i] = at;
+    }
+    let dimension = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    for &(i, r) in &h.ranges {
+        if let Some(at) = placed.get(i) {
+            s.ranges.insert((dimension.clone(), *at), r);
+        }
+    }
+    let down = |p: Pos| [p[0], p[1] + shift, p[2]];
+    s.glue
+        .entry(dimension)
+        .or_default()
+        .extend(h.glue.iter().map(|&(a, b)| (down(a), down(b))));
+}
+
+/// After the kinetics' tick of `dimension`: every rope pulley's tick.
+fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
+    let found: Vec<(Pos, f32)> = super::create_glue::with_kinetics(game, |k, level| {
+        k.positions()
+            .into_iter()
+            .filter_map(|p| match k.get(p).map(|e| e.kind) {
+                Some(Kind::RopePulley(_)) => Some((p, k.speed_of(level, p))),
+                _ => None,
+            })
+            .collect()
+    });
+    let mut taken: HashMap<Pos, PulleyEntry> = {
+        let mut guard = state();
+        let s = guard.get_or_insert_with(State::default);
+        let keys: Vec<(String, Pos)> = s.pulleys.keys().filter(|(d, _)| d == dimension).cloned().collect();
+        keys.into_iter().filter_map(|k| s.pulleys.remove(&k).map(|e| (k.1, e))).collect()
+    };
+    let min_y = game.world.shape.min_y;
+    for &(pos, rpm) in &found {
+        if !game.world.loaded(pos[0], pos[2]) {
+            continue;
+        }
+        let mut entry = taken.remove(&pos).unwrap_or_default();
+        entry.pulley.range = Pulley::range_at(pos[1], min_y);
+        entry.pulley.speed(rpm);
+        let before = entry.pulley.offset;
+        let step = {
+            let scan = scan(game);
+            let hanging = entry.hanging.as_ref();
+            entry.pulley.tick(
+                rpm,
+                |depth| {
+                    let f = scan.facts(below(pos, depth));
+                    f.necessary && !f.brittle
+                },
+                |grid, dir| {
+                    hanging.is_some_and(|h| {
+                        super::create_contraption::colliding_with_world(&h.contraption.blocks, &scan, grid, dir)
+                    })
+                },
+                |offset| {
+                    hanging.map(|h| {
+                        let a = h.contraption.anchor;
+                        [a[0] as f32, a[1] as f32 + h.contraption.initial_offset as f32 - offset, a[2] as f32]
+                    })
+                },
+            )
+        };
+        match step {
+            PulleyStep::Idle => {}
+            PulleyStep::Assemble => {
+                if assemble_pulley(game, pos, rpm, &mut entry) {
+                    changed.push(pos);
+                }
+            }
+            PulleyStep::Moved => {
+                if let Some(h) = &entry.hanging {
+                    let c = &h.contraption;
+                    let y = f64::from(c.anchor[1]) + f64::from(c.initial_offset) - f64::from(before);
+                    let blocks: Vec<[f64; 3]> = c
+                        .blocks
+                        .iter()
+                        .filter(|b| b.solid)
+                        .map(|b| [f64::from(b.local[0] + c.anchor[0]), f64::from(b.local[1]) + y, f64::from(b.local[2] + c.anchor[2])])
+                        .collect();
+                    let delta = [0.0, -f64::from(entry.pulley.offset - before), 0.0];
+                    carry(game, Some(dimension), &blocks, delta);
+                }
+            }
+            PulleyStep::Disassemble { grid_offset, reassemble } => {
+                let hanging = entry.hanging.take();
+                disassemble_pulley(game, pos, hanging, grid_offset, true);
+                entry.pulley.stopped(grid_offset, reassemble);
+                changed.push(pos);
+            }
+        }
+        taken.insert(pos, entry);
+    }
+    // Pulleys that are gone put down what hung there, without rope.
+    let gone: Vec<Pos> = taken
+        .keys()
+        .filter(|p| !found.iter().any(|(q, _)| q == *p) && game.world.loaded(p[0], p[2]))
+        .copied()
+        .collect();
+    for p in gone {
+        if let Some(entry) = taken.remove(&p)
+            && entry.pulley.running
+        {
+            let grid = entry.pulley.grid_offset(entry.pulley.offset);
+            disassemble_pulley(game, p, entry.hanging, grid, false);
+            changed.push(p);
+        }
+    }
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    for (p, entry) in taken {
+        s.pulleys.insert((dimension.to_owned(), p), entry);
+    }
+}
+
+#[derive(Clone)]
+struct PulleyView {
+    offset: f32,
+    /// Blocks a tick, down.
+    speed: f32,
+    range: i32,
+    anchor: Pos,
+    initial: i32,
+    blocks: Vec<(Pos, BlockStateId, bool)>,
+    at: Instant,
+}
+
+static CLIENT_PULLEYS: Mutex<Option<HashMap<Pos, PulleyView>>> = Mutex::new(None);
+
+impl PulleyView {
+    /// `getInterpolatedOffset`, running on between the server's updates.
+    fn offset_now(&self) -> f32 {
+        let ticks = self.at.elapsed().as_secs_f32().min(0.5) * 20.0;
+        (self.offset + self.speed * ticks).clamp(0.0, self.range as f32)
+    }
+}
+
+/// A running pulley's rope length on this client, none when it isn't
+/// running (its rope and magnet are blocks then).
+pub(super) fn pulley_offset(pos: Pos) -> Option<f32> {
+    CLIENT_PULLEYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()?
+        .get(&pos)
+        .map(PulleyView::offset_now)
+}
+
+/// `ContraptionRenderer` for pulleys: what hangs, where the rope's end is.
+fn draw_pulleys(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
+    let views: Vec<PulleyView> = CLIENT_PULLEYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
+    for v in views {
+        let y = f64::from(v.initial) - f64::from(v.offset_now());
+        for (local, state, _) in &v.blocks {
+            let cell = [0, 1, 2].map(|k| local[k] + v.anchor[k]);
+            let corner = glam::DVec3::new(f64::from(cell[0]), f64::from(cell[1]) + y, f64::from(cell[2]));
+            if (corner + glam::DVec3::splat(0.5)).distance_squared(camera) > VIEW_DISTANCE * VIEW_DISTANCE {
+                continue;
+            }
+            let lit = [cell[0], (corner.y + 0.5).floor() as i32, cell[2]];
+            let light = game.world.light(lit[0], lit[1], lit[2]);
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
+            let m = glam::Mat4::from_translation((corner - camera).as_vec3());
             game.block_model_vertices(*state, seed, m, packed, false, out);
         }
     }

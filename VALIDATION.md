@@ -1,5 +1,23 @@
 # Validation
 
+## Milestone 5, part 3: rope pulley (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`. 142 unit tests pass (2 new in `contraption.rs`), clippy has no
+warnings.
+
+Seen working, with a rope pulley at y 105 (axis X) driven by a creative motor at 16 RPM, a stone and a slime block
+on the platform at y 101:
+
+- Turned to let down, the bare rope runs down (the magnet and rope drawn moving) until it reaches the stone, and
+  stops there as two rope blocks and a magnet; it doesn't take the stone, which can't go further down.
+- Turned the other way, the rope is taken in and the stone, the slime and the platform block stuck under the slime
+  are pulled up, drawn moving, and put back just under the pulley.
+- Turned up with no rope out, it doesn't start.
+- Placed with `/setblock` facing the other way round, the speed's sign decides the direction as in Create.
+
+Not checked yet: a player riding the load, glue and chassis on the load, saving mid-move, the pulley broken mid-move,
+placing it by hand (the axis rule), the coil's scrolling, crafting it.
+
 ## Milestone 5, part 2b: mechanical and windmill bearings (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 140 unit tests pass (4 new

@@ -1003,6 +1003,34 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             let a = view.kind.rotation_axis();
             want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
         }
+        // PulleyRenderer (AbstractPulleyRenderer): the shaft, the coil, and
+        // below it the rope and magnet as far as the rope runs (blocks of
+        // their own while it stands, but for the half at the top).
+        Kind::RopePulley(a) => {
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+            want.push(("create:hz_part_rope_coil", None, rotate_to_face(Dir::positive_of(a)), a, 0.0, 0.0));
+            let running = super::create_contraptions::pulley_offset(pos);
+            let offset = running.unwrap_or_else(|| {
+                let below = game.world.block(pos[0], pos[1] - 1, pos[2]);
+                let name = game.pack.assets.registry.state(below).map(|s| s.name.as_str()).unwrap_or("");
+                if name == "create:rope" || name == "create:pulley_magnet" { 1.0 } else { 0.0 }
+            });
+            if running.is_some() || offset == 0.0 {
+                let magnet = if offset > 0.25 { "create:pulley_magnet" } else { "create:hz_part_rope_half_magnet" };
+                want.push((magnet, None, id, a, 0.0, offset));
+            }
+            let f = offset % 1.0;
+            if offset > 0.75 && !(0.25..=0.75).contains(&f) {
+                want.push(("create:hz_part_rope_half", None, id, a, 0.0, if f > 0.75 { f - 1.0 } else { f }));
+            }
+            if running.is_some() {
+                let mut i = 0.0;
+                while i < offset - 1.25 {
+                    want.push(("create:rope", None, id, a, 0.0, offset - i - 1.0));
+                    i += 1.0;
+                }
+            }
+        }
         // BearingRenderer: the shaft half behind, the top turned with the
         // structure (a windmill's wooden).
         Kind::MechanicalBearing(f) | Kind::WindmillBearing(f) => {

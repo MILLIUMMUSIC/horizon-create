@@ -215,6 +215,10 @@ PARTIALS = {
     "deployer_hand_pointing": "create:block/deployer/hand_pointing",
     "deployer_hand_punching": "create:block/deployer/hand_punching",
     "deployer_hand_holding": "create:block/deployer/hand_holding",
+    # PulleyRenderer's coil and rope ends.
+    "rope_coil": "create:block/rope_pulley/rope_coil",
+    "rope_half": "create:block/rope_pulley/rope_half",
+    "rope_half_magnet": "create:block/rope_pulley/rope_half_magnet",
     # BearingRenderer's tops.
     "bearing_top": "create:block/bearing/top",
     "bearing_top_wooden": "create:block/bearing/top_wooden",
@@ -532,6 +536,7 @@ def fit_logistics(content, names):
     fit_arms(content, names)
     fit_pistons(content, names)
     fit_chassis(content, names)
+    fit_rope(content)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -768,6 +773,29 @@ def fit_chassis(content, names):
                 when = {k: v for k, v in when.items() if k not in fixed}
                 parts.append({**part, "when": when} if when else {"apply": part["apply"]})
             write_json(states / f"{name}.json", {"multipart": parts})
+
+
+# The rope pulley's rope and magnet (no items: the pulley lays them): a
+# lightning rod's template standing up, for their shapes (RopeBlock's
+# FOUR_VOXEL_POLE, MagnetBlock's PULLEY_MAGNET).
+ROPE_SHAPES = {
+    "rope": [box(6, 0, 6, 10, 16, 10)],
+    "pulley_magnet": [box(3, 0, 3, 13, 2, 13), box(6, 0, 6, 10, 16, 10)],
+}
+
+
+def fit_rope(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    for name, shape in ROPE_SHAPES.items():
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:lightning_rod"
+        decl["default_state"] = {"facing": "up"}
+        decl["shapes"] = {"property": "facing", "values": {f: [facing_box("up", b) for b in shape] for f in FACINGS}}
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+        model = f"create:block/rope_pulley/{name}"
+        write_json(states / f"{name}.json", {"variants": {f"facing={f}": {"model": model} for f in FACINGS}})
 
 
 def share_block_tags(content, bases):

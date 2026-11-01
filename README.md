@@ -14,12 +14,12 @@ single fluid tanks, basin fluids) and **milestone 4 part 2** (item vault, mechan
 unit-tested and checked in the game in part (VALIDATION.md says what was seen). **Milestone 4 part 3** (brass funnel
 with its filter, andesite and brass belt tunnels in Split and Round robin) is checked in the game in part.
 **Milestone 5 part 1** (mechanical and sticky pistons with their poles and head, the contraption core) and
-**part 2a** (linear and radial chassis, super glue) and **part 2b** (mechanical and windmill bearings) are ported,
-unit-tested and checked in the game in part. See
+**part 2a** (linear and radial chassis, super glue) and **part 2b** (mechanical and windmill bearings) and the **rope pulley** (part 3) are
+ported, unit-tested and checked in the game in part. See
 [docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next, and [VALIDATION.md](VALIDATION.md) for what was
 checked how.
 
-## Progress: about 45 %
+## Progress: about 47 %
 
 An estimate, updated with every push to `main`: each milestone of [docs/PLAN.md](docs/PLAN.md) has a weight (its
 share of Create's gameplay and of the porting work), and the total is the weighted share of what is ported. Blocks
@@ -31,10 +31,10 @@ horizon-port-pack carries over without behaviour (decoration, plain items) count
 | 2. Visuals of kinetics | 5 % | 100 % | 5.0 % |
 | 3. First processing chain (depot, press, millstone, fan, mixer, basin, water wheel) | 10 % | 90 % | 9.0 % |
 | 4. Logistics and fluids (belts, chutes, funnels, tunnels, arm, deployer, vault, pipes, pump, tank) | 15 % | 75 % | 11.3 % |
-| 5. Contraptions | 20 % | 50 % | 10.0 % |
+| 5. Contraptions | 20 % | 57 % | 11.4 % |
 | 6. Trains | 15 % | 0 % | 0.0 % |
 | 7. Everything else (blaze burner and heat, crafters, saws, drills, spout and drain, gauges, redstone, packages, Ponder...) | 25 % | 0 % | 0.0 % |
-| **Total** | 100 % | | **45 %** |
+| **Total** | 100 % | | **47 %** |
 
 Not done in a milestone counts against it: its "Not yet" lists in docs/PLAN.md (corner pipes, valves, smart chutes,
 the brass tunnel's other modes, heated recipes...). "Done" means ported and at least partly checked in the game.

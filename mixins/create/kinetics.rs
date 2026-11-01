@@ -224,6 +224,10 @@ impl Kind {
             Kind::Cogwheel(a) => Kind::Cogwheel(turn_axis(a)),
             Kind::LargeCogwheel(a) => Kind::LargeCogwheel(turn_axis(a)),
             Kind::Gearbox(a) => Kind::Gearbox(turn_axis(a)),
+            // HorizontalAxisKineticBlock: only from above or below.
+            Kind::RopePulley(a) if face.axis() == Axis::Y => {
+                Kind::RopePulley(if a == Axis::X { Axis::Z } else { Axis::X })
+            }
             // HorizontalKineticBlock.HORIZONTAL_FACING: only from above or below.
             Kind::MechanicalPress(f) if face.axis() == Axis::Y => {
                 Kind::MechanicalPress(f.clockwise(Axis::Y))
@@ -243,9 +247,11 @@ impl Kind {
     /// The block state property a wrench changes, and its value.
     pub fn state_property(self) -> Option<(&'static str, &'static str)> {
         match self {
-            Kind::Shaft(a) | Kind::Cogwheel(a) | Kind::LargeCogwheel(a) | Kind::Gearbox(a) => {
-                Some(("axis", a.name()))
-            }
+            Kind::Shaft(a)
+            | Kind::Cogwheel(a)
+            | Kind::LargeCogwheel(a)
+            | Kind::Gearbox(a)
+            | Kind::RopePulley(a) => Some(("axis", a.name())),
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
             | Kind::MechanicalPress(f)
@@ -393,6 +399,9 @@ pub enum Kind {
     MechanicalBearing(Dir),
     /// `WindmillBearingBlock`: a generator while its sails turn.
     WindmillBearing(Dir),
+    /// `PulleyBlock`: its horizontal shaft axis (`axis` here); the rope
+    /// hangs below (contraption.rs).
+    RopePulley(Axis),
 }
 
 impl Kind {
@@ -419,6 +428,7 @@ impl Kind {
             "create:mechanical_arm" => Some(Kind::MechanicalArm),
             "create:mechanical_bearing" => facing().map(Kind::MechanicalBearing),
             "create:windmill_bearing" => facing().map(Kind::WindmillBearing),
+            "create:rope_pulley" => axis().map(Kind::RopePulley),
             DEPLOYER => facing().map(|f| Kind::Deployer(f, false)),
             DEPLOYER_ALONG => facing().map(|f| Kind::Deployer(f, true)),
             n => {
@@ -445,6 +455,7 @@ impl Kind {
             Kind::MechanicalArm => "create:mechanical_arm",
             Kind::MechanicalBearing(_) => "create:mechanical_bearing",
             Kind::WindmillBearing(_) => "create:windmill_bearing",
+            Kind::RopePulley(_) => "create:rope_pulley",
             Kind::Deployer(_, along) => {
                 if along {
                     DEPLOYER_ALONG
@@ -462,7 +473,11 @@ impl Kind {
     /// `IRotate.getRotationAxis`.
     pub fn rotation_axis(self) -> Axis {
         match self {
-            Kind::Shaft(a) | Kind::Cogwheel(a) | Kind::LargeCogwheel(a) | Kind::Gearbox(a) => a,
+            Kind::Shaft(a)
+            | Kind::Cogwheel(a)
+            | Kind::LargeCogwheel(a)
+            | Kind::Gearbox(a)
+            | Kind::RopePulley(a) => a,
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
             | Kind::MechanicalPress(f)
@@ -481,7 +496,9 @@ impl Kind {
     /// `IRotate.hasShaftTowards`.
     pub fn has_shaft_towards(self, face: Dir) -> bool {
         match self {
-            Kind::Shaft(a) | Kind::Cogwheel(a) | Kind::LargeCogwheel(a) => face.axis() == a,
+            Kind::Shaft(a) | Kind::Cogwheel(a) | Kind::LargeCogwheel(a) | Kind::RopePulley(a) => {
+                face.axis() == a
+            }
             Kind::Gearbox(a) => face.axis() != a,
             Kind::CreativeMotor(f) => face == f,
             Kind::HandCrank(f) => face == f.opposite(),
@@ -524,6 +541,7 @@ impl Kind {
             Kind::Deployer(..) => 4.0,
             Kind::MechanicalPiston(..) => 4.0,
             Kind::MechanicalBearing(_) => 4.0,
+            Kind::RopePulley(_) => 4.0,
             _ => 0.0,
         }
     }
@@ -1786,7 +1804,11 @@ impl Kinetics {
 
 fn kind_key(k: Kind) -> String {
     let state = match k {
-        Kind::Shaft(a) | Kind::Cogwheel(a) | Kind::LargeCogwheel(a) | Kind::Gearbox(a) => a.name(),
+        Kind::Shaft(a)
+        | Kind::Cogwheel(a)
+        | Kind::LargeCogwheel(a)
+        | Kind::Gearbox(a)
+        | Kind::RopePulley(a) => a.name(),
         Kind::CreativeMotor(f)
         | Kind::HandCrank(f)
         | Kind::MechanicalPress(f)
@@ -1922,6 +1944,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         }
         Kind::MechanicalBearing(d) => (16, dir(d)),
         Kind::WindmillBearing(d) => (17, dir(d)),
+        Kind::RopePulley(a) => (18, axis(a)),
     }
 }
 
@@ -1958,6 +1981,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         ),
         16 => Kind::MechanicalBearing(dir?),
         17 => Kind::WindmillBearing(dir?),
+        18 => Kind::RopePulley(axis?),
         _ => return None,
     })
 }
@@ -2701,6 +2725,7 @@ mod tests {
             Kind::MechanicalPiston(Dir::Down, false, false),
             Kind::MechanicalBearing(Dir::West),
             Kind::WindmillBearing(Dir::Up),
+            Kind::RopePulley(Axis::Z),
         ] {
             assert_eq!(parse_kind_key(&kind_key(k)), Some(k));
             let (tag, state) = kind_code(k);

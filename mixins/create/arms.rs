@@ -133,6 +133,8 @@ fn with_count(stack: &ItemStack, count: u32) -> ItemStack {
 }
 
 /// Blocks of ours this module answers for.
+const ROPE_PULLEY: &str = "create:rope_pulley";
+
 pub(super) fn is_ours(name: &str) -> bool {
     name == VAULT || name == ARM || name == DEPLOYER || name == DEPLOYER_ALONG
 }
@@ -1142,6 +1144,7 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
     if !is_ours(&name)
         && super::create_contraption::piston_of(&name).is_none()
         && super::create_contraption::chassis_of(&name).is_none()
+        && name != ROPE_PULLEY
     {
         return;
     }
@@ -1302,6 +1305,27 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
             with_state(|s| {
                 s.deployers.entry((dim, pos)).or_default();
             });
+        }
+        ROPE_PULLEY => {
+            // HorizontalAxisKineticBlock.getStateForPlacement: the axis of a
+            // shaft beside it, else across the way the player faces.
+            let beside: Vec<Axis> = [Dir::North, Dir::South, Dir::West, Dir::East]
+                .into_iter()
+                .filter(|side| {
+                    let n = add(pos, side.normal());
+                    let state = game.pack.assets.registry.state(game.world.block(n[0], n[1], n[2]));
+                    state
+                        .and_then(|s| Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str)))
+                        .is_some_and(|k| k.has_shaft_towards(side.opposite()))
+                })
+                .map(|side| side.axis())
+                .collect();
+            let axis = match beside.as_slice() {
+                [a] => *a,
+                [a, b] if a == b => *a,
+                _ => horizontal_facing(p.yaw).clockwise(Axis::Y).axis(),
+            };
+            set_block(game, pos, ROPE_PULLEY, &[("axis", axis.name())]);
         }
         _ => super::create_contraptions::placed_chassis(game, pos, p.sneaking, nearest_looking(p.yaw, p.pitch)),
     }

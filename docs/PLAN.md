@@ -284,6 +284,17 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       and block-entity-rendered blocks drawn while turning, rails' and stairs' shapes and bells turned, the
       assembly error on goggles, `DirectionalKineticBlock`'s placement (the clicked face decides here).
    3. Gantry carriage and shaft, rope and elevator pulley.
+      Rope pulley (**done, checked in the game in part**): `contraption.rs` has `PulleyContraption` (the search
+      from the block below the rope, the rope and pulley anchoring) and `PulleyBlockEntity`'s motion as a
+      `LinearActuatorBlockEntity` in `MOVE_PLACE` (`Pulley`: the rope counted, a bare rope running down until it
+      reaches a block and then taking it, `visitNewPosition`; stopping on the grid against the world; the
+      magnet just above the anchor not in the way going up), with the colliders shared with the piston.
+      `contraptions.rs` takes the rope in and the load out, lays rope and magnet blocks back where it stops,
+      draws the load moving and carries what stands on it, saves running pulleys; `glue.rs` draws the shaft,
+      the coil and the moving rope and magnet (`AbstractPulleyRenderer`). Rope and magnet stand on a lightning
+      rod's template for their shapes; the pulley is placed as `HorizontalAxisKineticBlock` places it. Not yet:
+      mirrored pulleys sharing one load (`startMirroringOther`), the coil's scrolling texture, the movement mode
+      box, the threshold switch reading it, breaking the rope, the elevator pulley.
    4. Actors on contraptions (drill, saw, harvester, plough, deployer, portable storage interfaces).
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.

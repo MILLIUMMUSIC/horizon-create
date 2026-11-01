@@ -368,6 +368,8 @@ pub struct Facts {
     pub chassis: Option<Chassis>,
     /// `AllBlockTags.WINDMILL_SAILS`.
     pub sail: bool,
+    /// `AllBlocks.PULLEY_MAGNET`.
+    pub magnet: bool,
 }
 
 impl Facts {
@@ -922,22 +924,6 @@ impl<S: Clone> PistonContraption<S> {
         step(add(local, self.anchor), self.orientation, offset)
     }
 
-    /// `createColliders`: blocks with collision whose next place along
-    /// `dir` isn't another such block of the contraption.
-    pub fn colliders(&self, dir: Dir) -> Vec<Pos> {
-        let solid: HashSet<Pos> = self
-            .blocks
-            .iter()
-            .filter(|b| b.solid)
-            .map(|b| b.local)
-            .collect();
-        solid
-            .iter()
-            .filter(|p| !solid.contains(&step(**p, dir, 1)))
-            .copied()
-            .collect()
-    }
-
     /// `isCollidingWithWorld` with the colliders placed at `grid`.
     pub fn colliding_with_world<W: StructureWorld<State = S>>(
         &self,
@@ -945,10 +931,7 @@ impl<S: Clone> PistonContraption<S> {
         grid: Pos,
         dir: Dir,
     ) -> bool {
-        self.colliders(dir).into_iter().any(|p| {
-            let at = add(p, grid);
-            !world.loaded(at) || world.facts(at).blocks_contraption()
-        })
+        colliding_with_world(&self.blocks, world, grid, dir)
     }
 
     /// Where the blocks go at `grid_offset` (`addBlocksToWorld`): non-brittle
@@ -989,6 +972,47 @@ impl<S: Clone> PistonContraption<S> {
             .filter(|p| *p != piston)
             .collect()
     }
+}
+
+/// `TranslatingContraption.createColliders`: blocks with collision whose
+/// next place along `dir` isn't another such block of the structure.
+pub fn colliders<S>(blocks: &[Moved<S>], dir: Dir) -> Vec<Pos> {
+    let solid: HashSet<Pos> = blocks.iter().filter(|b| b.solid).map(|b| b.local).collect();
+    solid
+        .iter()
+        .filter(|p| !solid.contains(&step(**p, dir, 1)))
+        .copied()
+        .collect()
+}
+
+/// `ContraptionCollider.isCollidingWithWorld` with the structure's
+/// anchor at `grid`, moving towards `dir`. A pulley's magnet just above
+/// the anchor doesn't stop it going up.
+pub fn colliding_with_world<S, W: StructureWorld>(
+    blocks: &[Moved<S>],
+    world: &W,
+    grid: Pos,
+    dir: Dir,
+) -> bool {
+    colliders(blocks, dir).into_iter().any(|p| {
+        let at = add(p, grid);
+        if !world.loaded(at) {
+            return true;
+        }
+        let f = world.facts(at);
+        if f.magnet && p == [0, 0, 0] && dir == Dir::Up {
+            return false;
+        }
+        f.blocks_contraption()
+    })
+}
+
+/// Blocks in the order `addBlocksToWorld` places them: the others first,
+/// brittle ones (torches...) once what holds them is back.
+pub fn placing_order<S>(blocks: &[Moved<S>]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..blocks.len()).filter(|&i| !blocks[i].brittle).collect();
+    order.extend((0..blocks.len()).filter(|&i| blocks[i].brittle));
+    order
 }
 
 /// `KineticBlockEntity.convertToLinear`.
@@ -1173,6 +1197,237 @@ impl Actuator {
     pub fn stopped(&mut self, grid_offset: i32) {
         self.running = false;
         self.offset = grid_offset as f32;
+    }
+}
+
+// ---- Rope pulleys ---------------------------------------------------------------
+
+/// `CKinetics.maxRopeLength`.
+pub const MAX_ROPE_LENGTH: i32 = 384;
+
+/// `PulleyContraption`: what hangs from a rope pulley's rope, below the
+/// rope's end.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PulleyContraption<S> {
+    /// `pos.below(offset + 1)` when it was assembled.
+    pub anchor: Pos,
+    /// The rope's length then.
+    pub initial_offset: i32,
+    pub blocks: Vec<Moved<S>>,
+    pub glue: Vec<usize>,
+}
+
+impl<S: Clone> PulleyContraption<S> {
+    /// `PulleyContraption.assemble` for the pulley at `pos` with `ropes`
+    /// rope blocks (and a magnet) below it: none when nothing hangs there.
+    pub fn assemble<W: StructureWorld<State = S>>(
+        world: &W,
+        pos: Pos,
+        ropes: i32,
+    ) -> Result<Option<Self>, AssemblyError> {
+        let anchor = step(pos, Dir::Down, ropes + 1);
+        let mut frontier = VecDeque::new();
+        if !world.facts(anchor).brittle {
+            frontier.push_back(anchor);
+        }
+        // isAnchoringBlockAt: the rope and the pulley above the anchor.
+        let anchoring: HashSet<Pos> = (1..=ropes + 1).map(|i| step(anchor, Dir::Up, i)).collect();
+        let mut glue = Vec::new();
+        let found = search_structure(world, frontier, &anchoring, None, &mut glue, 0)?;
+        if found.is_empty() {
+            return Ok(None);
+        }
+        let blocks = found
+            .into_iter()
+            .map(|(p, f)| Moved {
+                local: sub(p, anchor),
+                state: world.state(p),
+                solid: f.solid,
+                brittle: f.brittle,
+                pole: false,
+            })
+            .collect();
+        Ok(Some(PulleyContraption {
+            anchor,
+            initial_offset: ropes,
+            blocks,
+            glue,
+        }))
+    }
+
+    /// The anchor's place with the rope `offset` long (`toPosition`).
+    pub fn anchor_at(&self, offset: i32) -> Pos {
+        step(self.anchor, Dir::Down, offset - self.initial_offset)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PulleyStep {
+    Idle,
+    /// `assemble`: count the rope, build what hangs on it, `start`.
+    Assemble,
+    Moved,
+    /// `disassemble` at `grid_offset` (rope and magnet down to there); with
+    /// `reassemble`, the rope reached a block (`visitNewPosition`) and takes
+    /// it next tick.
+    Disassemble {
+        grid_offset: i32,
+        reassemble: bool,
+    },
+}
+
+/// `PulleyBlockEntity` (a `LinearActuatorBlockEntity`) in `MOVE_PLACE`:
+/// positive speeds let the rope down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pulley {
+    pub running: bool,
+    /// The rope's length.
+    pub offset: f32,
+    /// `getExtensionRange`.
+    pub range: i32,
+    pub assemble_next_tick: bool,
+    pub last_rpm: f32,
+    /// Something hangs on the rope (`needsContraption`).
+    pub carrying: bool,
+}
+
+impl Default for Pulley {
+    fn default() -> Self {
+        Pulley {
+            running: false,
+            offset: 0.0,
+            range: 0,
+            assemble_next_tick: true,
+            last_rpm: 0.0,
+            carrying: false,
+        }
+    }
+}
+
+impl Pulley {
+    /// `getExtensionRange` for a pulley at height `y` over a world from
+    /// `min_y`.
+    pub fn range_at(y: i32, min_y: i32) -> i32 {
+        MAX_ROPE_LENGTH.min(y - 1 - min_y).max(0)
+    }
+
+    /// `LinearActuatorBlockEntity.getMovementSpeed`.
+    pub fn movement_speed(rpm: f32) -> f32 {
+        convert_to_linear(rpm).clamp(-0.49, 0.49)
+    }
+
+    pub fn grid_offset(&self, offset: f32) -> i32 {
+        ((offset + 0.5) as i32).clamp(0, self.range)
+    }
+
+    /// `onSpeedChanged`, as the piston's.
+    pub fn speed(&mut self, rpm: f32) {
+        let prev = self.last_rpm;
+        if prev == rpm {
+            return;
+        }
+        self.last_rpm = rpm;
+        self.assemble_next_tick = true;
+        if self.running && prev != 0.0 && prev.signum() != rpm.signum() {
+            self.offset = ((self.offset * 16.0).round() as i32 / 16) as f32;
+        }
+    }
+
+    /// `assemble` with `ropes` counted below the pulley: false when it has
+    /// nowhere to go (at the bottom going down, at the top going up, or
+    /// unable to take what hangs there going down: `built` none when it
+    /// couldn't, `Some(false)` when nothing hangs there).
+    pub fn start(&mut self, rpm: f32, ropes: i32, built: Option<bool>) -> bool {
+        self.offset = ropes as f32;
+        if (ropes >= self.range && rpm > 0.0) || (ropes <= 0 && rpm < 0.0) {
+            return false;
+        }
+        if built.is_none() && rpm > 0.0 {
+            return false;
+        }
+        self.carrying = built == Some(true);
+        self.running = true;
+        true
+    }
+
+    /// `tick` on the server. `stops_rope(depth)`: the block `depth` below
+    /// the pulley stops a bare rope (movement necessary, not brittle);
+    /// `colliding(grid, dir)`: what hangs, its anchor at `grid` moving
+    /// `dir`, is in the way; `anchor_at(offset)` places that anchor.
+    pub fn tick(
+        &mut self,
+        rpm: f32,
+        stops_rope: impl Fn(i32) -> bool,
+        colliding: impl Fn(Pos, Dir) -> bool,
+        anchor_at: impl Fn(f32) -> Option<[f32; 3]>,
+    ) -> PulleyStep {
+        if self.assemble_next_tick {
+            self.assemble_next_tick = false;
+            if self.running {
+                if rpm == 0.0 {
+                    return PulleyStep::Disassemble {
+                        grid_offset: self.grid_offset(self.offset),
+                        reassemble: false,
+                    };
+                }
+                return PulleyStep::Idle;
+            }
+            return if rpm != 0.0 {
+                PulleyStep::Assemble
+            } else {
+                PulleyStep::Idle
+            };
+        }
+        if !self.running {
+            return PulleyStep::Idle;
+        }
+        let speed = Self::movement_speed(rpm);
+        let new = self.offset + speed;
+        // visitNewPosition: a bare rope going down stops on a block.
+        if new as i32 != self.offset as i32
+            && !self.carrying
+            && speed > 0.0
+            && stops_rope(new as i32 + 1)
+        {
+            return PulleyStep::Disassemble {
+                grid_offset: self.grid_offset(self.offset),
+                reassemble: true,
+            };
+        }
+        if self.carrying
+            && speed != 0.0
+            && let Some(at) = anchor_at(new)
+        {
+            let dir = if speed > 0.0 { Dir::Down } else { Dir::Up };
+            let mut grid = at.map(|c| c.floor() as i32);
+            if dir == Dir::Up {
+                grid = step(grid, dir, 1);
+            }
+            if colliding(grid, dir) {
+                let at = self.grid_offset(self.offset);
+                return PulleyStep::Disassemble {
+                    grid_offset: self.grid_offset(at as f32 - speed),
+                    reassemble: false,
+                };
+            }
+        }
+        self.offset = new;
+        if self.offset <= 0.0 || self.offset >= self.range as f32 {
+            self.offset = self.offset.clamp(0.0, self.range as f32);
+            return PulleyStep::Disassemble {
+                grid_offset: self.offset as i32,
+                reassemble: false,
+            };
+        }
+        PulleyStep::Moved
+    }
+
+    /// `disassemble`: stopped with the rope `grid_offset` long.
+    pub fn stopped(&mut self, grid_offset: i32, reassemble: bool) {
+        self.running = false;
+        self.carrying = false;
+        self.offset = grid_offset as f32;
+        self.assemble_next_tick = reassemble;
     }
 }
 
@@ -1791,7 +2046,7 @@ mod tests {
         let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
             .unwrap()
             .unwrap();
-        let mut east = c.colliders(Dir::East);
+        let mut east = colliders(&c.blocks, Dir::East);
         east.sort();
         assert_eq!(east, vec![[0, 0, 0]]); // the stone, at the anchor
         // A wall two blocks out stops it once it gets there.
@@ -2184,5 +2439,70 @@ mod tests {
             turn_props(&lever, TurnShape::FaceAttached, false, Axis::X, 270),
             p(&[("face", "wall"), ("facing", "north")])
         );
+    }
+
+    #[test]
+    fn a_pulley_takes_what_hangs_below_its_rope() {
+        let mut w = World::default();
+        // Pulley at y 10, two ropes (counted by the glue), a slime block
+        // with a stone beside it below.
+        w.0.insert([0, 7, 0], B::Slime);
+        w.0.insert([1, 7, 0], B::Stone);
+        w.0.insert([0, 6, 0], B::Stone);
+        w.0.insert([0, 5, 0], B::Stone);
+        let c = PulleyContraption::assemble(&w, [0, 10, 0], 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.anchor, [0, 7, 0]);
+        let locals: Vec<Pos> = c.blocks.iter().map(|b| b.local).collect();
+        assert!(
+            locals.contains(&[1, 0, 0])
+                && locals.contains(&[0, -1, 0])
+                && !locals.contains(&[0, -2, 0])
+        );
+        assert_eq!(c.anchor_at(5), [0, 4, 0]);
+        assert_eq!(
+            PulleyContraption::<String>::assemble(&w, [9, 10, 9], 0),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_bare_rope_goes_down_to_a_block_then_takes_it() {
+        let mut p = Pulley {
+            range: 20,
+            ..Pulley::default()
+        };
+        p.speed(64.0);
+        assert_eq!(
+            p.tick(64.0, |_| false, |_, _| false, |_| None),
+            PulleyStep::Assemble
+        );
+        // Nothing hangs there yet: a bare rope runs.
+        assert!(p.start(64.0, 0, Some(false)));
+        let mut steps = 0;
+        let stop = loop {
+            steps += 1;
+            match p.tick(64.0, |d| d >= 5, |_, _| false, |_| None) {
+                PulleyStep::Moved => continue,
+                s => break s,
+            }
+        };
+        // At 64 RPM an eighth of a block a tick: the rope's end reaches the
+        // block five below after 31 moves.
+        assert_eq!(
+            stop,
+            PulleyStep::Disassemble {
+                grid_offset: 4,
+                reassemble: true
+            }
+        );
+        assert_eq!(steps, 32);
+        p.stopped(4, true);
+        assert!(p.assemble_next_tick);
+        // Going up from the top of the rope can't start.
+        assert!(!p.start(-64.0, 0, Some(true)));
+        // Going down unable to take the block can't either.
+        assert!(!p.start(64.0, 3, None));
     }
 }

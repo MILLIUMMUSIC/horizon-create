@@ -67,7 +67,7 @@ Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 `create:values` (client → server value box changes, checked by the server),
 `create:fluids` (F1: tanks' and basins' fluids),
 `create:contraptions` (C1: running pistons' offsets and speeds, their blocks when they change, then the glue,
-then turning bearings' angles and blocks),
+then turning bearings' angles and blocks, then running rope pulleys' lengths and loads),
 `create:chassis` (client → server: a chassis' range scrolled with the wrench).
 
 Contraptions: `contraption.rs` (rules: structure search, `PistonContraption`,
