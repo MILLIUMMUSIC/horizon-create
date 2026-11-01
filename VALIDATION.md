@@ -1,5 +1,14 @@
 # Validation
 
+## Fans through chutes (macOS, offscreen)
+
+Seen working: an encased fan facing up under three chutes (16 RPM from a creative motor) blows iron ingots fed in
+by a hopper beside the lowest chute up the column and into a chest on top; with the chest gone, gold ingots are
+blown out of the top as item entities. 172 unit tests pass (1 new).
+
+Not checked yet: a fan on top facing down pulling, an input chute above taking items, a funnel facing up above,
+an inventory under an upward chute giving items, faster fans.
+
 ## Arm selection modes and new points (macOS, offscreen)
 
 Seen working: the mouse wheel over a mechanical arm's side steps its mode (the action bar says Forced Round Robin,

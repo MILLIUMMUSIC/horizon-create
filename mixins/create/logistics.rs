@@ -24,7 +24,7 @@ use super::create_tunnel::{
     BrassTunnel, SelectionMode, TunnelLevel, TunnelState, TunnelWorld, adjacent, can_survive,
     has_distribution, is_connected, updated_state,
 };
-use super::create_kinetics::{Axis, Dir, Pos};
+use super::create_kinetics::{Axis, Dir, Kind, Pos};
 use horizon_client::containers::ModBlockEntity;
 use horizon_client::items::ItemStack;
 use horizon_world::nbt::{JavaString, Tag};
@@ -1945,12 +1945,89 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
         }
         extract_from(self.game, above, max, &|_| true)
     }
+    fn insert_above(&mut self, stack: &ItemStack, simulate: bool) -> Option<Option<ItemStack>> {
+        let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
+        // `isOpenChute`: only an open (straight) chute hands items up.
+        if !has_inventory(self.game, above) || belt_at(self.game, above).is_some() {
+            return None;
+        }
+        if simulate {
+            return Some(None);
+        }
+        Some(insert_into(self.game, above, Dir::Down, stack.clone()))
+    }
+    fn chute_above_accepts(&self) -> Option<bool> {
+        let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
+        if !is_chute(self.game, above) {
+            return None;
+        }
+        use horizon_client::containers::BlockEntity as B;
+        let empty = match self.game.world.block_entities.get(&(above[0], above[1], above[2])) {
+            Some(B::Mod(m)) => m.items.first().is_none_or(Option::is_none),
+            _ => false,
+        };
+        // Its item moving up or standing: the same column's motion.
+        Some(empty && chute_motion(self.game, above) >= 0.0)
+    }
+    fn give_chute_above(&mut self, stack: ItemStack) {
+        let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
+        self.game.native_with_mod_block_entity(above, |be| set_chute_item(be, Some(stack), 0.0));
+    }
+    fn blocked_above(&self) -> bool {
+        let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
+        funnel_at(self.game, above).is_some_and(|f| f.facing == Dir::Up) || sturdy(self.game, above, Dir::Down)
+    }
+    fn drop_above(&mut self, stack: ItemStack, _: f32) {
+        let c = self.pos.map(|v| f64::from(v) + 0.5);
+        let motion = f64::from(chute_motion(self.game, self.pos)) * 2.0;
+        self.game.spawn_item(stack, [c[0], c[1] + 8.0 / 16.0, c[2]], [0.0, motion, 0.0], PICKUP_DELAY);
+    }
+    fn extract_below(&mut self, max: u32) -> Option<ItemStack> {
+        let below = [self.pos[0], self.pos[1] - 1, self.pos[2]];
+        if is_chute(self.game, below) {
+            return None;
+        }
+        extract_from(self.game, below, max, &|_| true)
+    }
+}
+
+/// `calculatePull` and `calculatePush` of a straight chute column: a fan
+/// at its top facing down pulls with its speed, one at its bottom facing
+/// up pushes; every chute of the column shares them (one branch).
+fn chute_fans(game: &Game<'_>, pos: Pos) -> (f32, f32) {
+    let fan = |p: Pos, facing: Dir| match super::create_glue::kind_at(game, p) {
+        Some(Kind::EncasedFan(f)) if f == facing => Some(super::create_glue::with_kinetics(game, |k, level| k.speed_of(level, p))),
+        _ => None,
+    };
+    let mut top = pos;
+    while is_chute(game, [top[0], top[1] + 1, top[2]]) {
+        top[1] += 1;
+    }
+    let mut bottom = pos;
+    while is_chute(game, [bottom[0], bottom[1] - 1, bottom[2]]) {
+        bottom[1] -= 1;
+    }
+    let pull = fan([top[0], top[1] + 1, top[2]], Dir::Down).unwrap_or(0.0);
+    let push = fan([bottom[0], bottom[1] - 1, bottom[2]], Dir::Up).unwrap_or(0.0);
+    (push, pull)
+}
+
+/// `getItemMotion` of the chute at `pos`.
+fn chute_motion(game: &Game<'_>, pos: Pos) -> f32 {
+    let (push, pull) = chute_fans(game, pos);
+    item_motion(push, pull)
 }
 
 /// `ChuteBlockEntity.tick` on the server for the chute at `pos`, and
 /// `ChuteBlock.updateEntityAfterFallOn` (items falling on top go in).
 pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
+    let motion = chute_motion(game, pos);
+    let seen = matches!(entity.nbt.get(&JavaString::from("HasItem")), Some(Tag::Byte(1)));
     let mut chute = chute_item(entity);
+    // `setItem(stack)`: put in from the top, or the bottom when blown up.
+    if chute.item.is_some() && !seen && motion > 0.0 {
+        chute.position = 0.0;
+    }
     if chute.item.is_none() {
         super::create_machines::take_landed(game, pos, 0.75, |_, stack| {
             if chute.item.is_some() {
@@ -1960,7 +2037,6 @@ pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
             None
         });
     }
-    let motion = item_motion(0.0, 0.0);
     chute.tick(motion, &mut ChuteAt { game, pos });
     set_chute_item(entity, chute.item.clone(), chute.position);
     let mut view = vec![super::create_machines::stack_view(chute.item.as_ref())];

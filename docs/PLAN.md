@@ -96,8 +96,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    - Chute (`chute.rs`: `ChuteBlockEntity`'s item and `handleDownwardOutput`/`handleInputFromAbove`; a mod block
      entity): items fall at 4 blocks a second, into the inventory below (containers, depots, belt segments), into
      the chute below, or out of the bottom onto the ground; an empty chute takes up to 16 from the inventory above
-     and items falling on top; its item drawn at its height. Not yet: fans pushing or pulling through chutes
-     (`push`/`pull`), diagonal chutes, window and intersection shapes, smart chutes.
+     and items falling on top; its item drawn at its height. A fan facing up under a straight column pushes, one facing down on top pulls (`calculatePush`/`calculatePull`,
+     `getItemMotion`): items blown up go into the inventory or chute above or fly out of the top
+     (`handleUpwardOutput`), and an upward chute takes from the inventory below (`handleInputFromBelow`). Not yet:
+     items pulled in from the ground under an upward chute (`updateAirFlow`'s entities and belt items), diagonal chutes, window and intersection shapes, smart chutes.
    - Andesite funnel (`funnel.rs`; no block entity): extracting (placed normally) puts one item every 8 ticks
      from the inventory behind in front of it, unless an item still lies there; collecting (placed sneaking, or
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt
