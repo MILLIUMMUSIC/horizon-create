@@ -319,9 +319,18 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       stand on a grindstone's template (`facing`, `face` kept at wall). Not yet: items put into the structure's
       storage (they drop at the actor), hurting and throwing entities (engine gap), the cobblestone generator
       optimisation, the drill's and harvester's parts turning on moving structures, actors on gantries and
-      pulleys checked in the game, the saw (with `TreeCutter`), the deployer and portable storage interfaces on
-      contraptions, `DirectionalKineticBlock`'s placement for the drill (the clicked face decides here), placing a
+      pulleys checked in the game, the deployer and portable storage interfaces on contraptions (part 4c, with
+      the structure's storage), `DirectionalKineticBlock`'s placement for the drill (the clicked face decides here), placing a
       harvester on a wall while looking steeply up or down (it faces the player).
+      Part 4b, the mechanical saw (**done, checked in the game in part**): `saw.rs` has `TreeCutter.findTree`
+      (logs and roots, `validateCut`, leaves by distance, attachments, vertical plants from the top, chorus) and
+      `isSawable`; `actors.rs` the saw as an actor (`SawMovementBehaviour`: it cuts only facing sideways in the
+      world, fells no tree from leaves, doesn't wait for falling blocks). `Kind::Saw` (4 su) is a
+      `DirectionalAxisKineticBlock` as the deployer, a block per `axis_along_first` on a lightning rod's template;
+      a standing saw facing sideways breaks sawable blocks in front and fells the tree, its drops thrown away from
+      it (`dropItemFromCutTree`). The blade is a partial (active, reversed or still), drawn on moving structures
+      too. Not yet: the saw facing up processing items (`create:cutting`, belts and dropped items) and its filter,
+      `flipped`, the tree's blocks' break effects by chance (all show), dynamic trees, wrenching a saw.
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.
 7. **Everything else**: Ponder scenes, schematics and the schematicannon, decoration sets, Create's

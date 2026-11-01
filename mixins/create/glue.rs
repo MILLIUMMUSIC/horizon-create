@@ -199,7 +199,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut removed_belts: Vec<(Pos, BeltState)> = Vec::new();
     let mut changed_here: Vec<Pos> = Vec::new();
     let mut pumps: Vec<(Pos, Dir, f32)> = Vec::new();
-    let mut drills: Vec<(Pos, Dir, f32)> = Vec::new();
+    let mut drills: Vec<(Pos, Dir, f32, bool)> = Vec::new();
     let save_now;
     {
         let mut guard = server();
@@ -327,11 +327,16 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             {
                 pumps.push((p, f, kinetics.speed_of(&level, p)));
             }
-            // Standing drills, for their breaking.
-            if let Some(Kind::Drill(f)) = kinetics.get(p).map(|e| e.kind)
+            // Standing drills and saws, for their breaking.
+            let breaker = match kinetics.get(p).map(|e| e.kind) {
+                Some(Kind::Drill(f)) => Some((f, false)),
+                Some(Kind::Saw(f, _)) => Some((f, true)),
+                _ => None,
+            };
+            if let Some((f, saw)) = breaker
                 && level.is_loaded(p)
             {
-                drills.push((p, f, kinetics.speed_of(&level, p)));
+                drills.push((p, f, kinetics.speed_of(&level, p), saw));
             }
         }
         let code = dim_code(dimension);
@@ -379,7 +384,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_logistics::tunnels_tick(game, dimension);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
-    super::create_actor_glue::drills_tick(game, dimension, &drills);
+    super::create_actor_glue::breakers_tick(game, dimension, &drills);
     super::create_contraptions::level_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
     if messages.is_empty() && depots.is_empty() {
@@ -950,6 +955,26 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             want.push(("create:hz_part_shaft_half", None, rotate_to_face(back), f.axis(), standard, 0.0));
             let spin = fan_angle(view.speed, time);
             want.push(("create:hz_part_encased_fan_inner", None, rotate_to_face(back), f.axis(), spin, 0.0));
+        }
+        Kind::Saw(f, along) => {
+            // SawRenderer: a shaft along its axis, and the blade (its texture
+            // runs while it turns), turned to face its way.
+            let a = view.kind.rotation_axis();
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+            let vertical = f.axis() == Axis::Y;
+            let blade = match (vertical, view.speed.partial_cmp(&0.0)) {
+                (true, Some(std::cmp::Ordering::Greater)) => "create:hz_part_saw_blade_vertical_active",
+                (true, Some(std::cmp::Ordering::Less)) => "create:hz_part_saw_blade_vertical_reversed",
+                (true, _) => "create:hz_part_saw_blade_vertical_inactive",
+                (false, Some(std::cmp::Ordering::Greater)) => "create:hz_part_saw_blade_horizontal_active",
+                (false, Some(std::cmp::Ordering::Less)) => "create:hz_part_saw_blade_horizontal_reversed",
+                (false, _) => "create:hz_part_saw_blade_horizontal_inactive",
+            };
+            let mut orient = rotate_to_face(f);
+            if vertical && along {
+                orient = glam::Mat4::from_rotation_y(90f32.to_radians()) * orient;
+            }
+            want.push((blade, None, orient, a, 0.0, 0.0));
         }
         Kind::Drill(f) => {
             // DrillRenderer: its head, turned to face its way.

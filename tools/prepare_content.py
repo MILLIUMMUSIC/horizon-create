@@ -222,6 +222,9 @@ PARTIALS = {
     "rope_coil": "create:block/rope_pulley/rope_coil",
     "rope_half": "create:block/rope_pulley/rope_half",
     "rope_half_magnet": "create:block/rope_pulley/rope_half_magnet",
+    # SawRenderer's blades.
+    **{f"saw_blade_{way}_{mode}": f"create:block/mechanical_saw/blade_{way}_{mode}"
+       for way in ("horizontal", "vertical") for mode in ("active", "inactive", "reversed")},
     # DrillRenderer's head.
     "drill_head": "create:block/mechanical_drill/head",
     # GantryCarriageRenderer's wheels.
@@ -546,6 +549,7 @@ def fit_logistics(content, names):
     fit_rope(content)
     fit_gantry(content, names)
     fit_actors(content)
+    fit_saws(content, names)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -555,6 +559,7 @@ def fit_logistics(content, names):
         **{name: f"create:{kind}_tunnel" for kind in ("andesite", "brass")
            for name in tunnel_blocks(kind) if name != f"{kind}_tunnel"},
         **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
+        "hz_mechanical_saw_along": "create:mechanical_saw",
         **{name: f"create:{piston}" for name, (piston, _, _) in piston_blocks().items() if name != piston},
         "hz_mechanical_piston_head_sticky": "create:mechanical_piston_head",
         **{name: f"create:{base}" for name, (base, _) in chassis_blocks().items() if name != base},
@@ -899,6 +904,38 @@ def fit_actors(content):
             {"when": {"facing": f}, "apply": {"model": m, "y": turn} if turn else {"model": m}}
             for f, turn in HORIZONTAL_TURNS.items() for m in models
         ]})
+
+
+# The mechanical saw (SawBlock, a DirectionalAxisKineticBlock): as the
+# deployer, a block per `axis_along_first` on a lightning rod's template;
+# `flipped` (which way a saw facing up passes items) isn't kept.
+SAWS = {"mechanical_saw": "false", "hz_mechanical_saw_along": "true"}
+
+
+def fit_saws(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    original = read_json(states / "mechanical_saw.json") if (states / "mechanical_saw.json").exists() else None
+    for name, along in SAWS.items():
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:lightning_rod"
+        decl.pop("default_state", None)
+        decl["shapes"] = {"property": "facing", "values": {f: [facing_box(f, CASING_12PX)] for f in FACINGS}}
+        decl.setdefault("properties", {})["light"] = 0
+        if name != "mechanical_saw":
+            decl["item"] = False
+            names[f"block.create.{name}"] = names.get("block.create.mechanical_saw", "Mechanical Saw")
+        write_json(loot_tables / f"{name}.json", loot(name, ["create:mechanical_saw"]))
+        write_json(blocks / f"{name}.json", decl)
+        if original is None:
+            continue
+        variants = {}
+        for key, model in original.get("variants", {}).items():
+            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            if props.get("axis_along_first") == along and props.get("flipped") == "false" and "facing" in props:
+                variants[f"facing={props['facing']}"] = model
+        write_json(states / f"{name}.json", {"variants": variants})
 
 
 def share_block_tags(content, bases):

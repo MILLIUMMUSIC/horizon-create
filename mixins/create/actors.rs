@@ -11,6 +11,9 @@ use super::create_kinetics::{Axis, Dir, Pos};
 pub const DRILL: &str = "create:mechanical_drill";
 pub const HARVESTER: &str = "create:mechanical_harvester";
 pub const PLOUGH: &str = "create:mechanical_plough";
+pub const SAW: &str = "create:mechanical_saw";
+/// The saw with `AXIS_ALONG_FIRST_COORDINATE` (a block of its own here).
+pub const SAW_ALONG: &str = "create:hz_mechanical_saw_along";
 
 /// `SmartBlockEntity`'s default `lazyTickRate`.
 pub const LAZY_TICK_RATE: u64 = 10;
@@ -24,6 +27,8 @@ pub enum ActorKind {
     Harvester,
     /// `PloughMovementBehaviour`.
     Plough,
+    /// `SawMovementBehaviour`.
+    Saw,
 }
 
 impl ActorKind {
@@ -32,6 +37,7 @@ impl ActorKind {
             DRILL => Some(ActorKind::Drill),
             HARVESTER => Some(ActorKind::Harvester),
             PLOUGH => Some(ActorKind::Plough),
+            SAW | SAW_ALONG => Some(ActorKind::Saw),
             _ => None,
         }
     }
@@ -41,13 +47,14 @@ impl ActorKind {
             ActorKind::Drill => DRILL,
             ActorKind::Harvester => HARVESTER,
             ActorKind::Plough => PLOUGH,
+            ActorKind::Saw => SAW,
         }
     }
 
     /// `getActiveAreaOffset`: a little in front of the block.
     pub fn active_area_offset(self, facing: Dir) -> [f64; 3] {
         let scale = match self {
-            ActorKind::Drill => 0.65,
+            ActorKind::Drill | ActorKind::Saw => 0.65,
             ActorKind::Harvester | ActorKind::Plough => 0.45,
         };
         facing.normal().map(|c| f64::from(c) * scale)
@@ -55,7 +62,7 @@ impl ActorKind {
 
     /// Whether it is a `BlockBreakingMovementBehaviour`.
     pub fn breaks(self) -> bool {
-        matches!(self, ActorKind::Drill | ActorKind::Plough)
+        matches!(self, ActorKind::Drill | ActorKind::Plough | ActorKind::Saw)
     }
 }
 
@@ -228,6 +235,17 @@ pub fn visit_breaker(ctx: &mut ActorContext, kind: ActorKind, world: &impl Break
     ctx.stall = true;
 }
 
+/// The end of `SawMovementBehaviour.visitNewPosition`: a saw facing up or
+/// down in the world cuts nothing as it moves.
+pub fn saw_visit_end(ctx: &mut ActorContext, facing_in_world: [f64; 3]) {
+    let [x, y, z] = facing_in_world.map(f64::abs);
+    let vertical = y > x && y > z;
+    if vertical && ctx.breaking.is_some() {
+        ctx.breaking = None;
+        ctx.stall = false;
+    }
+}
+
 /// `BlockBreakingMovementBehaviour.cancelStall` (and `stopMoving`).
 pub fn cancel_stall(ctx: &mut ActorContext) -> Option<BreakEvent> {
     let b = ctx.breaking.take()?;
@@ -274,8 +292,9 @@ pub fn tick_breaker(
         }
         ctx.stall = false;
         ctx.breaking = None;
-        // onBlockBroken: a falling block lets what is over it settle.
-        if world.falling(top) {
+        // onBlockBroken: a falling block lets what is over it settle (the
+        // saw fells a tree instead).
+        if kind != ActorKind::Saw && world.falling(top) {
             ctx.waiting = Some((10, b.pos));
             ctx.stall = true;
         }
@@ -823,6 +842,30 @@ mod tests {
         assert!(is_breakable(false, false, 1.5, false));
         assert!(!is_breakable(false, false, -1.0, false));
         assert!(!is_breakable(true, false, 100.0, false));
+    }
+
+    #[test]
+    fn saws_cut_sideways_only() {
+        assert_eq!(ActorKind::of(SAW_ALONG), Some(ActorKind::Saw));
+        let world = World {
+            hardness: HashMap::from([([1, 0, 0], 2.0)]),
+            falling: vec![[1, 0, 0]],
+        };
+        let mut ctx = ActorContext {
+            relative_motion: [0.49, 0.0, 0.0],
+            ..ActorContext::default()
+        };
+        visit_breaker(&mut ctx, ActorKind::Saw, &world, [1, 0, 0]);
+        saw_visit_end(&mut ctx, [1.0, 0.0, 0.0]);
+        assert!(ctx.stall);
+        saw_visit_end(&mut ctx, [0.0, -1.0, 0.0]);
+        assert!(!ctx.stall);
+        assert_eq!(ctx.breaking, None);
+        // A felled log over a falling block doesn't wait for it.
+        visit_breaker(&mut ctx, ActorKind::Saw, &world, [1, 0, 0]);
+        let e = tick_breaker(&mut ctx, ActorKind::Saw, &world, 32.0);
+        assert!(matches!(e, Some(BreakEvent::Broken { .. })));
+        assert_eq!(ctx.waiting, None);
     }
 
     #[test]

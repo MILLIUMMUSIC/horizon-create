@@ -262,7 +262,9 @@ impl Kind {
             | Kind::MechanicalBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => Some(("facing", f.name())),
-            Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) => Some(("facing", f.name())),
+            Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) | Kind::Saw(f, _) => {
+                Some(("facing", f.name()))
+            }
             Kind::GantryShaft(f) | Kind::GantryCarriage(f, _) => Some(("facing", f.name())),
             Kind::Millstone | Kind::MechanicalMixer | Kind::Belt(_) | Kind::MechanicalArm => None,
         }
@@ -418,6 +420,9 @@ pub enum Kind {
     /// `DrillBlock`: the way its head faces; its shaft is behind (actors.rs
     /// breaks the block in front).
     Drill(Dir),
+    /// `SawBlock`: its facing and `AXIS_ALONG_FIRST_COORDINATE`, as a
+    /// deployer (`flipped` isn't kept).
+    Saw(Dir, bool),
 }
 
 impl Kind {
@@ -453,6 +458,8 @@ impl Kind {
             }
             DEPLOYER => facing().map(|f| Kind::Deployer(f, false)),
             DEPLOYER_ALONG => facing().map(|f| Kind::Deployer(f, true)),
+            super::create_actors::SAW => facing().map(|f| Kind::Saw(f, false)),
+            super::create_actors::SAW_ALONG => facing().map(|f| Kind::Saw(f, true)),
             n => {
                 let (sticky, along, _) = super::create_contraption::piston_of(n)?;
                 facing().map(|f| Kind::MechanicalPiston(f, along, sticky))
@@ -482,6 +489,8 @@ impl Kind {
             Kind::GantryShaft(_) => "create:gantry_shaft",
             Kind::GantryCarriage(_, false) => "create:gantry_carriage",
             Kind::GantryCarriage(_, true) => GANTRY_CARRIAGE_ALONG,
+            Kind::Saw(_, false) => super::create_actors::SAW,
+            Kind::Saw(_, true) => super::create_actors::SAW_ALONG,
             Kind::Deployer(_, along) => {
                 if along {
                     DEPLOYER_ALONG
@@ -517,7 +526,8 @@ impl Kind {
             Kind::Belt(b) => b.rotation_axis(),
             Kind::Deployer(f, along)
             | Kind::MechanicalPiston(f, along, _)
-            | Kind::GantryCarriage(f, along) => super::create_deployer::rotation_axis(f, along),
+            | Kind::GantryCarriage(f, along)
+            | Kind::Saw(f, along) => super::create_deployer::rotation_axis(f, along),
             Kind::GantryShaft(f) => f.axis(),
         }
     }
@@ -541,9 +551,8 @@ impl Kind {
             Kind::Belt(b) => b.has_shaft_towards(face),
             Kind::Deployer(f, along)
             | Kind::MechanicalPiston(f, along, _)
-            | Kind::GantryCarriage(f, along) => {
-                face.axis() == super::create_deployer::rotation_axis(f, along)
-            }
+            | Kind::GantryCarriage(f, along)
+            | Kind::Saw(f, along) => face.axis() == super::create_deployer::rotation_axis(f, along),
             Kind::GantryShaft(f) => face.axis() == f.axis(),
         }
     }
@@ -575,6 +584,7 @@ impl Kind {
             Kind::MechanicalBearing(_) => 4.0,
             Kind::RopePulley(_) => 4.0,
             Kind::Drill(_) => 4.0,
+            Kind::Saw(..) => 4.0,
             _ => 0.0,
         }
     }
@@ -1852,7 +1862,7 @@ fn kind_key(k: Kind) -> String {
         | Kind::WindmillBearing(f)
         | Kind::Drill(f) => f.name(),
         Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => "",
-        Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) => f.name(),
+        Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) | Kind::Saw(f, _) => f.name(),
         Kind::GantryShaft(f) | Kind::GantryCarriage(f, _) => f.name(),
         Kind::Belt(b) => {
             let face = b.block().map_or("floor", |(_, face)| face);
@@ -1983,6 +1993,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::GantryShaft(d) => (19, dir(d)),
         Kind::GantryCarriage(d, along) => (20, dir(d) | u8::from(along) << 3),
         Kind::Drill(d) => (21, dir(d)),
+        Kind::Saw(d, along) => (22, dir(d) | u8::from(along) << 3),
     }
 }
 
@@ -2026,6 +2037,10 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
             state & 8 != 0,
         ),
         21 => Kind::Drill(dir?),
+        22 => Kind::Saw(
+            Dir::ALL.get(usize::from(state & 7)).copied()?,
+            state & 8 != 0,
+        ),
         _ => return None,
     })
 }
@@ -2773,6 +2788,8 @@ mod tests {
             Kind::GantryShaft(Dir::South),
             Kind::GantryCarriage(Dir::Up, true),
             Kind::Drill(Dir::North),
+            Kind::Saw(Dir::East, true),
+            Kind::Saw(Dir::Up, false),
         ] {
             assert_eq!(parse_kind_key(&kind_key(k)), Some(k));
             let (tag, state) = kind_code(k);

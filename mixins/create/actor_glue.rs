@@ -3,14 +3,16 @@
 // moving structures (`tickActors` for each piston, bearing, pulley and
 // gantry, before it moves; a structure stalls while one breaks a block),
 // what they do to the world, and the standing drill's breaking
-// (`DrillBlockEntity`).
+// (`DrillBlockEntity`) and the saw's (`SawBlockEntity`) with the trees it
+// fells (`TreeCutter`).
 
 use super::Game;
 use super::create_actors::{
     ActorContext, ActorKind, BreakEvent, BreakWorld, Breaker, Cut, LAZY_TICK_RATE, PloughFacts, PlantFacts,
     cancel_stall, containing, drill_can_break, harvest, is_active, is_breakable, moving_break_speed,
-    plough_can_break, should_trigger, tick_breaker, tick_waiting, tilled, visit_breaker,
+    plough_can_break, saw_visit_end, should_trigger, tick_breaker, tick_waiting, tilled, visit_breaker,
 };
+use super::create_saw::{SawFacts, TreeBlock, TreeWorld, find_tree, is_sawable};
 use super::create_kinetics::{Dir, Pos};
 use horizon_client::items::ItemStack;
 use horizon_core::random::RandomSource;
@@ -44,7 +46,7 @@ struct Moving {
     stalled: bool,
 }
 
-/// A standing drill (`DrillBlockEntity`).
+/// A standing drill or saw (`BlockBreakingKineticBlockEntity`).
 struct Drill {
     breaker: Breaker,
     rpm: f32,
@@ -107,6 +109,30 @@ impl World<'_, '_> {
     fn air(&self, pos: Pos) -> bool {
         self.class(pos, "AirBlock")
     }
+    fn name_is(&self, pos: Pos, name: &str) -> bool {
+        self.game.res.facts().get(block_at(self.game, pos)).name.as_ref() == name
+    }
+    /// `SawBlockEntity.isSawable`.
+    fn sawable(&self, pos: Pos) -> bool {
+        let t = self.tree_block(pos);
+        is_sawable(&SawFacts {
+            sapling: self.tag(pos, "minecraft:saplings"),
+            log: t.log,
+            leaves: self.tag(pos, "minecraft:leaves"),
+            root: t.root,
+            plant: [
+                "BambooStalkBlock",
+                "CactusBlock",
+                "SugarCaneBlock",
+                "KelpPlantBlock",
+                "KelpBlock",
+                "ChorusPlantBlock",
+            ]
+            .iter()
+            .any(|c| self.class(pos, c))
+                || self.tag(pos, "create:solid_crops"),
+        })
+    }
     /// `BlockBreakingKineticBlockEntity.isBreakable`.
     fn breakable(&self, pos: Pos) -> bool {
         is_breakable(
@@ -136,12 +162,70 @@ impl BreakWorld for World<'_, '_> {
                 whitelisted: self.tag(pos, "create:plough_whitelist"),
                 collision_empty: self.collision_empty(pos),
             }),
+            ActorKind::Saw => self.breakable(pos) && self.sawable(pos),
             ActorKind::Harvester => false,
         }
     }
     fn falling(&self, pos: Pos) -> bool {
         self.class(pos, "FallingBlock")
     }
+}
+
+impl TreeWorld for World<'_, '_> {
+    fn tree_block(&self, pos: Pos) -> TreeBlock {
+        let id = block_at(self.game, pos);
+        let distance = prop(self.game, id, "distance").and_then(|d| d.parse::<i32>().ok());
+        let non_decaying = if self.name_is(pos, "minecraft:red_mushroom_block") {
+            2
+        } else if self.name_is(pos, "minecraft:brown_mushroom_block")
+            || self.tag(pos, "minecraft:wart_blocks")
+            || self.name_is(pos, "minecraft:weeping_vines")
+            || self.name_is(pos, "minecraft:weeping_vines_plant")
+        {
+            3
+        } else {
+            -1
+        };
+        TreeBlock {
+            log: self.tag(pos, "minecraft:logs")
+                || self.tag(pos, "tconstruct:slimy_logs")
+                || self.name_is(pos, "minecraft:mushroom_stem"),
+            root: self.tag(pos, "create:roots"),
+            leaf: distance.filter(|_| !self.class(pos, "ScaffoldingBlock")),
+            vertical_plant: ["BambooStalkBlock", "CactusBlock", "SugarCaneBlock", "KelpPlantBlock", "KelpBlock"]
+                .iter()
+                .any(|c| self.class(pos, c)),
+            chorus: self.class(pos, "ChorusPlantBlock") || self.class(pos, "ChorusFlowerBlock"),
+            attachment: self.tag(pos, "create:tree_attachments"),
+            non_decaying,
+        }
+    }
+    fn height(&self) -> i32 {
+        self.game.world.shape.height
+    }
+}
+
+/// `TreeCutter.findTree(...).destroyBlocks`: what fell with the block cut at
+/// `pos` (`broken` as it was), each block's drops handed to `drop`.
+fn fell(game: &mut Game<'_>, pos: Pos, broken: TreeBlock, mut drop: impl FnMut(&mut Game<'_>, Pos, ItemStack)) {
+    let tree = find_tree(&World { game }, pos, broken);
+    for (at, _effects) in tree.in_order() {
+        if !game.world.loaded(at[0], at[2]) {
+            continue;
+        }
+        for stack in destroy(game, at, None) {
+            drop(game, at, stack);
+        }
+    }
+}
+
+/// `dropItemFromCutTree`: from the block's centre, thrown the way the
+/// cut went, the further the faster.
+fn throw_from(game: &mut Game<'_>, at: Pos, from: [f64; 3], way: [f64; 3], stack: ItemStack) {
+    let c = at.map(|v| f64::from(v) + 0.5);
+    let distance = (0..3).map(|k| (c[k] - from[k]).powi(2)).sum::<f64>().sqrt();
+    let v = way.map(|w| w * distance / 20.0);
+    game.spawn_item(stack, c, v, 10);
 }
 
 /// `BlockHelper.destroyBlockAs`: the block's drops (as with `held`), its
@@ -271,6 +355,21 @@ fn till(game: &mut Game<'_>, ctx: &ActorContext, pos: Pos) {
 /// `BlockBreakingMovementBehaviour.destroyBlock` (and the plough's snow,
 /// dug as with an iron shovel).
 fn broken(game: &mut Game<'_>, ctx: &ActorContext, kind: ActorKind, pos: Pos) {
+    if kind == ActorKind::Saw {
+        // SawMovementBehaviour.onBlockBroken: leaves fell nothing.
+        let w = World { game };
+        let leaves = w.tag(pos, "minecraft:leaves");
+        let cut = w.tree_block(pos);
+        for stack in destroy(game, pos, None) {
+            drop_from(game, ctx, stack);
+        }
+        if !leaves {
+            let from = ctx.position.unwrap_or(pos.map(|v| f64::from(v) + 0.5));
+            let way = ctx.relative_motion;
+            fell(game, pos, cut, |game, at, stack| throw_from(game, at, from, way, stack));
+        }
+        return;
+    }
     let snow = kind == ActorKind::Plough && game.res.facts().get(block_at(game, pos)).name.as_ref() == "minecraft:snow";
     let shovel = snow.then(|| ItemStack::new("minecraft:iron_shovel", 1));
     for stack in destroy(game, pos, shovel.as_ref()) {
@@ -279,7 +378,7 @@ fn broken(game: &mut Game<'_>, ctx: &ActorContext, kind: ActorKind, pos: Pos) {
 }
 
 /// An actor's visit to a new block (`visitNewPosition`).
-fn visit(game: &mut Game<'_>, slot: &mut Slot, pos: Pos) {
+fn visit(game: &mut Game<'_>, slot: &mut Slot, pos: Pos, turn: &dyn Fn([f64; 3]) -> [f64; 3]) {
     if !game.world.loaded(pos[0], pos[2]) {
         return;
     }
@@ -290,6 +389,10 @@ fn visit(game: &mut Game<'_>, slot: &mut Slot, pos: Pos) {
             till(game, &slot.ctx, pos);
         }
         ActorKind::Harvester => harvest_at(game, &slot.ctx, pos),
+        ActorKind::Saw => {
+            visit_breaker(&mut slot.ctx, slot.kind, &World { game }, pos);
+            saw_visit_end(&mut slot.ctx, turn(slot.facing.normal().map(f64::from)));
+        }
     }
 }
 
@@ -320,7 +423,7 @@ fn slots_of(game: &Game<'_>, s: &mut State, blocks: &[(Pos, BlockStateId)]) -> V
 /// moves this tick: `blocks` are its blocks' places and states (read when
 /// it is first seen), `place(local, v)` the world position of `v` from the
 /// centre of the block at `local`, `unrotate` a world vector in the
-/// structure's frame. `centre`: a bearing's facing and the degrees it
+/// structure's frame and `turn` back. `centre`: a bearing's facing and the degrees it
 /// turned last tick, for actors on its axis. True when it is stalled.
 pub(super) fn tick_actors(
     game: &mut Game<'_>,
@@ -328,6 +431,7 @@ pub(super) fn tick_actors(
     blocks: &dyn Fn() -> Vec<(Pos, BlockStateId)>,
     place: &dyn Fn(Pos, [f64; 3]) -> [f64; 3],
     unrotate: &dyn Fn([f64; 3]) -> [f64; 3],
+    turn: &dyn Fn([f64; 3]) -> [f64; 3],
     centre: Option<(Dir, f32)>,
 ) -> bool {
     let key = (game.dim.id().to_owned(), mover);
@@ -360,7 +464,7 @@ pub(super) fn tick_actors(
             continue;
         }
         if visited && !slot.ctx.stall {
-            visit(game, slot, grid);
+            visit(game, slot, grid, turn);
             slot.ctx.first_movement = false;
         }
         if slot.kind.breaks() {
@@ -373,7 +477,7 @@ pub(super) fn tick_actors(
                 }
             }
             if let Some(again) = tick_waiting(&mut slot.ctx) {
-                visit(game, slot, again);
+                visit(game, slot, again, turn);
             }
         }
         stalled |= slot.ctx.stall;
@@ -411,9 +515,10 @@ pub(super) fn stop_actors(game: &mut Game<'_>, mover: Mover) {
     }
 }
 
-/// `DrillBlockEntity.tick` for the dimension's standing drills (place,
-/// facing, speed), after the kinetics.
-pub(super) fn drills_tick(game: &mut Game<'_>, dimension: &str, drills: &[(Pos, Dir, f32)]) {
+/// `DrillBlockEntity.tick` and `SawBlockEntity.tick` for the dimension's
+/// standing drills and saws (place, facing, speed, whether a saw), after
+/// the kinetics.
+pub(super) fn breakers_tick(game: &mut Game<'_>, dimension: &str, drills: &[(Pos, Dir, f32, bool)]) {
     let mut taken: HashMap<Pos, Drill> = {
         let mut guard = state();
         let s = guard.get_or_insert_with(State::default);
@@ -439,7 +544,7 @@ pub(super) fn drills_tick(game: &mut Game<'_>, dimension: &str, drills: &[(Pos, 
     };
     let lazy = state().as_ref().is_some_and(|s| s.ticks % LAZY_TICK_RATE == 0);
     let mut kept = HashMap::new();
-    for &(pos, facing, rpm) in drills {
+    for &(pos, facing, rpm, saw) in drills {
         let Some(mut d) = taken.remove(&pos) else {
             continue;
         };
@@ -447,9 +552,18 @@ pub(super) fn drills_tick(game: &mut Game<'_>, dimension: &str, drills: &[(Pos, 
             kept.insert(pos, d);
             continue;
         }
+        // SawBlockEntity.shouldRun: a saw facing up or down cuts nothing.
+        if saw && facing.axis() == super::create_kinetics::Axis::Y {
+            kept.insert(pos, d);
+            continue;
+        }
         if d.rpm != rpm {
             d.rpm = rpm;
             d.breaker.speed_changed();
+        }
+        // A saw tries again at once (SawBlockEntity.tick).
+        if saw && d.breaker.ticks_until_next < 0 {
+            d.breaker.destroy_next_tick();
         }
         let n = facing.normal();
         let target = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
@@ -460,9 +574,10 @@ pub(super) fn drills_tick(game: &mut Game<'_>, dimension: &str, drills: &[(Pos, 
         if lazy {
             d.breaker.lazy_tick();
         }
-        let (hardness, breakable) = {
+        let (hardness, breakable, cut, leaves) = {
             let w = World { game };
-            (w.hardness(target), w.breakable(target))
+            let breakable = w.breakable(target) && (!saw || w.sawable(target));
+            (w.hardness(target), breakable, w.tree_block(target), w.tag(target, "minecraft:leaves"))
         };
         if let Some(event) = d.breaker.tick(rpm, target, hardness, breakable) {
             show(game, d.id, event);
@@ -475,6 +590,12 @@ pub(super) fn drills_tick(game: &mut Game<'_>, dimension: &str, drills: &[(Pos, 
                     let jitter = [0, 1, 2].map(|_| (f64::from(r.next_float()) - 0.5) * 0.25);
                     let c = [0, 1, 2].map(|k| f64::from(at[k]) + 0.5 + jitter[k]);
                     game.spawn_item(stack, c, [0.0; 3], 10);
+                }
+                // SawBlockEntity.onBlockBroken: the tree falls away from it.
+                if saw && !leaves {
+                    let from = at.map(|v| f64::from(v) + 0.5);
+                    let way = n.map(f64::from);
+                    fell(game, at, cut, |game, p, stack| throw_from(game, p, from, way, stack));
                 }
                 d.front = block_at(game, target);
             }

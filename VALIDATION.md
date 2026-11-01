@@ -1,5 +1,22 @@
 # Validation
 
+## Milestone 5, part 4b: mechanical saw (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 162 unit tests pass (5 new
+in `saw.rs`, 1 in `actors.rs`), clippy has no warnings.
+
+Seen working, with creative motors at 16 RPM:
+
+- A standing saw facing east in front of a four-log oak with leaves (one leaf a step further out): it cuts the lowest
+  log and the whole tree falls, leaves included, the logs and saplings dropping beside it. The blade is drawn
+  sticking out of its front, textured as the stonecutter's.
+- A mechanical piston pushing a saw east into a column of three logs and a leaf: the piston stops at the column,
+  the saw cuts the bottom log, the column and the leaf fall, and the piston runs on to its end. Pulled back, the
+  moving saw is drawn with its blade.
+
+Not checked yet: placing a saw by hand (`axis_along_first`), a saw facing up, saws on bearings, gantries and pulleys,
+bamboo, cane, cactus and chorus, crafting it.
+
 ## Milestone 5, part 4a: drill, harvester and plough (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 156 unit tests pass (11 new

@@ -1150,6 +1150,8 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
         && name != GANTRY_CARRIAGE
         && name != super::create_actors::HARVESTER
         && name != super::create_actors::PLOUGH
+        && name != super::create_actors::SAW
+        && name != super::create_actors::SAW_ALONG
     {
         return;
     }
@@ -1268,9 +1270,14 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
                 put(&mut be.nbt, "Uninitialized", Tag::Byte(1))
             });
         }
-        n if n == DEPLOYER || n == DEPLOYER_ALONG || super::create_contraption::piston_of(n).is_some() => {
-            // DirectionalAxisKineticBlock.getStateForPlacement (deployers
-            // and mechanical pistons).
+        n if n == DEPLOYER
+            || n == DEPLOYER_ALONG
+            || n == super::create_actors::SAW
+            || n == super::create_actors::SAW_ALONG
+            || super::create_contraption::piston_of(n).is_some() =>
+        {
+            // DirectionalAxisKineticBlock.getStateForPlacement (deployers,
+            // saws and mechanical pistons).
             let mut facing = nearest_looking(p.yaw, p.pitch).opposite();
             if p.sneaking {
                 facing = facing.opposite();
@@ -1301,6 +1308,15 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
                     along,
                     super::create_contraption::PistonState::Retracted,
                 );
+                set_block(game, pos, block, &[("facing", facing.name())]);
+                return;
+            }
+            if n == super::create_actors::SAW || n == super::create_actors::SAW_ALONG {
+                let block = if along {
+                    super::create_actors::SAW_ALONG
+                } else {
+                    super::create_actors::SAW
+                };
                 set_block(game, pos, block, &[("facing", facing.name())]);
                 return;
             }

@@ -64,6 +64,12 @@ name = "create_contraption"
 source = "contraption.rs"
 
 [[module]]
+id = "saw"
+file = "crates/horizon-client/src/game.rs"
+name = "create_saw"
+source = "saw.rs"
+
+[[module]]
 id = "actors"
 file = "crates/horizon-client/src/game.rs"
 name = "create_actors"

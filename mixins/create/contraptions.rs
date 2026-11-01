@@ -1132,7 +1132,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                     let w = c.world_pos(l, 0);
                     [0, 1, 2].map(|k| f64::from(w[k]) + 0.5 + v[k] + n[k] * off)
                 };
-                tick_actors(game, Mover::Piston(pos), &blocks, &place, &|v| v, None)
+                tick_actors(game, Mover::Piston(pos), &blocks, &place, &|v| v, &|v| v, None)
             }
             _ => false,
         };
@@ -1721,7 +1721,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
 /// the offset running on between the server's updates
 /// (`getInterpolatedOffset`).
 /// A moving block's model, and what Create draws beside it
-/// (`renderInContraption`): the drill's head, still.
+/// (`renderInContraption`): the drill's head, still; the saw's blade.
 fn draw_block(
     game: &Game<'_>,
     state: BlockStateId,
@@ -1743,6 +1743,25 @@ fn draw_block(
         let orient =
             glam::Mat4::from_translation(c) * super::create_glue::rotate_to_face(f) * glam::Mat4::from_translation(-c);
         game.block_model_vertices(head, seed, m * orient, packed, false, out);
+    }
+    let saw = s.name == super::create_actors::SAW || s.name == super::create_actors::SAW_ALONG;
+    if saw && let Some(f) = s.properties.get("facing").and_then(|f| Dir::parse(f)) {
+        let vertical = f.axis() == super::create_kinetics::Axis::Y;
+        let name = if vertical {
+            "create:hz_part_saw_blade_vertical_active"
+        } else {
+            "create:hz_part_saw_blade_horizontal_active"
+        };
+        let Some(blade) = registry.default_state(name) else {
+            return;
+        };
+        let c = glam::Vec3::splat(0.5);
+        let mut turn = super::create_glue::rotate_to_face(f);
+        if vertical && s.name == super::create_actors::SAW_ALONG {
+            turn = glam::Mat4::from_rotation_y(90f32.to_radians()) * turn;
+        }
+        let orient = glam::Mat4::from_translation(c) * turn * glam::Mat4::from_translation(-c);
+        game.block_model_vertices(blade, seed, m * orient, packed, false, out);
     }
 }
 
@@ -2340,7 +2359,10 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
                 } else {
                     super::create_contraption::convert_to_angular(rpm)
                 };
-                tick_actors(game, Mover::Bearing(pos), &blocks, &place, &unrotate, Some((facing, delta)))
+                let turn = |v: [f64; 3]| {
+                    super::create_kinetics::rotate_vec(v.map(|c| c as f32), before, axis).map(f64::from)
+                };
+                tick_actors(game, Mover::Bearing(pos), &blocks, &place, &unrotate, &turn, Some((facing, delta)))
             }
             _ => false,
         };
@@ -2686,7 +2708,7 @@ fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
                         f64::from(l[2] + c.anchor[2]) + 0.5 + v[2],
                     ]
                 };
-                tick_actors(game, Mover::Pulley(pos), &blocks, &place, &|v| v, None)
+                tick_actors(game, Mover::Pulley(pos), &blocks, &place, &|v| v, &|v| v, None)
             }
             _ => false,
         };
@@ -3053,7 +3075,7 @@ fn gantries_tick(game: &mut Game<'_>, dimension: &str) {
             let at = g.at;
             let blocks = || c.blocks.iter().map(|m| (m.local, m.state)).collect();
             let place = |l: Pos, v: [f64; 3]| [0, 1, 2].map(|k| f64::from(l[k]) + at[k] + 0.5 + v[k]);
-            tick_actors(game, Mover::Gantry(g.id), &blocks, &place, &|v| v, None)
+            tick_actors(game, Mover::Gantry(g.id), &blocks, &place, &|v| v, &|v| v, None)
         };
         let step = {
             let scan = scan(game);
