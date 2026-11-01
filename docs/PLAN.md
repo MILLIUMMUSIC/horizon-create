@@ -104,7 +104,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt
      funnel (`getShapeForPosition`): pulling items off the belt into the inventory behind
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
-     wrench switches it. Not yet: redstone (paused when powered), the belt funnel's own model and flap, clicking an
+     wrench switches it. Not yet: the belt funnel's own model and flap, clicking an
      item into it. Brass funnels: part 3.
    Fluids (**compiled and unit-tested only, not yet run in the game**):
    - Fluid pipes (`fluids.rs`: `FluidTransportBehaviour`, `PipeConnection` with its three layers, `FlowSource`,
@@ -156,7 +156,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      points within 5 blocks. Its base, lower and upper arm, claw and grips are drawn from Create's partials with
      `ArmRenderer`'s transforms and the angles the server works out as Create's client does (`create:arms`); its held
      item in the claw. As in Create 6, chests and vaults are no arm points. Not yet: the selection mode's value box
-     (round robin only), redstone locking, ceiling arms, jukeboxes, composters, campfires, blaze burners, crafters,
+     (round robin only), ceiling arms, jukeboxes, composters, campfires, blaze burners, crafters,
      saws, the dance, the selection's outlines, left click to deselect, goggles on the arm, sounds.
    - Deployer (`deployer.rs`: `DeployerBlockEntity`'s cycle, `DeployerItemHandler`, `BeltDeployerCallbacks`,
      `create:deploying` and `create:item_application`; `arms.rs`): a kinetic block (`Kind::Deployer`, 4 su, its
@@ -170,7 +170,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      `BeltDeployerCallbacks` does (results not locked; the held item used, damaged or kept). Arms, funnels and chutes
      reach its hand and overflow. Pole, hand and held item are drawn as `DeployerRenderer` does, its timer running on
      the client between updates. Not yet: other item uses and blocks' own uses, entities in front (feeding, shearing,
-     attacking), fist bumps, the filter slot, redstone locking, sandpaper polishing and sequenced assembly, the
+     attacking), fist bumps, the filter slot, sandpaper polishing and sequenced assembly, the
      crafting remainder of a damaged tool, hoppers into it (no block entity), its goggle lines, sounds and particles.
    Part 3, brass funnel and belt tunnels (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md
    lists the in-game checks):
@@ -357,8 +357,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       the stationary one through the item handler (funnels, chutes, arms) until 60 ticks pass without a transfer
       (`PortableStorageInterfaceBlockEntity`'s timer). `actors.rs` has the slot rules (`insertItem`,
       `ItemHelper.extract`), the interface's timer and the actors' ticks. Not yet: vaults, toolboxes, depots and
-      creative crates as storage, double chests as one, the fluid interface, the interfaces' extension drawn
-      moving and redstone stopping them, vanilla hoppers reaching a stationary interface (they don't go through
+      creative crates as storage, double chests as one, the fluid interface, the interfaces' extension drawn moving, vanilla hoppers reaching a stationary interface (they don't go through
       the item handler), the deployer's pole and hand drawn on a moving structure, deployer filters, schematics.
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.

@@ -1,5 +1,16 @@
 # Validation
 
+## Redstone locks (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`. 165 unit tests pass, clippy has no warnings. A neighbour's signal
+(`hasNeighborSignal`, read through Horizon's level) now pauses funnels, locks arms and deployers, and stops
+portable storage interfaces.
+
+Seen working: an andesite funnel on a chest of 5 cobblestone, a redstone block beside it: nothing is pulled out;
+the redstone block taken away, the funnel empties the chest.
+
+Not checked yet: an arm and a deployer locked by a signal, a powered stationary interface ignored by a passing one.
+
 ## Milestone 5, part 3: elevator pulley (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 165 unit tests pass (1 new
