@@ -66,6 +66,7 @@ Fluids: `fluids.rs` (rules) reaches every fluid holder through the
 mod, basins' tanks in their block entity's data). Pipes and pumps tick from
 `glue::level_tick` with the pumps' speeds; block changes reach it through
 `glue::block_changed`.
+`create:arms` (A1: arm angles and held items, deployer cycles; `arms.rs`).
 
 Recipes: `prepare_content.py` flattens subfolders (`pressing/x` →
 `pressing.x`, Horizon reads only the top folder); `machines.rs` reads

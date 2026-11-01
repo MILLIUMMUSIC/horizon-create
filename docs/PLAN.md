@@ -137,7 +137,42 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      their pipe effects (`OpenPipeEffectHandler`), corners, junctions and encased, glass and smart pipes, valves,
      pipe rims and connection pieces (`PipeAttachmentModel`), particles and sounds, the item drain, the spout, the
      hose pulley, portable fluid interfaces, goggles' tank contents.
-   Part 2 and later: tunnels, mechanical arm, deployer, item vaults, brass funnels.
+   Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
+   checks):
+   - Item vault (`vault.rs`: `ItemVaultBlock`, `ItemVaultBlockEntity`, `ConnectivityHandler`; `arms.rs`): a mod block
+     entity of 20 slots per block on a barrel's template, its `facing` holding the axis (east for X, south for Z).
+     Vaults of one axis join as Create's do (up to 3 wide, 3 times as long; `formMulti` with its search order and
+     creation queue), split when a block goes and join again on their next tick. Funnels, chutes and arms reach the
+     whole vault in `SameSizeCombinedInvWrapper`'s slot order; hoppers reach one block's 20 slots. Placed against a
+     lone vault it takes that vault's axis (the hook doesn't say which face was clicked), else the player's facing's;
+     the wrench from above or below takes it out of its vault and turns it. Not yet: `LARGE` and the connected
+     textures (the plain model is drawn for every block), comparators, the vault's mounted storage on contraptions.
+   - Mechanical arm (`arm.rs`: `ArmBlockEntity`, `ArmInteractionPoint` and the types for depots, belts, basins,
+     chutes, deployers, millstones and funnels, `ArmAngleTarget`; `arms.rs`): a mod block entity holding its item on
+     an enchanting table's template, a kinetic block (`Kind::MechanicalArm`: a small cog, 2 su). Its phases, the
+     lazy tick, `getDistributableAmount` against every output, round robin (the default selection mode), belt items
+     waiting while it reaches for them, an empty hand taking its item. The arm item selects points as
+     `ArmInteractionPointHandler` does (on the server: the action bar says the mode), and the placed arm takes the
+     points within 5 blocks. Its base, lower and upper arm, claw and grips are drawn from Create's partials with
+     `ArmRenderer`'s transforms and the angles the server works out as Create's client does (`create:arms`); its held
+     item in the claw. As in Create 6, chests and vaults are no arm points. Not yet: the selection mode's value box
+     (round robin only), redstone locking, ceiling arms, jukeboxes, composters, campfires, blaze burners, crafters,
+     saws, the dance, the selection's outlines, left click to deselect, goggles on the arm, sounds.
+   - Deployer (`deployer.rs`: `DeployerBlockEntity`'s cycle, `DeployerItemHandler`, `BeltDeployerCallbacks`,
+     `create:deploying` and `create:item_application`; `arms.rs`): a kinetic block (`Kind::Deployer`, 4 su, its
+     shaft by `axis_along_first`) with a block per `axis_along_first` on a lightning rod's template, placed as
+     `DirectionalAxisKineticBlock` places it; no block entity (no template has six facings and one), so its state
+     and items are kept by the native mod and saved beside the world (`data/create_deployers_*.txt`). Its cycle and
+     timings, the overflow, right click on its front swapping hands, the wrench on its front switching punch and use.
+     `DeployerFakePlayer` is replaced by what Horizon's game code allows: using places a held block item through
+     vanilla's placement rules (`PlaceContext`), punching breaks the block in front over cycles with the held tool's
+     speed and keeps its drops; on a belt or depot below, deploying recipes apply one item per cycle as
+     `BeltDeployerCallbacks` does (results not locked; the held item used, damaged or kept). Arms, funnels and chutes
+     reach its hand and overflow. Pole, hand and held item are drawn as `DeployerRenderer` does, its timer running on
+     the client between updates. Not yet: other item uses and blocks' own uses, entities in front (feeding, shearing,
+     attacking), fist bumps, the filter slot, redstone locking, sandpaper polishing and sequenced assembly, the
+     crafting remainder of a damaged tool, hoppers into it (no block entity), its goggle lines, sounds and particles.
+   Part 3 and later: tunnels, brass funnels.
 5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions) — need
    entities with block collision, their own rendering and network sync. The biggest engine gap; expect
    upstream Horizon work (hook points for custom entities and their rendering).
@@ -195,8 +230,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   today); fluids and energy have nothing. Horizon's `docs/native-hooks-neoforge.md` proposes a
   `block_capability(pos, kind, side, out)` hook, not built as of `aa27eca`. Plan: keep each machine's inventory
   and tank access behind one small trait in the port, so moving to that hook (or contributing it upstream) touches
-  one place; until then, a shared registry module with the proposal's signature is the fallback if another
-  ported mod (Mekanism, AE2) must reach Create's fluids. Fluids do this now: pipes reach every fluid holder only
+  one place (items: `ItemHandler` in `arms.rs`, which the arm uses for every point and funnels and chutes for vaults
+  and deployers; the older belt, funnel and chute code still has its own helpers in `logistics.rs`); until then, a
+  shared registry module with the proposal's signature is the fallback if another ported mod (Mekanism, AE2) must
+  reach Create's fluids. Fluids do this now: pipes reach every fluid holder only
   through `create_fluids::FluidAccess` (`has_handler`, `handler_tanks`, `fill`, `drain`, `drain_any` at a block
   face), which `fluid_glue::Access` answers for tanks and basins; a capability hook would answer it instead.
 - No template has a fluid pipe's six connection booleans without needing support or hiding its neighbours (the
@@ -211,6 +248,18 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
 - The fluid tank's template (glass) has no block entity: its contents live in the native mod beside the world
   (lost if the native mod is removed), hoppers and comparators see nothing. Drawn fluids are opaque (the native
   draw hook takes vertices on one layer) and water takes the plains' colour, not the biome's.
+- No template has a facing and a block entity without uses of its own (a dispenser's would dispense a mod's
+  items on redstone): the deployer keeps its state beside the world and hoppers can't reach it; nor six facings and
+  `axis_along_first` (a block per value). The vault's `LARGE` and the arm's `ceiling` have no template property to
+  live in.
+- Native mods can't act as a player (`DeployerFakePlayer`): the deployer places blocks through Horizon's own
+  placement code and breaks them through the level's, which a module inside `crate::game` reaches; items' uses,
+  blocks' uses and entities need a fake-player hook.
+- `native_place_block` gets no clicked face (the vault takes a neighbour's axis only when there is one vault beside
+  it) and can't change the world (placements are finished at the level's tick); `native_right_click_block` has no hit
+  position (the deployer's front stands for Create's `location.length() > .75`).
+- No sound hook on `Game` for a native mod's block entity tick or level tick (`native_play_sound` is on the level's
+  hooks): the arm's pick-up and the deployer's sounds aren't played.
 - Loot tables a native port writes itself must be in 26.3's format (`"condition": {"type": ...}` per pool), as
   `horizon-port-pack` upgrades carried ones; 1.21.1's `conditions` list drops nothing. And a template's required
   tool applies to every block made from it: extra blocks (belt parts, the collecting funnel) need their base

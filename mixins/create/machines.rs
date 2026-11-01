@@ -102,6 +102,9 @@ pub(super) fn reset() {
 
 /// `native_block_entity`: the depot's and millstone's block entities.
 pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>) {
+    if super::create_arms::block_entity(block, entity) {
+        return;
+    }
     let chute = block == super::create_logistics::CHUTE;
     if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || chute) {
         *entity = Some((block.to_owned(), Compound::new()));
@@ -110,6 +113,9 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
 
 /// `native_block_entity_ticks`.
 pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
+    if super::create_arms::block_entity_ticks(block) {
+        *ticks = true;
+    }
     if block == DEPOT || block == MILLSTONE || block == BASIN || block == super::create_logistics::CHUTE {
         *ticks = true;
     }
@@ -118,6 +124,10 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
 /// `native_block_entity_container`: DepotItemHandler (insert into the held
 /// slot, take from any) and the millstone's input and output inventories.
 pub(super) fn block_entity_container(block: &str, container: &mut Option<ModContainer>) {
+    if let Some(c) = super::create_arms::block_entity_container(block) {
+        *container = Some(c);
+        return;
+    }
     let (slots, inputs, outputs): (usize, Vec<usize>, Vec<usize>) = match block {
         DEPOT => (DEPOT_SLOTS, vec![0], (0..DEPOT_SLOTS).collect()),
         MILLSTONE => (MILLSTONE_SLOTS, vec![0], (1..MILLSTONE_SLOTS).collect()),
@@ -285,7 +295,9 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         MILLSTONE => millstone_tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
-        _ => {}
+        _ => {
+            super::create_arms::block_entity_tick(game, pos, entity);
+        }
     }
 }
 
@@ -423,8 +435,11 @@ fn process_on_depot(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) 
     // ProcessingResult: true HOLD, false PASS.
     let hold = if !locked {
         press_received(game, press_pos, &held)
+            .or_else(|| super::create_arms::deployer_received(game, press_pos, &held))
     } else {
-        press_held(game, press_pos, &held).map(|(hold, pressed)| {
+        let worked = press_held(game, press_pos, &held)
+            .or_else(|| super::create_arms::deployer_held(game, press_pos, &held));
+        worked.map(|(hold, pressed)| {
             if let Some((results, left)) = pressed {
                 let mut rest = results.into_iter();
                 // TransportedResult.convertTo: the first result is held;
@@ -1246,7 +1261,7 @@ struct FanWorld<'a, 'g> {
     game: &'a Game<'g>,
 }
 
-fn core_axis(a: Axis) -> horizon_core::geometry::Axis {
+pub(super) fn core_axis(a: Axis) -> horizon_core::geometry::Axis {
     match a {
         Axis::X => horizon_core::geometry::Axis::X,
         Axis::Y => horizon_core::geometry::Axis::Y,

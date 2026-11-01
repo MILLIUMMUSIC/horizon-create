@@ -16,6 +16,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 pub type Pos = [i32; 3];
 
+/// The deployer's blocks: one per `AXIS_ALONG_FIRST_COORDINATE` (no template
+/// has that property).
+pub const DEPLOYER: &str = "create:deployer";
+pub const DEPLOYER_ALONG: &str = "create:hz_deployer_along";
+
 /// `AllConfigs.server().kinetics.maxRotationSpeed` default.
 pub const MAX_ROTATION_SPEED: f32 = 256.0;
 /// `kineticValidationFrequency` default.
@@ -245,7 +250,8 @@ impl Kind {
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
             | Kind::MechanicalPump(f) => Some(("facing", f.name())),
-            Kind::Millstone | Kind::MechanicalMixer | Kind::Belt(_) => None,
+            Kind::Deployer(f, _) => Some(("facing", f.name())),
+            Kind::Millstone | Kind::MechanicalMixer | Kind::Belt(_) | Kind::MechanicalArm => None,
         }
     }
 }
@@ -369,6 +375,11 @@ pub enum Kind {
     MechanicalMixer,
     /// `BeltBlock`: a segment of a mechanical belt (belt.rs).
     Belt(BeltState),
+    /// `ArmBlock`: a small cog about Y, no shafts (arm.rs).
+    MechanicalArm,
+    /// `DeployerBlock`: its facing and `AXIS_ALONG_FIRST_COORDINATE`
+    /// (deployer.rs).
+    Deployer(Dir, bool),
 }
 
 impl Kind {
@@ -392,6 +403,9 @@ impl Kind {
             "create:encased_fan" => facing().map(Kind::EncasedFan),
             "create:mechanical_pump" => facing().map(Kind::MechanicalPump),
             "create:mechanical_mixer" => Some(Kind::MechanicalMixer),
+            "create:mechanical_arm" => Some(Kind::MechanicalArm),
+            DEPLOYER => facing().map(|f| Kind::Deployer(f, false)),
+            DEPLOYER_ALONG => facing().map(|f| Kind::Deployer(f, true)),
             _ => None,
         }
     }
@@ -410,6 +424,14 @@ impl Kind {
             Kind::MechanicalPump(_) => "create:mechanical_pump",
             Kind::MechanicalMixer => "create:mechanical_mixer",
             Kind::Belt(b) => b.block().map_or("create:belt", |(name, _)| name),
+            Kind::MechanicalArm => "create:mechanical_arm",
+            Kind::Deployer(_, along) => {
+                if along {
+                    DEPLOYER_ALONG
+                } else {
+                    DEPLOYER
+                }
+            }
         }
     }
     /// `IRotate.getRotationAxis`.
@@ -422,8 +444,9 @@ impl Kind {
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
             | Kind::MechanicalPump(f) => f.axis(),
-            Kind::Millstone | Kind::MechanicalMixer => Axis::Y,
+            Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
+            Kind::Deployer(f, along) => super::create_deployer::rotation_axis(f, along),
         }
     }
     /// `IRotate.hasShaftTowards`.
@@ -437,15 +460,21 @@ impl Kind {
             Kind::Millstone => face == Dir::Down,
             Kind::EncasedFan(f) => face == f.opposite(),
             Kind::MechanicalPump(_) => false,
-            Kind::MechanicalMixer => false,
+            Kind::MechanicalMixer | Kind::MechanicalArm => false,
             Kind::Belt(b) => b.has_shaft_towards(face),
+            Kind::Deployer(f, along) => {
+                face.axis() == super::create_deployer::rotation_axis(f, along)
+            }
         }
     }
     /// `ICogWheel.isSmallCog`: the mixer is an `ICogWheel` too.
     pub fn is_small_cog(self) -> bool {
         matches!(
             self,
-            Kind::Cogwheel(_) | Kind::MechanicalMixer | Kind::MechanicalPump(_)
+            Kind::Cogwheel(_)
+                | Kind::MechanicalMixer
+                | Kind::MechanicalPump(_)
+                | Kind::MechanicalArm
         )
     }
     /// `ICogWheel.isLargeCog`.
@@ -460,6 +489,8 @@ impl Kind {
             Kind::EncasedFan(_) => 2.0,
             Kind::MechanicalPump(_) => 4.0,
             Kind::MechanicalMixer => 4.0,
+            Kind::MechanicalArm => 2.0,
+            Kind::Deployer(..) => 4.0,
             _ => 0.0,
         }
     }
@@ -1723,7 +1754,8 @@ fn kind_key(k: Kind) -> String {
         | Kind::WaterWheel(f)
         | Kind::EncasedFan(f)
         | Kind::MechanicalPump(f) => f.name(),
-        Kind::Millstone | Kind::MechanicalMixer => "",
+        Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => "",
+        Kind::Deployer(f, _) => f.name(),
         Kind::Belt(b) => {
             let face = b.block().map_or("floor", |(_, face)| face);
             return format!("{}[{};{face}]", k.block(), b.facing.name());
@@ -1842,6 +1874,8 @@ fn kind_code(k: Kind) -> (u8, u8) {
             let part = Part::ALL.iter().position(|p| *p == b.part).unwrap_or(0) as u8;
             (11, dir(b.facing) | slope << 3 | part << 6)
         }
+        Kind::MechanicalArm => (14, 0),
+        Kind::Deployer(d, along) => (13, dir(d) | u8::from(along) << 3),
     }
 }
 
@@ -1866,6 +1900,11 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
             slope: Slope::ALL.get(usize::from(state >> 3 & 7)).copied()?,
             part: Part::ALL[usize::from(state >> 6)],
         }),
+        14 => Kind::MechanicalArm,
+        13 => Kind::Deployer(
+            Dir::ALL.get(usize::from(state & 7)).copied()?,
+            state & 8 != 0,
+        ),
         _ => return None,
     })
 }
@@ -2575,6 +2614,41 @@ mod tests {
             kind_from_code(12, Dir::East as u8),
             Some(Kind::MechanicalPump(Dir::East))
         );
+    }
+
+    #[test]
+    fn an_arm_is_driven_as_a_cogwheel_and_a_deployer_by_its_shaft() {
+        let mut r = Rig::new();
+        r.place([0, 63, 0], Kind::CreativeMotor(Dir::Up));
+        r.place([0, 64, 0], Kind::Cogwheel(Axis::Y));
+        r.place([1, 64, 0], Kind::MechanicalArm);
+        r.ticks(2);
+        assert_eq!(r.speed([1, 64, 0]), -16.0);
+        let (_, stress, _, _) = r.k.stats(&r.world, [1, 64, 0]).unwrap();
+        assert_eq!(stress, 2.0 * 16.0);
+        // A deployer facing down, its shaft along Z (not along first).
+        let mut r = Rig::new();
+        r.place([0, 64, -1], Kind::CreativeMotor(Dir::South));
+        r.place([0, 64, 0], Kind::Deployer(Dir::Down, false));
+        r.ticks(2);
+        assert_eq!(r.speed([0, 64, 0]), 16.0);
+        let (_, stress, _, _) = r.k.stats(&r.world, [0, 64, 0]).unwrap();
+        assert_eq!(stress, 4.0 * 16.0);
+        // Along first, its shaft is along X: the motor misses it.
+        let mut r = Rig::new();
+        r.place([0, 64, -1], Kind::CreativeMotor(Dir::South));
+        r.place([0, 64, 0], Kind::Deployer(Dir::Down, true));
+        r.ticks(2);
+        assert_eq!(r.speed([0, 64, 0]), 0.0);
+        for k in [
+            Kind::MechanicalArm,
+            Kind::Deployer(Dir::West, true),
+            Kind::Deployer(Dir::Up, false),
+        ] {
+            assert_eq!(parse_kind_key(&kind_key(k)), Some(k));
+            let (tag, state) = kind_code(k);
+            assert_eq!(kind_from_code(tag, state), Some(k));
+        }
     }
 
     #[test]

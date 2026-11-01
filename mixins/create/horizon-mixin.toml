@@ -34,6 +34,30 @@ name = "create_fan"
 source = "fan.rs"
 
 [[module]]
+id = "vault"
+file = "crates/horizon-client/src/game.rs"
+name = "create_vault"
+source = "vault.rs"
+
+[[module]]
+id = "arm"
+file = "crates/horizon-client/src/game.rs"
+name = "create_arm"
+source = "arm.rs"
+
+[[module]]
+id = "deployer"
+file = "crates/horizon-client/src/game.rs"
+name = "create_deployer"
+source = "deployer.rs"
+
+[[module]]
+id = "arms"
+file = "crates/horizon-client/src/game.rs"
+name = "create_arms"
+source = "arms.rs"
+
+[[module]]
 id = "obj"
 file = "crates/horizon-client/src/game.rs"
 name = "create_obj"
