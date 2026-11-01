@@ -8,6 +8,7 @@
 
 use super::Game;
 use super::create_contraption::{
+    Column, Elevator, ElevatorColumn, ElevatorError,
     Actuator, ActuatorStep, Bearing, BearingContraption, BearingStep, Chassis, GantryContraption, GantryStep, Pulley,
     PulleyContraption, PulleyStep, ShaftUnder, ChassisKind, Facts, HEAD, MAX_CHASSIS_RANGE, POLE, PistonContraption,
     PistonPart, PistonState, STICKY_HEAD, StructureWorld, Sticky, attached_chassis, chassis_block, chassis_of,
@@ -109,6 +110,13 @@ struct State {
     /// Gantry shafts' speeds last tick (`onSpeedChanged`).
     shaft_rpm: HashMap<(String, Pos), f32>,
     next_gantry: u32,
+    /// Elevator pulleys at work and their speed last tick.
+    elevators: HashMap<(String, Pos), ElevatorEntry>,
+    elevator_rpm: HashMap<(String, Pos), f32>,
+    /// Elevator contact columns (`ElevatorColumn`), and the contacts given a
+    /// signal last tick.
+    columns: HashMap<(String, Column), ElevatorColumn>,
+    contact_inputs: std::collections::HashSet<(String, Pos)>,
 }
 
 /// A moving gantry (`GantryContraptionEntity`).
@@ -139,6 +147,16 @@ struct Hanging {
 struct PulleyEntry {
     pulley: Pulley,
     hanging: Option<Hanging>,
+    /// An elevator's cabin on its way (elevators_tick moves it).
+    elevator: bool,
+}
+
+/// An elevator pulley at work (`ElevatorPulleyBlockEntity`, assembled):
+/// its cabin stands in the world at `elevator.offset` below it between
+/// floors, and is taken out (as a pulley's load) while it moves.
+struct ElevatorEntry {
+    elevator: Elevator,
+    column: Column,
 }
 
 /// A bearing's turning structure, out of the world.
@@ -730,20 +748,40 @@ fn save_text(s: &State, dimension: &str) -> String {
         }
         let q = &e.pulley;
         out += &format!(
-            "pulley {} {} {} {} {} {} {}\n",
+            "pulley {} {} {} {} {} {} {} {}\n",
             p[0],
             p[1],
             p[2],
             q.offset,
             u8::from(q.running),
             u8::from(q.carrying),
-            q.last_rpm
+            q.last_rpm,
+            u8::from(e.elevator)
         );
         if let Some(h) = &e.hanging {
             let c = &h.contraption;
             out += &format!("h {} {} {} {}\n", c.anchor[0], c.anchor[1], c.anchor[2], c.initial_offset);
             out += &cargo_text(&c.blocks, &h.texts, &h.entities, &h.ranges, &h.glue);
         }
+    }
+    for ((d, p), e) in &s.elevators {
+        if d != dimension {
+            continue;
+        }
+        let el = &e.elevator;
+        out += &format!(
+            "elevator {} {} {} {} {} {} {} {} {} {}\n",
+            p[0],
+            p[1],
+            p[2],
+            el.offset,
+            el.contact_y_offset,
+            el.min_contact_y,
+            el.max_contact_y,
+            e.column.x,
+            e.column.z,
+            e.column.side.name()
+        );
     }
     // `gantry ax ay az ticks facing cx cy cz`, then its blocks.
     for (d, g) in &s.gantries {
@@ -876,6 +914,28 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                     glue: Vec::new(),
                 });
             }
+            // `elevator x y z offset contact_y min max column_x column_z side`.
+            Some("elevator") if f.len() >= 11 => {
+                let n: Vec<i32> = [1, 2, 3, 5, 6, 7, 8, 9].iter().filter_map(|&i| f[i].parse().ok()).collect();
+                let (Some(side), Ok(offset), [x, y, z, cy, min, max, cx, cz]) =
+                    (Dir::parse(f[10]), f[4].parse::<f32>(), n.as_slice())
+                else {
+                    continue;
+                };
+                s.elevators.insert(
+                    (dimension.to_owned(), [*x, *y, *z]),
+                    ElevatorEntry {
+                        elevator: Elevator {
+                            offset,
+                            prev_speed: 0.0,
+                            contact_y_offset: *cy,
+                            min_contact_y: *min,
+                            max_contact_y: *max,
+                        },
+                        column: Column { x: *cx, z: *cz, side },
+                    },
+                );
+            }
             Some("pulley") if f.len() >= 8 => {
                 let (Ok(x), Ok(y), Ok(z)) = (f[1].parse(), f[2].parse(), f[3].parse()) else {
                     continue;
@@ -887,6 +947,7 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                 entry.pulley.carrying = f[6] == "1";
                 entry.pulley.last_rpm = f[7].parse().unwrap_or(0.0);
                 entry.pulley.assemble_next_tick = false;
+                entry.elevator = f.get(8) == Some(&"1");
                 current = Some(Target::Pulley(pos));
             }
             Some("gantry") if f.len() >= 9 => {
@@ -1214,6 +1275,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     }
     bearings_tick(game, dimension, &mut changed);
     pulleys_tick(game, dimension, &mut changed);
+    elevators_tick(game, dimension, &mut changed);
     gantries_tick(game, dimension);
     let message = {
         let mut guard = state();
@@ -1263,6 +1325,7 @@ pub(super) fn world_phase(closing: bool) {
     CLIENT_GLUE.lock().unwrap_or_else(|e| e.into_inner()).clear();
     *CLIENT_BEARINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *CLIENT_PULLEYS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    ENDED_PULLEYS.lock().unwrap_or_else(|e| e.into_inner()).clear();
     *CLIENT_GANTRIES.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
@@ -1572,6 +1635,9 @@ pub(super) fn from_server(data: &[u8]) {
         );
         seen.push(pos);
     }
+    // Loads put back: what stood on them is set on their blocks.
+    let ended: Vec<PulleyView> = views.iter().filter(|(p, _)| !seen.contains(p)).map(|(_, v)| v.clone()).collect();
+    ENDED_PULLEYS.lock().unwrap_or_else(|e| e.into_inner()).extend(ended);
     views.retain(|p, _| seen.contains(p));
     drop(guard);
     let Some(n) = r.u32() else { return };
@@ -1672,6 +1738,31 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
             .collect();
         let speed = if moving { v.speed } else { 0.0 };
         carry(game, None, &blocks, [0.0, -f64::from(speed), 0.0]);
+    }
+    // A load put back on the grid: the window's player standing on it is
+    // set on top of its blocks (it may have lagged a little below).
+    let ended = std::mem::take(&mut *ENDED_PULLEYS.lock().unwrap_or_else(|e| e.into_inner()));
+    for v in ended {
+        let y = f64::from(v.initial) - f64::from(v.offset_now().round());
+        let Some(p) = game.player.as_mut() else {
+            break;
+        };
+        let at = [p.position.x, p.position.y, p.position.z];
+        let top = v
+            .blocks
+            .iter()
+            .filter(|b| b.2)
+            .map(|(l, ..)| [f64::from(l[0] + v.anchor[0]), f64::from(l[1] + v.anchor[1]) + y, f64::from(l[2] + v.anchor[2])])
+            .filter(|b| at[0] + 0.3 > b[0] && at[0] - 0.3 < b[0] + 1.0 && at[2] + 0.3 > b[2] && at[2] - 0.3 < b[2] + 1.0)
+            .map(|b| b[1] + 1.0)
+            .filter(|top| at[1] >= top - 0.6 && at[1] <= top + 0.3)
+            .reduce(f64::max);
+        if let Some(top) = top {
+            p.position.y = top;
+            p.velocity.y = 0.0;
+            p.ground.on_ground = true;
+            p.fall_distance = 0.0;
+        }
     }
     // And on a moving gantry.
     let gantries: Vec<GantryView> = CLIENT_GANTRIES
@@ -2632,6 +2723,13 @@ fn assemble_pulley(game: &mut Game<'_>, pos: Pos, rpm: f32, entry: &mut PulleyEn
     let Some(contraption) = contraption.filter(|_| built == Some(true)) else {
         return true;
     };
+    entry.hanging = Some(take_hanging(game, contraption));
+    true
+}
+
+/// What hangs on a pulley taken out of the world (`removeBlocksFromWorld`),
+/// with its block entities, chassis ranges and glue.
+fn take_hanging(game: &mut Game<'_>, contraption: PulleyContraption<BlockStateId>) -> Hanging {
     let at: Vec<Pos> = contraption
         .blocks
         .iter()
@@ -2656,14 +2754,13 @@ fn assemble_pulley(game: &mut Game<'_>, pos: Pos, rpm: f32, entry: &mut PulleyEn
     let all = s.glue.entry(dimension).or_default();
     let glue: Vec<(Pos, Pos)> = contraption.glue.iter().filter_map(|&g| all.get(g).copied()).collect();
     all.retain(|g| !glue.contains(g));
-    entry.hanging = Some(Hanging {
+    Hanging {
         contraption,
         texts,
         entities,
         ranges,
         glue,
-    });
-    true
+    }
 }
 
 /// `PulleyBlockEntity.disassemble` at `grid` (rope and magnet put down to
@@ -2826,9 +2923,9 @@ fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
     }
     // Pulleys that are gone put down what hung there, without rope.
     let gone: Vec<Pos> = taken
-        .keys()
-        .filter(|p| !found.iter().any(|(q, _)| q == *p) && game.world.loaded(p[0], p[2]))
-        .copied()
+        .iter()
+        .filter(|(p, e)| !e.elevator && !found.iter().any(|(q, _)| q == *p) && game.world.loaded(p[0], p[2]))
+        .map(|(p, _)| *p)
         .collect();
     for p in gone {
         stop_actors(game, Mover::Pulley(p));
@@ -2860,6 +2957,9 @@ struct PulleyView {
 }
 
 static CLIENT_PULLEYS: Mutex<Option<HashMap<Pos, PulleyView>>> = Mutex::new(None);
+/// Pulley loads (and elevator cabins) just put back, for the window's player
+/// standing on them.
+static ENDED_PULLEYS: Mutex<Vec<PulleyView>> = Mutex::new(Vec::new());
 
 impl PulleyView {
     /// `getInterpolatedOffset`, running on between the server's updates.
@@ -3223,6 +3323,309 @@ fn draw_gantries(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_cli
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = glam::Mat4::from_translation((corner - camera).as_vec3());
             draw_block(game, *state, seed, m, packed, out);
+        }
+    }
+}
+
+// ---- Elevator pulleys --------------------------------------------------------------
+
+const REDSTONE_CONTACT: &str = "create:redstone_contact";
+const ELEVATOR_CONTACT: &str = "create:elevator_contact";
+
+/// A redstone or elevator contact at `pos` and its facing.
+fn contact_at(game: &Game<'_>, pos: Pos) -> Option<(String, Dir)> {
+    let name = name_at(game, pos);
+    if name != REDSTONE_CONTACT && name != ELEVATOR_CONTACT {
+        return None;
+    }
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    Some((name, Dir::parse(&prop(game, id, "facing")?)?))
+}
+
+/// `ElevatorColumn.gatherAll`: the redstone contacts of the column turn into
+/// elevator contacts, and every elevator contact in it is counted.
+fn gather_column(game: &mut Game<'_>, column: Column, into: &mut ElevatorColumn) {
+    let (lo, hi) = (game.world.shape.min_y, game.world.shape.max_y());
+    for y in lo..hi {
+        let pos = [column.x, y, column.z];
+        if !game.world.loaded(pos[0], pos[2]) {
+            return;
+        }
+        let Some((name, facing)) = contact_at(game, pos) else {
+            continue;
+        };
+        if facing != column.side {
+            continue;
+        }
+        if name == REDSTONE_CONTACT {
+            set_named(game, pos, ELEVATOR_CONTACT, &[("facing", facing.name()), ("powered", "false")]);
+        }
+        into.add(y);
+    }
+}
+
+/// An elevator contact's signal out (`POWERING`).
+fn set_contact_output(game: &mut Game<'_>, pos: Pos, on: bool) {
+    let Some((name, facing)) = contact_at(game, pos) else {
+        return;
+    };
+    if name != ELEVATOR_CONTACT {
+        return;
+    }
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    let want = if on { "true" } else { "false" };
+    if prop(game, id, "powered").as_deref() != Some(want) {
+        set_named(game, pos, ELEVATOR_CONTACT, &[("facing", facing.name()), ("powered", want)]);
+    }
+}
+
+/// `ElevatorPulleyBlockEntity.assemble`: the cabin under the pulley at `pos`
+/// (the first block below that stops a rope), its one sideways redstone
+/// contact giving the column; the cabin stays where it is, its floor called.
+fn assemble_elevator(game: &mut Game<'_>, pos: Pos) -> Result<Option<ElevatorEntry>, ElevatorError> {
+    let mut i = 1;
+    while i <= super::create_contraption::MAX_ROPE_LENGTH {
+        let p = below(pos, i);
+        if p[1] < game.world.shape.min_y {
+            break;
+        }
+        let facts = game.res.facts().get(game.world.block(p[0], p[1], p[2]));
+        if !game.block_collision_shape(p).boxes().is_empty() && !facts.replaceable {
+            break;
+        }
+        i += 1;
+    }
+    let offset = i - 1;
+    let contraption = {
+        let scan = scan(game);
+        match PulleyContraption::assemble(&scan, pos, offset) {
+            Ok(Some(c)) => c,
+            _ => return Ok(None),
+        }
+    };
+    let contacts: Vec<(Pos, Dir)> = contraption
+        .blocks
+        .iter()
+        .filter_map(|b| {
+            let at = [0, 1, 2].map(|k| b.local[k] + contraption.anchor[k]);
+            contact_at(game, at).map(|(_, f)| (b.local, f))
+        })
+        .collect();
+    let (column, contact_y) = super::create_contraption::elevator_column(&contacts, contraption.anchor)?;
+    let dim = game.dim.id().to_owned();
+    let mut col = state()
+        .as_mut()
+        .and_then(|s| s.columns.remove(&(dim.clone(), column)))
+        .unwrap_or_default();
+    if col.active {
+        state().get_or_insert_with(State::default).columns.insert((dim, column), col);
+        return Err(ElevatorError::ColumnConflict);
+    }
+    let elevator = Elevator::new(pos[1], offset, contact_y);
+    col.target = Some(elevator.level_at(pos[1], offset));
+    gather_column(game, column, &mut col);
+    col.active = true;
+    state().get_or_insert_with(State::default).columns.insert((dim, column), col);
+    Ok(Some(ElevatorEntry { elevator, column }))
+}
+
+/// The elevator pulleys' ticks: assembled when they start turning, their
+/// cabins taken out and moved toward the floor called (`getMovementSpeed`)
+/// and put back on arrival, the contact there giving a signal; contacts
+/// given a signal call the cabin (`ElevatorContactBlock.neighborChanged`).
+fn elevators_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
+    let found: Vec<(Pos, f32)> = super::create_glue::with_kinetics(game, |k, level| {
+        k.positions()
+            .into_iter()
+            .filter_map(|p| match k.get(p).map(|e| e.kind) {
+                Some(Kind::ElevatorPulley(_)) => Some((p, k.speed_of(level, p))),
+                _ => None,
+            })
+            .collect()
+    });
+    let dim = dimension.to_owned();
+    // Contacts called by a signal.
+    let columns: Vec<Column> = state()
+        .as_ref()
+        .map(|s| s.columns.keys().filter(|(d, _)| *d == dim).map(|(_, c)| *c).collect())
+        .unwrap_or_default();
+    for column in columns {
+        let ys = state()
+            .as_ref()
+            .and_then(|s| s.columns.get(&(dim.clone(), column)).map(|c| c.contacts.clone()))
+            .unwrap_or_default();
+        for y in ys {
+            let at = [column.x, y, column.z];
+            if !game.world.loaded(at[0], at[2]) || contact_at(game, at).is_none() {
+                continue;
+            }
+            let bp = horizon_core::position::BlockPos::new(at[0], at[1], at[2]);
+            let signal = game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, bp));
+            let rising = {
+                let mut guard = state();
+                let s = guard.get_or_insert_with(State::default);
+                let was = !s.contact_inputs.insert((dim.clone(), at)) || !signal;
+                if !signal {
+                    s.contact_inputs.remove(&(dim.clone(), at));
+                }
+                let col = s.columns.entry((dim.clone(), column)).or_default();
+                let call = signal && !was && col.calling != Some(y);
+                if call {
+                    col.call(y);
+                }
+                call.then(|| col.contacts.clone())
+            };
+            // callToContactAndUpdate: the other contacts stop giving a signal.
+            if let Some(all) = rising {
+                for other in all.into_iter().filter(|o| *o != y) {
+                    set_contact_output(game, [column.x, other, column.z], false);
+                }
+            }
+        }
+    }
+    for (pos, rpm) in found {
+        if !game.world.loaded(pos[0], pos[2]) {
+            continue;
+        }
+        let key = (dim.clone(), pos);
+        let (entry, started) = {
+            let mut guard = state();
+            let s = guard.get_or_insert_with(State::default);
+            let before = s.elevator_rpm.insert(key.clone(), rpm).unwrap_or(0.0);
+            (s.elevators.remove(&key), before == 0.0 && rpm != 0.0)
+        };
+        let mut entry = match entry {
+            Some(e) => e,
+            None if started => match assemble_elevator(game, pos) {
+                Ok(Some(e)) => e,
+                Ok(None) => continue,
+                Err(e) => {
+                    log::debug!("Create: elevator at {pos:?} can't assemble: {e:?}");
+                    continue;
+                }
+            },
+            None => continue,
+        };
+        // A loaded elevator gathers its column again (columns aren't saved),
+        // its floor the one it stands at.
+        let known = state().as_ref().is_some_and(|s| s.columns.contains_key(&(dim.clone(), entry.column)));
+        if !known {
+            let mut col = ElevatorColumn::default();
+            gather_column(game, entry.column, &mut col);
+            col.active = true;
+            col.target = Some(entry.elevator.level_at(pos[1], entry.elevator.offset.round() as i32));
+            state().get_or_insert_with(State::default).columns.insert((dim.clone(), entry.column), col);
+        }
+        let target_y = state()
+            .as_ref()
+            .and_then(|s| s.columns.get(&(dim.clone(), entry.column)).and_then(|c| c.target));
+        let el = &mut entry.elevator;
+        let target = el.target_offset(pos[1], target_y);
+        let moving = state().as_ref().is_some_and(|s| s.pulleys.get(&key).is_some_and(|e| e.elevator));
+        if !moving && rpm != 0.0 && target != el.offset as i32 {
+            // The cabin is taken out to move.
+            let taken = {
+                let scan = scan(game);
+                PulleyContraption::assemble(&scan, pos, el.offset as i32).ok().flatten()
+            };
+            if let Some(c) = taken {
+                let hanging = take_hanging(game, c);
+                el.prev_speed = 0.0;
+                let mut pulley = Pulley::default();
+                pulley.running = true;
+                pulley.carrying = true;
+                pulley.offset = el.offset;
+                pulley.range = super::create_contraption::MAX_ROPE_LENGTH;
+                pulley.assemble_next_tick = false;
+                state().get_or_insert_with(State::default).pulleys.insert(
+                    key.clone(),
+                    PulleyEntry {
+                        pulley,
+                        hanging: Some(hanging),
+                        elevator: true,
+                    },
+                );
+                changed.push(pos);
+            }
+        }
+        let cabin = state().as_mut().and_then(|s| {
+            if s.pulleys.get(&key).is_some_and(|e| e.elevator) {
+                s.pulleys.remove(&key)
+            } else {
+                None
+            }
+        });
+        if let Some(mut cabin) = cabin {
+            let (mut speed, arrived) = el.movement_speed(target, rpm);
+            // Arrived, it eases onto the floor (a quarter of the way a tick)
+            // before it is put back.
+            let settled = arrived && (target as f32 - el.offset).abs() <= 1.0 / 128.0;
+            if arrived && !settled {
+                speed = (target as f32 - el.offset) * 0.25;
+            }
+            if settled || rpm == 0.0 {
+                // Put back on the floor (or where it is, stopped).
+                let grid = if arrived { target } else { el.offset.round() as i32 };
+                disassemble_pulley(game, pos, cabin.hanging.take(), grid, false);
+                el.offset = grid as f32;
+                el.prev_speed = 0.0;
+                changed.push(pos);
+                if arrived {
+                    // triggerContact.
+                    let level = el.level_at(pos[1], grid);
+                    set_contact_output(game, [entry.column.x, level, entry.column.z], true);
+                }
+            } else {
+                if let Some(h) = &cabin.hanging {
+                    let c = &h.contraption;
+                    let y = f64::from(c.anchor[1]) + f64::from(c.initial_offset) - f64::from(el.offset);
+                    let blocks: Vec<[f64; 3]> = c
+                        .blocks
+                        .iter()
+                        .filter(|b| b.solid)
+                        .map(|b| {
+                            [f64::from(b.local[0] + c.anchor[0]), f64::from(b.local[1]) + y, f64::from(b.local[2] + c.anchor[2])]
+                        })
+                        .collect();
+                    carry(game, Some(dimension), &blocks, [0.0, -f64::from(speed), 0.0]);
+                }
+                el.offset += speed;
+                cabin.pulley.offset = el.offset;
+                // What clients take as its speed (`movement_speed` of it).
+                cabin.pulley.last_rpm = speed * 512.0;
+                state().get_or_insert_with(State::default).pulleys.insert(key.clone(), cabin);
+            }
+        }
+        state().get_or_insert_with(State::default).elevators.insert(key, entry);
+    }
+    // Elevator pulleys that are gone: their column is free again, a moving
+    // cabin is put down where it is.
+    let gone: Vec<(Pos, Column)> = state()
+        .as_ref()
+        .map(|s| {
+            s.elevators
+                .iter()
+                .filter(|((d, p), _)| *d == dim && game.world.loaded(p[0], p[2]) && !matches!(
+                    super::create_glue::kind_at(game, *p),
+                    Some(Kind::ElevatorPulley(_))
+                ))
+                .map(|((_, p), e)| (*p, e.column))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (p, column) in gone {
+        let (cabin, offset) = {
+            let mut guard = state();
+            let s = guard.get_or_insert_with(State::default);
+            let e = s.elevators.remove(&(dim.clone(), p));
+            if let Some(c) = s.columns.get_mut(&(dim.clone(), column)) {
+                c.active = false;
+            }
+            (s.pulleys.remove(&(dim.clone(), p)), e.map(|e| e.elevator.offset))
+        };
+        if let (Some(mut cabin), Some(offset)) = (cabin, offset) {
+            disassemble_pulley(game, p, cabin.hanging.take(), offset.round() as i32, false);
+            changed.push(p);
         }
     }
 }

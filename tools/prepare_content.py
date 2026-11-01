@@ -551,6 +551,7 @@ def fit_logistics(content, names):
     fit_actors(content)
     fit_saws(content, names)
     fit_psi(content)
+    fit_contacts(content, names)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -561,6 +562,7 @@ def fit_logistics(content, names):
            for name in tunnel_blocks(kind) if name != f"{kind}_tunnel"},
         **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
         "hz_mechanical_saw_along": "create:mechanical_saw",
+        "elevator_contact": "create:redstone_contact",
         **{name: f"create:{piston}" for name, (piston, _, _) in piston_blocks().items() if name != piston},
         "hz_mechanical_piston_head_sticky": "create:mechanical_piston_head",
         **{name: f"create:{base}" for name, (base, _) in chassis_blocks().items() if name != base},
@@ -971,6 +973,35 @@ def fit_psi(content):
     for v in original.get("variants", {}).values():
         v["model"] = "create:block/portable_storage_interface/hz_whole"
     write_json(states / f"{name}.json", original)
+
+
+# Redstone and elevator contacts (WrenchableDirectionalBlock): a lightning
+# rod's template, whose `powered` gives off a signal as the contact's
+# (`POWERING` for the elevator contact; its `calling` and input are kept by
+# the native mod).
+def fit_contacts(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    for name in ("redstone_contact", "elevator_contact"):
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:lightning_rod"
+        decl.pop("default_state", None)
+        decl["shapes"] = {"property": "facing", "values": {f: [box(0, 0, 0, 16, 16, 16)] for f in FACINGS}}
+        decl.setdefault("properties", {})["light"] = 0
+        if name == "elevator_contact":
+            decl["item"] = False
+            names.setdefault("block.create.elevator_contact", "Elevator Contact")
+            write_json(loot_tables / f"{name}.json", loot(name, ["create:redstone_contact"]))
+        write_json(blocks / f"{name}.json", decl)
+    path = states / "elevator_contact.json"
+    if path.exists():
+        variants = {}
+        for key, model in read_json(path).get("variants", {}).items():
+            props = dict(kv.split("=", 1) for kv in key.split(","))
+            if props.get("calling") == "false" and props.get("powered") == "false":
+                variants[f"facing={props['facing']},powered={props['powering']}"] = model
+        write_json(path, {"variants": variants})
 
 
 def share_block_tags(content, bases):

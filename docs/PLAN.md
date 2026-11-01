@@ -294,7 +294,22 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       the coil and the moving rope and magnet (`AbstractPulleyRenderer`). Rope and magnet stand on a lightning
       rod's template for their shapes; the pulley is placed as `HorizontalAxisKineticBlock` places it. Not yet:
       mirrored pulleys sharing one load (`startMirroringOther`), the coil's scrolling texture, the movement mode
-      box, the threshold switch reading it, breaking the rope, the elevator pulley.
+      box, the threshold switch reading it, breaking the rope.
+      Elevator pulley (**done, checked in the game in part**): `contraption.rs` has `ElevatorContraption`'s
+      contact (`elevator_column`: the one sideways redstone contact in the cabin gives the column and its height),
+      `ElevatorColumn` (contacts in order, the floor called) and `ElevatorPulleyBlockEntity`'s motion
+      (`getTargetOffset`, `getMovementSpeed`: speeding up and slowing down toward the floor). `contraptions.rs`
+      assembles it when its shaft starts turning (the cabin is what stands below the gap under the pulley, the
+      column's redstone contacts become elevator contacts, `gatherAll`), calls a floor when a contact gets a
+      signal (`neighborChanged`), takes the cabin out and moves it as a pulley's load (drawn, riders carried),
+      eases it onto the floor, and the floor's contact gives a signal (`triggerContact`). Contacts (redstone and
+      elevator) are on a lightning rod's template: its `powered` is the contact's signal out. Unlike Create, the
+      cabin is put back as blocks once it has arrived (contraptions aren't entities here, so nothing could stand
+      on it while it waits) and taken out again for the next call; a client puts a player standing on a load
+      back on top of it when it is put back. Not yet: floor names and the contact's screen, contraption controls
+      choosing floors, door controls, the pulley's belt and coil drawn, the click that disassembles it, columns
+      saved (gathered again on load), redstone contacts touching each other (`hasValidContact`) and on moving
+      structures, placing contacts by the looking direction, mirrored elevator pulleys, actors on the cabin.
       Gantry shaft and carriage (**done, checked in the game in part**): `contraption.rs` has the shaft's parts
       (`updateShape`), `canAssembleOn`, `getPinionMovementSpeed`, `GantryContraption` (from the carriage, the
       shaft behind anchoring) and `GantryContraptionEntity`'s tick (`checkPinionShaft`: no shaft or no speed

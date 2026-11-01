@@ -89,7 +89,7 @@ fn level_dimension_id(d: horizon_world::level::Dimension) -> &'static str {
 }
 
 /// Our rotating block at `pos` in the level in place, if loaded.
-fn kind_at(game: &Game<'_>, pos: Pos) -> Option<Kind> {
+pub(super) fn kind_at(game: &Game<'_>, pos: Pos) -> Option<Kind> {
     let [x, y, z] = pos;
     let world = &game.world;
     if !world.loaded(x, z) || y < world.shape.min_y || y >= world.shape.max_y() {
@@ -976,6 +976,11 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                 orient = glam::Mat4::from_rotation_y(90f32.to_radians()) * orient;
             }
             want.push((blade, None, orient, a, 0.0, 0.0));
+        }
+        // ElevatorPulleyRenderer: a shaft across it (its coil and belt aren't drawn).
+        Kind::ElevatorPulley(_) => {
+            let a = view.kind.rotation_axis();
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
         }
         Kind::Drill(f) => {
             // DrillRenderer: its head, turned to face its way.

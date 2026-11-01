@@ -1,5 +1,23 @@
 # Validation
 
+## Milestone 5, part 3: elevator pulley (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 165 unit tests pass (1 new
+in `contraption.rs`), clippy has no warnings.
+
+Seen working, with an elevator pulley at y 112 turned by a creative motor (16 RPM), a cabin of a slime block with a
+redstone contact facing east at y 101, and redstone contacts facing west at y 101 and 107 in the column beside it:
+
+- When the motor starts, the column's contacts turn into elevator contacts.
+- A redstone block beside the upper contact calls the cabin: it rises (drawn moving), slows down, settles at
+  y 107 and is put back as blocks; the upper contact then gives a signal. Called back down, the upper contact
+  stops and the lower one gives the signal.
+- A player standing on the cabin rides it up and down and stays on top when it stops (four trips).
+- After closing and reopening the world, the column is gathered again and calls still work.
+
+Not checked yet: placing the pulley and contacts by hand, a cabin of several blocks, several floors, a button on a
+contact, mobs riding, saving mid-trip, crafting.
+
 ## Milestone 5, part 4c: storage, deployer and portable storage interface (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 164 unit tests pass (2 new

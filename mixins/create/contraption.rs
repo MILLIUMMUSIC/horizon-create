@@ -1626,6 +1626,142 @@ pub fn gantry_tick(
     GantryStep::Moved(motion)
 }
 
+// ---- Elevator pulley -------------------------------------------------------------
+
+/// `ElevatorColumn.ColumnCoords`: the column of elevator contacts at `x`,
+/// `z`, facing `side`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Column {
+    pub x: i32,
+    pub z: i32,
+    pub side: Dir,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ElevatorError {
+    NoContacts,
+    TooManyContacts,
+    ColumnConflict,
+}
+
+/// `ElevatorContraption.capture`'s redstone contacts: of the contacts in the
+/// structure (their place from the anchor and facing), the one facing
+/// sideways gives the column (the block it faces, turned back) and the
+/// contact's height in the cabin (`contactYOffset`).
+pub fn elevator_column(
+    contacts: &[(Pos, Dir)],
+    anchor: Pos,
+) -> Result<(Column, i32), ElevatorError> {
+    let sideways: Vec<&(Pos, Dir)> = contacts
+        .iter()
+        .filter(|(_, f)| f.axis() != Axis::Y)
+        .collect();
+    match sideways.as_slice() {
+        [] => Err(ElevatorError::NoContacts),
+        [(local, facing)] => {
+            let at = step(*local, *facing, 1);
+            Ok((
+                Column {
+                    x: at[0] + anchor[0],
+                    z: at[2] + anchor[2],
+                    side: facing.opposite(),
+                },
+                at[1],
+            ))
+        }
+        _ => Err(ElevatorError::TooManyContacts),
+    }
+}
+
+/// `ElevatorColumn`: its contacts' heights, the floor called and whether an
+/// elevator runs on it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ElevatorColumn {
+    pub contacts: Vec<i32>,
+    pub target: Option<i32>,
+    pub active: bool,
+    /// The contact calling now (`CALLING`).
+    pub calling: Option<i32>,
+}
+
+impl ElevatorColumn {
+    /// `add`: kept in order.
+    pub fn add(&mut self, y: i32) {
+        if let Err(i) = self.contacts.binary_search(&y) {
+            self.contacts.insert(i, y);
+        }
+    }
+
+    pub fn remove(&mut self, y: i32) {
+        self.contacts.retain(|c| *c != y);
+    }
+
+    /// `callToContactAndUpdate`: the contact at `y` calls (the others stop).
+    pub fn call(&mut self, y: i32) {
+        self.calling = Some(y);
+        self.target = Some(y);
+    }
+}
+
+/// `ElevatorPulleyBlockEntity`'s motion: the cabin's distance below the
+/// pulley (`offset`) and the speed it had (`prevSpeed`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Elevator {
+    pub offset: f32,
+    pub prev_speed: f32,
+    /// The cabin's contact below its anchor (`contactYOffset`).
+    pub contact_y_offset: i32,
+    pub max_contact_y: i32,
+    pub min_contact_y: i32,
+}
+
+impl Elevator {
+    /// After `assemble`: the floors it can reach from the pulley at `pulley_y`.
+    pub fn new(pulley_y: i32, offset: i32, contact_y_offset: i32) -> Self {
+        let max = pulley_y + contact_y_offset - 1;
+        Elevator {
+            offset: offset as f32,
+            prev_speed: 0.0,
+            contact_y_offset,
+            max_contact_y: max,
+            min_contact_y: max - MAX_ROPE_LENGTH,
+        }
+    }
+
+    /// The contact level the cabin stands at with `offset`.
+    pub fn level_at(&self, pulley_y: i32, offset: i32) -> i32 {
+        pulley_y + self.contact_y_offset - 1 - offset
+    }
+
+    /// `getTargetOffset` (with `getCurrentTargetY`): the offset of the floor
+    /// called, or where it is when none can be reached.
+    pub fn target_offset(&self, pulley_y: i32, target_y: Option<i32>) -> i32 {
+        match target_y {
+            Some(y) if y >= self.min_contact_y && y <= self.max_contact_y => {
+                pulley_y - y + self.contact_y_offset - 1
+            }
+            _ => self.offset as i32,
+        }
+    }
+
+    /// `getMovementSpeed` on the server: toward `target`, as fast as the
+    /// speed allows (`convertToLinear(speed * 2)`), speeding up and slowing
+    /// down smoothly; and whether it has arrived.
+    pub fn movement_speed(&mut self, target: i32, rpm: f32) -> (f32, bool) {
+        let diff = target as f32 - self.offset;
+        let movement = convert_to_linear(rpm * 2.0).clamp(-1.99, 1.99);
+        let limit = movement.abs();
+        let acc = 0.0075 + (0.0175 - 0.0075) * limit;
+        let deceleration = (2.0 * diff.abs() * acc).sqrt();
+        let speed = diff
+            .clamp(-limit, limit)
+            .clamp(self.prev_speed - acc, self.prev_speed + acc)
+            .clamp(-deceleration, deceleration);
+        self.prev_speed = speed;
+        (speed, diff.abs() < 0.5)
+    }
+}
+
 // ---- Bearings ------------------------------------------------------------------
 
 /// `BearingContraption`: what a mechanical or windmill bearing turns, the
@@ -2572,6 +2708,60 @@ mod tests {
             gantry_tick([0.0; 3], Dir::Up, 9, true, shaft, |_, _| false),
             GantryStep::Moved([0.0; 3])
         );
+    }
+
+    #[test]
+    fn elevators_find_their_column_and_floors() {
+        // A contact facing east one block up in the cabin anchored at (10, 60, 5).
+        let (column, y) = elevator_column(
+            &[([1, 1, 0], Dir::East), ([0, 0, 0], Dir::Down)],
+            [10, 60, 5],
+        )
+        .unwrap();
+        assert_eq!(
+            column,
+            Column {
+                x: 12,
+                z: 5,
+                side: Dir::West
+            }
+        );
+        assert_eq!(y, 1);
+        assert_eq!(
+            elevator_column(&[([0, 0, 0], Dir::Up)], [0; 3]),
+            Err(ElevatorError::NoContacts)
+        );
+        assert_eq!(
+            elevator_column(&[([0, 0, 0], Dir::East), ([0, 1, 0], Dir::North)], [0; 3]),
+            Err(ElevatorError::TooManyContacts)
+        );
+        let mut col = ElevatorColumn::default();
+        for y in [70, 61, 65, 61] {
+            col.add(y);
+        }
+        assert_eq!(col.contacts, vec![61, 65, 70]);
+        col.call(70);
+        assert_eq!((col.target, col.calling), (Some(70), Some(70)));
+
+        // Pulley at y 80, cabin 19 below (its contact 1 up): level 61.
+        let mut e = Elevator::new(80, 19, 1);
+        assert_eq!(e.level_at(80, 19), 61);
+        assert_eq!(e.target_offset(80, Some(70)), 10);
+        assert_eq!(e.target_offset(80, Some(90)), 19);
+        // At 64 rpm it speeds up 0.0175 a tick toward 0.5, then slows down.
+        let (v, arrived) = e.movement_speed(10, 64.0);
+        assert!((v + 0.01).abs() < 1e-6 && !arrived);
+        let mut ticks = 0;
+        loop {
+            let (v, arrived) = e.movement_speed(10, 64.0);
+            if arrived {
+                break;
+            }
+            e.offset += v;
+            ticks += 1;
+            assert!(ticks < 400);
+        }
+        assert!((e.offset - 10.0).abs() < 0.5);
     }
 
     #[test]
