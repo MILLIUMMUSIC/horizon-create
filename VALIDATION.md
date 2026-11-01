@@ -1,5 +1,13 @@
 # Validation
 
+## Parts drawn on moving structures (macOS, offscreen)
+
+Seen working: a piston pushing a slime block with a shaft, a cogwheel, a drill and a harvester: the shaft's and
+cogwheel's models are drawn while it moves (they were invisible before), the harvester's blade spins, the drill's
+head is drawn.
+
+Not checked yet: the drill's head spinning seen close, bearings (parts drawn still there), pulleys and gantries.
+
 ## Elevator clicks and redstone contacts (macOS, offscreen)
 
 Seen working: two redstone contacts placed facing each other both give a signal, and stop when one is taken

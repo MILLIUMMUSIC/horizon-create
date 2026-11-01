@@ -247,8 +247,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       per piston, `axis_along_first` and state, placed as `DirectionalAxisKineticBlock` places them; poles and
       heads on lightning rods. Not yet: the movement mode value box (`MOVE_NEVER_PLACE`, `MOVE_PLACE_RETURNED`),
       redstone and sequenced gearshifts, pistons inside other contraptions (`moveMechanicalPiston`), breaking a
-      pole or the head breaking the rest, kinetic and other natively drawn blocks drawn while moving (their
-      models are blank), block entity renderers while moving (chests), colliding with other contraptions,
+      pole or the head breaking the rest, natively drawn parts other than shafts' and cogs' models, the drill's head and the harvester's blade drawn while moving (shafts and cogs don't turn), block entity renderers while moving (chests), colliding with other contraptions,
       pushing entities that stand in the way (only riders and entities inside move), LAN guests carried (the
       server can't move a remote player), sounds and the assembly error on goggles.
    2. Super glue and linear and radial chassis (what a structure takes in), the mechanical bearing and windmill
@@ -331,7 +330,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       actors before it moves, breaks blocks with their drops, harvests and tills, and ticks standing drills; the
       drill's head is a partial drawn turning in the world and still on moving structures. The harvester and plough
       stand on a grindstone's template (`facing`, `face` kept at wall). Not yet: hurting and throwing entities (engine gap), the cobblestone generator
-      optimisation, the drill's and harvester's parts turning on moving structures, actors on gantries and
+      optimisation, actors on gantries and
       pulleys checked in the game, placing a
       harvester on a wall while looking steeply up or down (it faces the player).
       Part 4b, the mechanical saw (**done, checked in the game in part**): `saw.rs` has `TreeCutter.findTree`

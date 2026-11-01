@@ -1860,32 +1860,79 @@ pub(super) fn with_storage<R>(
     Some(f(&states, entities))
 }
 
+/// When clients started, for parts turning with time (`AnimationTickHolder`).
+static CLOCK: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
 /// A moving block's model, and what Create draws beside it
-/// (`renderInContraption`): the drill's head, still; the saw's blade.
+/// (`renderInContraption`): kinetic blocks' own models (shafts and cogs),
+/// the drill's head and the harvester's blade turning with the structure's
+/// `motion` (blocks a tick, `getAnimationSpeed`), the saw's blade.
 fn draw_block(
     game: &Game<'_>,
     state: BlockStateId,
     seed: i64,
     m: glam::Mat4,
     packed: u32,
+    motion: [f64; 3],
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
-    game.block_model_vertices(state, seed, m, packed, false, out);
     let registry = game.pack.assets.registry;
     let Some(s) = registry.state(state) else {
         return;
     };
+    let seconds = CLOCK.get_or_init(Instant::now).elapsed().as_secs_f32();
+    let anim = super::create_actors::animation_speed(motion);
+    let c = glam::Vec3::splat(0.5);
+    let centred = |r: glam::Mat4| glam::Mat4::from_translation(c) * r * glam::Mat4::from_translation(-c);
+    let facing = s.properties.get("facing").and_then(|f| Dir::parse(f));
+    let axis_unit = |d: Dir| {
+        let n = d.normal();
+        glam::Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32).abs()
+    };
+    // Rotating blocks keep their model on a hidden block of their own.
+    if matches!(s.name.as_str(), "create:shaft" | "create:cogwheel" | "create:large_cogwheel") {
+        let holder = format!("create:hz_{}", &s.name["create:".len()..]);
+        let axis = s.properties.get("axis").map(String::as_str).unwrap_or("y");
+        if let Some(h) = registry.default_state(&holder).and_then(|b| game.with_props(b, &[("axis", axis)])) {
+            game.block_model_vertices(h, seed, m, packed, false, out);
+        }
+        return;
+    }
+    if s.name == super::create_actors::HARVESTER
+        && let Some(f) = facing
+        && let Some(base) = registry
+            .default_state("create:hz_mechanical_harvester_base")
+            .and_then(|b| game.with_props(b, &[("facing", f.name())]))
+        && let Some(blade) = registry.default_state("create:hz_part_harvester_blade")
+    {
+        game.block_model_vertices(base, seed, m, packed, false, out);
+        // HarvesterRenderer.transform: turned to face its way, the blade
+        // spun about its pivot (6/16 up, 9/16 in) while it works.
+        let active = super::create_actors::is_active(f, motion);
+        let angle = if active { (seconds * anim) % 360.0 } else { 0.0 };
+        let pivot = glam::Vec3::new(0.0, 6.0 / 16.0, 9.0 / 16.0);
+        let turn = centred(glam::Mat4::from_rotation_y(f.horizontal_angle().to_radians()))
+            * glam::Mat4::from_translation(pivot)
+            * glam::Mat4::from_axis_angle(glam::Vec3::NEG_X, angle.to_radians())
+            * glam::Mat4::from_translation(-pivot);
+        game.block_model_vertices(blade, seed, m * turn, packed, false, out);
+        return;
+    }
+    game.block_model_vertices(state, seed, m, packed, false, out);
     if s.name == super::create_actors::DRILL
-        && let Some(f) = s.properties.get("facing").and_then(|f| Dir::parse(f))
+        && let Some(f) = facing
         && let Some(head) = registry.default_state("create:hz_part_drill_head")
     {
-        let c = glam::Vec3::splat(0.5);
-        let orient =
-            glam::Mat4::from_translation(c) * super::create_glue::rotate_to_face(f) * glam::Mat4::from_translation(-c);
+        // DrillRenderer.renderInContraption: spinning unless it moves away.
+        let active = super::create_actors::is_active(f, motion);
+        let angle = if active { (seconds * anim) % 360.0 } else { 0.0 };
+        let orient = centred(
+            glam::Mat4::from_axis_angle(axis_unit(f), angle.to_radians()) * super::create_glue::rotate_to_face(f),
+        );
         game.block_model_vertices(head, seed, m * orient, packed, false, out);
     }
     let saw = s.name == super::create_actors::SAW || s.name == super::create_actors::SAW_ALONG;
-    if saw && let Some(f) = s.properties.get("facing").and_then(|f| Dir::parse(f)) {
+    if saw && let Some(f) = facing {
         let vertical = f.axis() == super::create_kinetics::Axis::Y;
         let name = if vertical {
             "create:hz_part_saw_blade_vertical_active"
@@ -1895,13 +1942,11 @@ fn draw_block(
         let Some(blade) = registry.default_state(name) else {
             return;
         };
-        let c = glam::Vec3::splat(0.5);
         let mut turn = super::create_glue::rotate_to_face(f);
         if vertical && s.name == super::create_actors::SAW_ALONG {
             turn = glam::Mat4::from_rotation_y(90f32.to_radians()) * turn;
         }
-        let orient = glam::Mat4::from_translation(c) * turn * glam::Mat4::from_translation(-c);
-        game.block_model_vertices(blade, seed, m * orient, packed, false, out);
+        game.block_model_vertices(blade, seed, m * centred(turn), packed, false, out);
     }
 }
 
@@ -1932,7 +1977,7 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
                 cell[0], cell[1], cell[2],
             ));
             let m = glam::Mat4::from_translation((corner - camera).as_vec3());
-            draw_block(game, *state, seed, m, packed, out);
+            draw_block(game, *state, seed, m, packed, [0, 1, 2].map(|i| f64::from(n[i]) * f64::from(v.speed)), out);
         }
     }
 }
@@ -2694,7 +2739,7 @@ fn draw_bearings(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_cli
             let cell = [0, 1, 2].map(|k| local[k] + anchor[k]);
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = turn * glam::Mat4::from_translation(glam::Vec3::new(local[0] as f32, local[1] as f32, local[2] as f32) - 0.5);
-            draw_block(game, *state, seed, m, packed, out);
+            draw_block(game, *state, seed, m, packed, [0.0; 3], out);
         }
     }
 }
@@ -3043,7 +3088,7 @@ fn draw_pulleys(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_clie
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = glam::Mat4::from_translation((corner - camera).as_vec3());
-            draw_block(game, *state, seed, m, packed, out);
+            draw_block(game, *state, seed, m, packed, [0.0, -f64::from(v.speed), 0.0], out);
         }
     }
 }
@@ -3364,7 +3409,7 @@ fn draw_gantries(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_cli
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = glam::Mat4::from_translation((corner - camera).as_vec3());
-            draw_block(game, *state, seed, m, packed, out);
+            draw_block(game, *state, seed, m, packed, v.motion, out);
         }
     }
 }

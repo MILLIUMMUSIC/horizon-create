@@ -225,6 +225,8 @@ PARTIALS = {
     # SawRenderer's blades.
     **{f"saw_blade_{way}_{mode}": f"create:block/mechanical_saw/blade_{way}_{mode}"
        for way in ("horizontal", "vertical") for mode in ("active", "inactive", "reversed")},
+    # HarvesterRenderer's blade, turning on moving structures.
+    "harvester_blade": "create:block/mechanical_harvester/blade",
     # DrillRenderer's head.
     "drill_head": "create:block/mechanical_drill/head",
     # GantryCarriageRenderer's wheels.
@@ -907,6 +909,15 @@ def fit_actors(content):
             {"when": {"facing": f}, "apply": {"model": m, "y": turn} if turn else {"model": m}}
             for f, turn in HORIZONTAL_TURNS.items() for m in models
         ]})
+    # The harvester without its blade, for moving structures (the native mod
+    # turns the blade there).
+    write_json(blocks / "hz_mechanical_harvester_base.json",
+               {"template": "minecraft:grindstone", "item": False, "default_state": {"face": "wall"}})
+    write_json(states / "hz_mechanical_harvester_base.json", {"multipart": [
+        {"when": {"facing": f}, "apply": {"model": ACTORS["mechanical_harvester"][0], "y": turn} if turn
+         else {"model": ACTORS["mechanical_harvester"][0]}}
+        for f, turn in HORIZONTAL_TURNS.items()
+    ]})
 
 
 # The mechanical saw (SawBlock, a DirectionalAxisKineticBlock): as the
