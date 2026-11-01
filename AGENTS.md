@@ -81,7 +81,11 @@ Bearings tick there too (`bearings_tick`); a windmill's generated speed is
 the kinetics' `flow_score`.
 Actors (drill, harvester, plough): rules in `actors.rs`, Horizon's side in
 `actor_glue.rs` (`tick_actors` runs before each structure moves and tells
-it whether it is stalled; standing drills tick from `glue::level_tick`).
+it whether it is stalled; standing drills and saws tick from `glue::level_tick`).
+A structure's storage is its captured chests' data (`storage_items`); a
+deployer's state rides along as `HzDeployer` text in its block's data;
+stationary portable storage interfaces are kept in `actor_glue.rs` and reached
+through `arms.rs`'s item handler (`Inv::Psi`).
 
 Fluids: `fluids.rs` (rules) reaches every fluid holder through the
 `FluidAccess` trait; `fluid_glue.rs` answers it (tanks kept in the native

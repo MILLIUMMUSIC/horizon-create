@@ -550,6 +550,7 @@ def fit_logistics(content, names):
     fit_gantry(content, names)
     fit_actors(content)
     fit_saws(content, names)
+    fit_psi(content)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -936,6 +937,40 @@ def fit_saws(content, names):
             if props.get("axis_along_first") == along and props.get("flipped") == "false" and "facing" in props:
                 variants[f"facing={props['facing']}"] = model
         write_json(states / f"{name}.json", {"variants": variants})
+
+
+# The portable storage interface: a lightning rod's template (six facings);
+# its renderer's middle and top parts are merged into its model as they rest
+# (the middle 6/16 up), since they only move while it hands items over.
+def fit_psi(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    models = content / "assets" / "create" / "models" / "block" / "portable_storage_interface"
+    name = "portable_storage_interface"
+    decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+    decl["template"] = "minecraft:lightning_rod"
+    decl.pop("default_state", None)
+    decl["shapes"] = {"property": "facing", "values": {f: [facing_box(f, box(0, 0, 0, 16, 14, 16))] for f in FACINGS}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / f"{name}.json", decl)
+    if not (models / "block.json").exists():
+        return
+    whole = read_json(models / "block.json")
+    for part, dy in (("block_middle", 6), ("block_top", 0)):
+        model = read_json(models / f"{part}.json")
+        whole["textures"].update({k: v for k, v in model.get("textures", {}).items() if k != "particle"})
+        for e in model.get("elements", []):
+            e = json.loads(json.dumps(e))
+            e["from"][1] += dy
+            e["to"][1] += dy
+            if "rotation" in e and "origin" in e["rotation"]:
+                e["rotation"]["origin"][1] += dy
+            whole["elements"].append(e)
+    write_json(models / "hz_whole.json", whole)
+    original = read_json(states / f"{name}.json")
+    for v in original.get("variants", {}).values():
+        v["model"] = "create:block/portable_storage_interface/hz_whole"
+    write_json(states / f"{name}.json", original)
 
 
 def share_block_tags(content, bases):

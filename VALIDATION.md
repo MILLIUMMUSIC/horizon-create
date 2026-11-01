@@ -1,5 +1,23 @@
 # Validation
 
+## Milestone 5, part 4c: storage, deployer and portable storage interface (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 164 unit tests pass (2 new
+in `actors.rs`), clippy has no warnings.
+
+Seen working, with a mechanical piston pushing two slime blocks east at y 104 (16 RPM), a chest with 10 cobblestone
+on the first, a deployer facing down on the second, a drill in front and a portable storage interface facing north
+beside the second; a stone ahead of the drill, a stationary interface facing south two blocks north of the path with
+an andesite funnel behind it:
+
+- The deployer takes cobblestone from the chest and places it below the path, one block at each step.
+- The drill breaks the stone; its cobblestone goes into the chest.
+- The moving interface stops at the stationary one; the funnel pulls the chest's cobblestone out through it (8:
+  10 - 3 placed + 1 drilled) and the chest on the structure ends empty; then the structure moves on.
+
+Not checked yet: harvesters and saws filling the storage, the deployer punching, barrels and shulker boxes, saving
+mid-move with a deployer, placing an interface by hand, an arm or chute at a stationary interface.
+
 ## Milestone 5, part 4b: mechanical saw (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 162 unit tests pass (5 new

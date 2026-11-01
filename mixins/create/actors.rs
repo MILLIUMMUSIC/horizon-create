@@ -3,10 +3,15 @@
 // `BlockBreakingMovementBehaviour` (the drill and the plough break what they
 // move into, stalling the structure until it breaks),
 // `HarvesterMovementBehaviour`, `PloughMovementBehaviour`, and the
-// standing drill's `BlockBreakingKineticBlockEntity`. The world is asked
-// through small facts and traits. No Horizon types.
+// standing drill's `BlockBreakingKineticBlockEntity`; the deployer and the
+// portable storage interface on the move (`DeployerMovementBehaviour`,
+// `PortableStorageInterfaceMovement` and the stationary interface's timer),
+// and the structure's storage (`MountedStorageManager.getAllItems`, as
+// `ItemHandlerHelper.insertItem` and `ItemHelper.extract` use it). The world
+// is asked through small facts and traits. No Horizon types.
 
-use super::create_kinetics::{Axis, Dir, Pos};
+use super::create_belt::Stack;
+use super::create_kinetics::{Axis, DEPLOYER, DEPLOYER_ALONG, Dir, Pos};
 
 pub const DRILL: &str = "create:mechanical_drill";
 pub const HARVESTER: &str = "create:mechanical_harvester";
@@ -14,6 +19,7 @@ pub const PLOUGH: &str = "create:mechanical_plough";
 pub const SAW: &str = "create:mechanical_saw";
 /// The saw with `AXIS_ALONG_FIRST_COORDINATE` (a block of its own here).
 pub const SAW_ALONG: &str = "create:hz_mechanical_saw_along";
+pub const PSI: &str = "create:portable_storage_interface";
 
 /// `SmartBlockEntity`'s default `lazyTickRate`.
 pub const LAZY_TICK_RATE: u64 = 10;
@@ -29,6 +35,10 @@ pub enum ActorKind {
     Plough,
     /// `SawMovementBehaviour`.
     Saw,
+    /// `DeployerMovementBehaviour`.
+    Deployer,
+    /// `PortableStorageInterfaceMovement`.
+    Psi,
 }
 
 impl ActorKind {
@@ -38,6 +48,8 @@ impl ActorKind {
             HARVESTER => Some(ActorKind::Harvester),
             PLOUGH => Some(ActorKind::Plough),
             SAW | SAW_ALONG => Some(ActorKind::Saw),
+            DEPLOYER | DEPLOYER_ALONG => Some(ActorKind::Deployer),
+            PSI => Some(ActorKind::Psi),
             _ => None,
         }
     }
@@ -48,6 +60,8 @@ impl ActorKind {
             ActorKind::Harvester => HARVESTER,
             ActorKind::Plough => PLOUGH,
             ActorKind::Saw => SAW,
+            ActorKind::Deployer => DEPLOYER,
+            ActorKind::Psi => PSI,
         }
     }
 
@@ -56,6 +70,8 @@ impl ActorKind {
         let scale = match self {
             ActorKind::Drill | ActorKind::Saw => 0.65,
             ActorKind::Harvester | ActorKind::Plough => 0.45,
+            ActorKind::Deployer => 2.0,
+            ActorKind::Psi => 1.85,
         };
         facing.normal().map(|c| f64::from(c) * scale)
     }
@@ -81,10 +97,203 @@ pub fn pointing_towards(v: [f64; 3], d: Dir) -> bool {
     (0..3).map(|k| f64::from(n[k]) * v[k] / l).sum::<f64>() > 0.125
 }
 
-/// `isActive` of the drill, harvester and plough: not while moving away
-/// from where they face.
+/// `isActive` of the drill, saw, harvester and plough: not while moving
+/// away from where they face.
 pub fn is_active(facing: Dir, relative_motion: [f64; 3]) -> bool {
     !pointing_towards(relative_motion, facing.opposite())
+}
+
+impl ActorKind {
+    /// `MovementBehaviour.isActive` (the deployer and the interface always).
+    pub fn active(self, facing: Dir, relative_motion: [f64; 3]) -> bool {
+        match self {
+            ActorKind::Deployer | ActorKind::Psi => true,
+            _ => is_active(facing, relative_motion),
+        }
+    }
+}
+
+/// `ItemHandlerHelper.insertItem` over the structure's slots (each holds a
+/// stack up to its `max_stack`): what doesn't fit.
+pub fn insert_item<S: Stack>(
+    slots: &mut [Option<S>],
+    stack: S,
+    same: impl Fn(&S, &S) -> bool,
+) -> Option<S> {
+    let mut left = stack;
+    for slot in slots.iter_mut() {
+        let limit = left.max_stack().min(64);
+        match slot {
+            Some(existing) => {
+                if !same(existing, &left) || existing.count() >= limit {
+                    continue;
+                }
+                let moved = left.count().min(limit - existing.count());
+                existing.set_count(existing.count() + moved);
+                left.set_count(left.count() - moved);
+            }
+            None => {
+                let moved = left.count().min(limit);
+                let mut put = left.clone();
+                put.set_count(moved);
+                *slot = Some(put);
+                left.set_count(left.count() - moved);
+            }
+        }
+        if left.count() == 0 {
+            return None;
+        }
+    }
+    Some(left)
+}
+
+/// `ItemHelper.extract(inv, test, 1, false)`: one item of the first stack
+/// that passes.
+pub fn extract_one<S: Stack>(slots: &mut [Option<S>], test: impl Fn(&S) -> bool) -> Option<S> {
+    for slot in slots.iter_mut() {
+        let Some(existing) = slot else {
+            continue;
+        };
+        if !test(existing) {
+            continue;
+        }
+        let mut out = existing.clone();
+        out.set_count(1);
+        existing.set_count(existing.count() - 1);
+        if existing.count() == 0 {
+            *slot = None;
+        }
+        return Some(out);
+    }
+    None
+}
+
+/// `PortableStorageInterfaceBlockEntity.ANIMATION`, and `CLogistics.psiTimeout`.
+pub const PSI_ANIMATION: i32 = 4;
+pub const PSI_TIMEOUT: i32 = 60;
+
+/// A stationary portable storage interface (`PortableStorageInterfaceBlockEntity`
+/// on the server): `connected` is the structure it hands items to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Psi<E> {
+    pub transfer_timer: i32,
+    pub distance: f32,
+    pub keep_alive: i32,
+    pub powered: bool,
+    pub connected: Option<E>,
+}
+
+impl<E> Default for Psi<E> {
+    fn default() -> Self {
+        Psi {
+            transfer_timer: 0,
+            distance: 0.0,
+            keep_alive: 0,
+            powered: false,
+            connected: None,
+        }
+    }
+}
+
+impl<E: Copy + PartialEq> Psi<E> {
+    /// `startTransferringTo`.
+    pub fn start_transferring_to(&mut self, entity: E, distance: f32) {
+        if self.connected == Some(entity) {
+            return;
+        }
+        self.distance = distance.min(2.0);
+        self.connected = Some(entity);
+        self.transfer_timer = 6 + PSI_ANIMATION * 2;
+    }
+
+    /// `stopTransferring`.
+    pub fn stop_transferring(&mut self) {
+        self.connected = None;
+    }
+
+    /// `isConnected`.
+    pub fn is_connected(&self) -> bool {
+        self.transfer_timer >= PSI_ANIMATION && self.transfer_timer <= PSI_TIMEOUT + PSI_ANIMATION
+    }
+
+    /// `canTransfer`, `alive` telling whether the structure still moves.
+    pub fn can_transfer(&mut self, alive: bool) -> bool {
+        if self.connected.is_some() && !alive {
+            self.stop_transferring();
+        }
+        self.connected.is_some() && self.is_connected()
+    }
+
+    /// `onContentTransferred`.
+    pub fn transferred(&mut self) {
+        self.transfer_timer = PSI_TIMEOUT + PSI_ANIMATION;
+    }
+
+    /// `tick` on the server.
+    pub fn tick(&mut self) {
+        if self.keep_alive > 0 {
+            self.keep_alive -= 1;
+            if self.keep_alive == 0 {
+                self.stop_transferring();
+                self.transfer_timer = PSI_ANIMATION - 1;
+                return;
+            }
+        }
+        self.transfer_timer = self.transfer_timer.min(PSI_ANIMATION * 2 + PSI_TIMEOUT);
+        let can_decrement =
+            self.transfer_timer > PSI_ANIMATION || self.transfer_timer > 0 && self.keep_alive == 0;
+        if can_decrement {
+            self.transfer_timer -= 1;
+            if self.transfer_timer <= 0 || self.powered {
+                self.stop_transferring();
+            }
+        }
+    }
+
+    /// Nothing left to keep for it.
+    pub fn idle(&self) -> bool {
+        self.connected.is_none() && self.transfer_timer <= 0 && self.keep_alive == 0
+    }
+}
+
+/// `PortableStorageInterfaceMovement.tick` on the server, once the actor
+/// found a stationary interface at `target` (`WorkingPos`; `None` once
+/// lost): the structure stalls when its next step would take the actor
+/// away from it, and goes on once the interface's timer has run down.
+/// `timer` is the interface's `transferTimer` (the glue sets `keepAlive`).
+pub fn psi_tick(ctx: &mut ActorContext, target: Option<[f64; 3]>, timer: Option<i32>) {
+    let Some(target) = target else {
+        if ctx.stall {
+            ctx.stall = false;
+        }
+        return;
+    };
+    let Some(position) = ctx.position else {
+        return;
+    };
+    let dist = |a: [f64; 3]| ((0..3).map(|k| (a[k] - target[k]).powi(2)).sum::<f64>()).sqrt();
+    let next = [0, 1, 2].map(|k| position[k] + ctx.motion[k]);
+    if !ctx.stall && dist(position) < dist(next) {
+        ctx.stall = true;
+    }
+    let Some(timer) = timer else {
+        ctx.stall = false;
+        return;
+    };
+    if ctx.stall && timer <= PSI_ANIMATION {
+        ctx.stall = false;
+    }
+}
+
+/// `DeployerMovementBehaviour.tick` while it stalls breaking a block: true
+/// when the hand strikes again (every 21 ticks, `Timer`).
+pub fn deployer_strikes(ctx: &mut ActorContext) -> bool {
+    if ctx.stationary_timer < 20 {
+        ctx.stationary_timer += 1;
+        return false;
+    }
+    ctx.stationary_timer = 0;
+    true
 }
 
 /// A block an actor is breaking (`BreakingPos`, `Progress`,
@@ -866,6 +1075,90 @@ mod tests {
         let e = tick_breaker(&mut ctx, ActorKind::Saw, &world, 32.0);
         assert!(matches!(e, Some(BreakEvent::Broken { .. })));
         assert_eq!(ctx.waiting, None);
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Item(&'static str, u32);
+
+    impl Stack for Item {
+        fn count(&self) -> u32 {
+            self.1
+        }
+        fn set_count(&mut self, count: u32) {
+            self.1 = count;
+        }
+        fn max_stack(&self) -> u32 {
+            if self.0 == "pearl" { 16 } else { 64 }
+        }
+    }
+
+    #[test]
+    fn storage_fills_slots_in_order() {
+        let same = |a: &Item, b: &Item| a.0 == b.0;
+        let mut slots = vec![Some(Item("stone", 60)), None, Some(Item("dirt", 1)), None];
+        assert_eq!(insert_item(&mut slots, Item("stone", 10), same), None);
+        assert_eq!(slots[0], Some(Item("stone", 64)));
+        assert_eq!(slots[1], Some(Item("stone", 6)));
+        assert_eq!(
+            insert_item(&mut slots, Item("pearl", 40), same),
+            Some(Item("pearl", 24))
+        );
+        assert_eq!(slots[3], Some(Item("pearl", 16)));
+        assert_eq!(
+            extract_one(&mut slots, |s| s.0 == "dirt"),
+            Some(Item("dirt", 1))
+        );
+        assert_eq!(slots[2], None);
+        assert_eq!(extract_one(&mut slots, |_| true), Some(Item("stone", 1)));
+        assert_eq!(slots[0], Some(Item("stone", 63)));
+        assert_eq!(ActorKind::of(DEPLOYER_ALONG), Some(ActorKind::Deployer));
+        assert!(ActorKind::Psi.active(Dir::East, [-1.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn interfaces_hold_the_structure_until_idle() {
+        let mut psi: Psi<u32> = Psi::default();
+        psi.start_transferring_to(7, 3.0);
+        assert_eq!((psi.distance, psi.transfer_timer), (2.0, 14));
+        assert!(psi.can_transfer(true));
+        // The actor keeps it alive while it waits; with nothing moved, the
+        // timer runs down to the animation's length and stays there.
+        for _ in 0..30 {
+            psi.keep_alive = 2;
+            psi.tick();
+        }
+        assert_eq!(psi.transfer_timer, PSI_ANIMATION);
+        psi.transferred();
+        assert_eq!(psi.transfer_timer, 64);
+        // Left alone (no keep alive) it disconnects.
+        psi.keep_alive = 1;
+        psi.tick();
+        assert_eq!(psi.connected, None);
+        assert!(!psi.can_transfer(true));
+
+        let mut ctx = ActorContext {
+            position: Some([0.5, 0.5, 0.5]),
+            motion: [0.1, 0.0, 0.0],
+            ..ActorContext::default()
+        };
+        // Moving away from the interface behind: stall while it transfers.
+        psi_tick(&mut ctx, Some([-1.5, 0.5, 0.5]), Some(30));
+        assert!(ctx.stall);
+        psi_tick(&mut ctx, Some([-1.5, 0.5, 0.5]), Some(PSI_ANIMATION));
+        assert!(!ctx.stall);
+        // Still coming nearer: no stall.
+        let mut ctx2 = ActorContext {
+            position: Some([0.5, 0.5, 0.5]),
+            motion: [0.1, 0.0, 0.0],
+            ..ActorContext::default()
+        };
+        psi_tick(&mut ctx2, Some([3.5, 0.5, 0.5]), Some(30));
+        assert!(!ctx2.stall);
+        let mut n = 0;
+        while !deployer_strikes(&mut ctx2) {
+            n += 1;
+        }
+        assert_eq!(n, 20);
     }
 
     #[test]

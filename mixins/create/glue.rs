@@ -386,6 +386,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_arms::level_tick(game, dimension);
     super::create_actor_glue::breakers_tick(game, dimension, &drills);
     super::create_contraptions::level_tick(game, dimension);
+    super::create_actor_glue::psis_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
     if messages.is_empty() && depots.is_empty() {
         return;

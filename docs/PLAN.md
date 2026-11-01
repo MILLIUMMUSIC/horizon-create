@@ -319,8 +319,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       stand on a grindstone's template (`facing`, `face` kept at wall). Not yet: items put into the structure's
       storage (they drop at the actor), hurting and throwing entities (engine gap), the cobblestone generator
       optimisation, the drill's and harvester's parts turning on moving structures, actors on gantries and
-      pulleys checked in the game, the deployer and portable storage interfaces on contraptions (part 4c, with
-      the structure's storage), `DirectionalKineticBlock`'s placement for the drill (the clicked face decides here), placing a
+      pulleys checked in the game, `DirectionalKineticBlock`'s placement for the drill (the clicked face decides here), placing a
       harvester on a wall while looking steeply up or down (it faces the player).
       Part 4b, the mechanical saw (**done, checked in the game in part**): `saw.rs` has `TreeCutter.findTree`
       (logs and roots, `validateCut`, leaves by distance, attachments, vertical plants from the top, chorus) and
@@ -331,6 +330,22 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       it (`dropItemFromCutTree`). The blade is a partial (active, reversed or still), drawn on moving structures
       too. Not yet: the saw facing up processing items (`create:cutting`, belts and dropped items) and its filter,
       `flipped`, the tree's blocks' break effects by chance (all show), dynamic trees, wrenching a saw.
+      Part 4c, storage, deployers and portable storage interfaces (**done, checked in the game in part**): the
+      structure's storage is its chests', barrels' and shulker boxes' slots (`create:chest_mounted_storage`,
+      `create:simple_mounted_storage`) in its blocks' order, read and written in their captured data
+      (`MountedStorageManager.getAllItems`); actors put what they collect there first (`collectOrDropItem`, the
+      saw's felled tree too). A deployer's state (held item, mode, inventory) goes with its block; on the move it
+      takes an item from the storage into an empty hand, uses it or punches 2 blocks ahead
+      (`DeployerMovementBehaviour`, the stationary deployer's actions), stalls while it breaks a block (striking
+      every 21 ticks) and puts its other items into the storage. The portable storage interface (`Kind`-less, a
+      lightning rod's template, its middle and top merged into its model) finds a stationary one facing it one or
+      two blocks ahead, stalls the structure in front of it and hands the structure's storage to whatever reaches
+      the stationary one through the item handler (funnels, chutes, arms) until 60 ticks pass without a transfer
+      (`PortableStorageInterfaceBlockEntity`'s timer). `actors.rs` has the slot rules (`insertItem`,
+      `ItemHelper.extract`), the interface's timer and the actors' ticks. Not yet: vaults, toolboxes, depots and
+      creative crates as storage, double chests as one, the fluid interface, the interfaces' extension drawn
+      moving and redstone stopping them, vanilla hoppers reaching a stationary interface (they don't go through
+      the item handler), the deployer's pole and hand drawn on a moving structure, deployer filters, schematics.
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.
 7. **Everything else**: Ponder scenes, schematics and the schematicannon, decoration sets, Create's

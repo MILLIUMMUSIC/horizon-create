@@ -395,6 +395,13 @@ fn capture(game: &mut Game<'_>, at: Pos, state: BlockStateId) -> Option<horizon_
     let facts = game.res.facts().get(state);
     let name = facts.name.to_string();
     let has_entity = facts.block_entity;
+    // A deployer's state (kept by the native mod) goes with its block.
+    if name == super::create_kinetics::DEPLOYER || name == super::create_kinetics::DEPLOYER_ALONG {
+        let text = super::create_arms::take_deployer(game.dim.id(), at);
+        let mut c = horizon_world::nbt::Compound::new();
+        c.insert("HzDeployer".into(), horizon_world::nbt::Tag::String(text.as_str().into()));
+        return Some(c);
+    }
     let entity = game.world.block_entities.remove(&key).filter(|_| has_entity)?;
     match horizon_client::save::encode_block_entity(key, &entity, &name) {
         horizon_world::nbt::Tag::Compound(c) => Some(c),
@@ -436,6 +443,14 @@ fn put_back(game: &mut Game<'_>, at: Pos, state: BlockStateId, solid: bool, nbt:
         let _ = game.destroy_block_dropping(at);
     }
     set(game, at, state, flags::UPDATE_MOVE_BY_PISTON | flags::UPDATE_ALL);
+    // A deployer's state back with the native mod.
+    if let Some(nbt) = &nbt
+        && let Some(horizon_world::nbt::Tag::String(text)) = nbt.get(&"HzDeployer".into())
+    {
+        let dim = game.dim.id().to_owned();
+        super::create_arms::put_deployer(&dim, at, &text.to_string_lossy());
+        return;
+    }
     // The block entity's data back, at its new place (`loadWithComponents`).
     if let Some(mut nbt) = nbt {
         use horizon_world::nbt::Tag;
@@ -1122,9 +1137,10 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             });
         let before = piston.actuator.offset;
         // The structure's actors, before it moves (`tickActors`).
-        let stalled = match &piston.running {
+        let stalled = match &mut piston.running {
             Some(r) if piston.actuator.running => {
                 let c = &r.contraption;
+                let entities = &mut r.entities;
                 let n = facing.normal().map(f64::from);
                 let off = f64::from(before);
                 let blocks = || c.blocks.iter().map(|b| (b.local, b.state)).collect();
@@ -1132,7 +1148,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                     let w = c.world_pos(l, 0);
                     [0, 1, 2].map(|k| f64::from(w[k]) + 0.5 + v[k] + n[k] * off)
                 };
-                tick_actors(game, Mover::Piston(pos), &blocks, &place, &|v| v, &|v| v, None)
+                tick_actors(game, Mover::Piston(pos), &blocks, &place, &|v| v, &|v| v, None, entities)
             }
             _ => false,
         };
@@ -1720,6 +1736,37 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
 /// `ContraptionRenderer`: every moving block where its contraption is now,
 /// the offset running on between the server's updates
 /// (`getInterpolatedOffset`).
+/// `f` on a moving structure's blocks' states and their block entities'
+/// data (its storage), if it still moves.
+pub(super) fn with_storage<R>(
+    game: &Game<'_>,
+    mover: Mover,
+    f: impl FnOnce(&[BlockStateId], &mut [Option<horizon_world::nbt::Compound>]) -> R,
+) -> Option<R> {
+    let dim = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.as_mut()?;
+    let (states, entities): (Vec<BlockStateId>, &mut Vec<Option<horizon_world::nbt::Compound>>) = match mover {
+        Mover::Piston(p) => {
+            let r = s.pistons.get_mut(&(dim, p))?.running.as_mut()?;
+            (r.contraption.blocks.iter().map(|b| b.state).collect(), &mut r.entities)
+        }
+        Mover::Bearing(p) => {
+            let t = s.bearings.get_mut(&(dim, p))?.turning.as_mut()?;
+            (t.contraption.blocks.iter().map(|b| b.state).collect(), &mut t.entities)
+        }
+        Mover::Pulley(p) => {
+            let h = s.pulleys.get_mut(&(dim, p))?.hanging.as_mut()?;
+            (h.contraption.blocks.iter().map(|b| b.state).collect(), &mut h.entities)
+        }
+        Mover::Gantry(id) => {
+            let g = s.gantries.iter_mut().find(|(d, g)| *d == dim && g.id == id).map(|(_, g)| g)?;
+            (g.contraption.blocks.iter().map(|b| b.state).collect(), &mut g.entities)
+        }
+    };
+    Some(f(&states, entities))
+}
+
 /// A moving block's model, and what Create draws beside it
 /// (`renderInContraption`): the drill's head, still; the saw's blade.
 fn draw_block(
@@ -2340,9 +2387,10 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
         b.speed(rpm, windmill);
         let before = b.angle;
         let mut turning = entry.turning.take();
-        let stalled = match &turning {
+        let stalled = match &mut turning {
             Some(t) if b.running => {
                 let c = &t.contraption;
+                let entities = &mut t.entities;
                 let axis = facing.axis();
                 let anchor = c.anchor;
                 let blocks = || c.blocks.iter().map(|m| (m.local, m.state)).collect();
@@ -2362,7 +2410,16 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
                 let turn = |v: [f64; 3]| {
                     super::create_kinetics::rotate_vec(v.map(|c| c as f32), before, axis).map(f64::from)
                 };
-                tick_actors(game, Mover::Bearing(pos), &blocks, &place, &unrotate, &turn, Some((facing, delta)))
+                tick_actors(
+                    game,
+                    Mover::Bearing(pos),
+                    &blocks,
+                    &place,
+                    &unrotate,
+                    &turn,
+                    Some((facing, delta)),
+                    entities,
+                )
             }
             _ => false,
         };
@@ -2696,9 +2753,10 @@ fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
         entry.pulley.range = Pulley::range_at(pos[1], min_y);
         entry.pulley.speed(rpm);
         let before = entry.pulley.offset;
-        let stalled = match &entry.hanging {
+        let stalled = match &mut entry.hanging {
             Some(h) if entry.pulley.running => {
                 let c = &h.contraption;
+                let entities = &mut h.entities;
                 let y = f64::from(c.anchor[1]) + f64::from(c.initial_offset) - f64::from(before);
                 let blocks = || c.blocks.iter().map(|m| (m.local, m.state)).collect();
                 let place = |l: Pos, v: [f64; 3]| {
@@ -2708,7 +2766,7 @@ fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
                         f64::from(l[2] + c.anchor[2]) + 0.5 + v[2],
                     ]
                 };
-                tick_actors(game, Mover::Pulley(pos), &blocks, &place, &|v| v, &|v| v, None)
+                tick_actors(game, Mover::Pulley(pos), &blocks, &place, &|v| v, &|v| v, None, entities)
             }
             _ => false,
         };
@@ -3072,10 +3130,11 @@ fn gantries_tick(game: &mut Game<'_>, dimension: &str) {
         g.ticks += 1;
         let stalled = {
             let c = &g.contraption;
+            let entities = &mut g.entities;
             let at = g.at;
             let blocks = || c.blocks.iter().map(|m| (m.local, m.state)).collect();
             let place = |l: Pos, v: [f64; 3]| [0, 1, 2].map(|k| f64::from(l[k]) + at[k] + 0.5 + v[k]);
-            tick_actors(game, Mover::Gantry(g.id), &blocks, &place, &|v| v, &|v| v, None)
+            tick_actors(game, Mover::Gantry(g.id), &blocks, &place, &|v| v, &|v| v, None, entities)
         };
         let step = {
             let scan = scan(game);

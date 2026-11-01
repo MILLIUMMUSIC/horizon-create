@@ -9,13 +9,14 @@
 use super::Game;
 use super::create_actors::{
     ActorContext, ActorKind, BreakEvent, BreakWorld, Breaker, Cut, LAZY_TICK_RATE, PloughFacts, PlantFacts,
-    cancel_stall, containing, drill_can_break, harvest, is_active, is_breakable, moving_break_speed,
+    Psi, cancel_stall, containing, deployer_strikes, drill_can_break, extract_one, harvest, insert_item, psi_tick, is_breakable, moving_break_speed,
     plough_can_break, saw_visit_end, should_trigger, tick_breaker, tick_waiting, tilled, visit_breaker,
 };
 use super::create_saw::{SawFacts, TreeBlock, TreeWorld, find_tree, is_sawable};
 use super::create_kinetics::{Dir, Pos};
 use horizon_client::items::ItemStack;
 use horizon_core::random::RandomSource;
+use horizon_world::nbt::{Compound, Tag};
 use horizon_world::registry::BlockStateId;
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
@@ -38,6 +39,11 @@ struct Slot {
     ctx: ActorContext,
     /// `BreakerId`.
     id: i32,
+    /// The block's index in the structure (its data, a deployer's state).
+    index: usize,
+    /// Where a deployer's hand works and the way it faces there, or the
+    /// stationary interface a portable one found (`WorkingPos`).
+    target: Option<(Pos, Dir)>,
 }
 
 #[derive(Default)]
@@ -60,6 +66,8 @@ struct Drill {
 struct State {
     moving: HashMap<(String, Mover), Moving>,
     drills: HashMap<(String, Pos), Drill>,
+    /// Stationary portable storage interfaces at work.
+    psis: HashMap<(String, Pos), Psi<Mover>>,
     next_id: i32,
     ticks: u64,
 }
@@ -163,7 +171,7 @@ impl BreakWorld for World<'_, '_> {
                 collision_empty: self.collision_empty(pos),
             }),
             ActorKind::Saw => self.breakable(pos) && self.sawable(pos),
-            ActorKind::Harvester => false,
+            ActorKind::Harvester | ActorKind::Deployer | ActorKind::Psi => false,
         }
     }
     fn falling(&self, pos: Pos) -> bool {
@@ -243,8 +251,77 @@ fn destroy(game: &mut Game<'_>, pos: Pos, held: Option<&ItemStack>) -> Vec<ItemS
     drops
 }
 
-/// `MovementBehaviour.collectOrDropItem`: dropped where the actor is
-/// (not yet put into the structure's storage).
+/// A moving structure's storage: its blocks' places and states, and their
+/// block entities' data, by the blocks' index (`MountedStorageManager`).
+pub(super) struct Store<'s> {
+    pub blocks: &'s dyn Fn() -> Vec<(Pos, BlockStateId)>,
+    pub entities: &'s mut [Option<Compound>],
+}
+
+impl Store<'_> {
+    fn states(&self) -> Vec<BlockStateId> {
+        (self.blocks)().into_iter().map(|b| b.1).collect()
+    }
+}
+
+/// `getAllItems()`: the slots of the structure's chests, barrels and
+/// shulker boxes in its blocks' order, handed to `f` and kept unless
+/// simulating.
+pub(super) fn storage_items<R>(
+    game: &Game<'_>,
+    states: &[BlockStateId],
+    entities: &mut [Option<Compound>],
+    simulate: bool,
+    f: impl FnOnce(&mut Vec<Option<ItemStack>>) -> R,
+) -> R {
+    use horizon_client::containers::BlockEntity;
+    let mut parts = Vec::new();
+    let mut all: Vec<Option<ItemStack>> = Vec::new();
+    for (i, st) in states.iter().enumerate() {
+        let name = game.res.facts().get(*st).name.to_string();
+        if !game.block_in_tag("create:chest_mounted_storage", &name)
+            && !game.block_in_tag("create:simple_mounted_storage", &name)
+        {
+            continue;
+        }
+        let Some(Some(c)) = entities.get(i) else {
+            continue;
+        };
+        let Some((key, BlockEntity::Chest(items))) =
+            horizon_client::save::decode_block_entity(&Tag::Compound(c.clone()))
+        else {
+            continue;
+        };
+        parts.push((i, key, name, items.len()));
+        all.extend(items);
+    }
+    let before = all.clone();
+    let r = f(&mut all);
+    if !simulate && all != before {
+        let mut rest = all.into_iter();
+        for (i, key, name, len) in parts {
+            let items: Vec<Option<ItemStack>> = rest.by_ref().take(len).collect();
+            if let Tag::Compound(c) = horizon_client::save::encode_block_entity(key, &BlockEntity::Chest(items), &name) {
+                entities[i] = Some(c);
+            }
+        }
+    }
+    r
+}
+
+/// `MovementBehaviour.collectOrDropItem`: into the structure's storage,
+/// what doesn't fit dropped where the actor is.
+fn collect(game: &mut Game<'_>, ctx: &ActorContext, store: &mut Store<'_>, stack: ItemStack) {
+    let states = store.states();
+    let left = storage_items(game, &states, store.entities, false, |items| {
+        insert_item(items, stack, |a, b| a.same_item_same_components(b))
+    });
+    if let Some(left) = left {
+        drop_from(game, ctx, left);
+    }
+}
+
+/// Dropped where the actor is.
 fn drop_from(game: &mut Game<'_>, ctx: &ActorContext, stack: ItemStack) {
     let Some(at) = ctx.position else {
         return;
@@ -262,7 +339,7 @@ fn show(game: &mut Game<'_>, id: i32, event: BreakEvent) {
 }
 
 /// `HarvesterMovementBehaviour.visitNewPosition` on the server.
-fn harvest_at(game: &mut Game<'_>, ctx: &ActorContext, pos: Pos) {
+fn harvest_at(game: &mut Game<'_>, ctx: &ActorContext, store: &mut Store<'_>, pos: Pos) {
     let state = block_at(game, pos);
     let world = World { game };
     let f = game.res.facts().get(state);
@@ -311,7 +388,7 @@ fn harvest_at(game: &mut Game<'_>, ctx: &ActorContext, pos: Pos) {
             seed_kept = true;
         }
         if stack.count > 0 {
-            drop_from(game, ctx, stack);
+            collect(game, ctx, store, stack);
         }
     }
     let left = match h.cut {
@@ -354,31 +431,108 @@ fn till(game: &mut Game<'_>, ctx: &ActorContext, pos: Pos) {
 
 /// `BlockBreakingMovementBehaviour.destroyBlock` (and the plough's snow,
 /// dug as with an iron shovel).
-fn broken(game: &mut Game<'_>, ctx: &ActorContext, kind: ActorKind, pos: Pos) {
+fn broken(game: &mut Game<'_>, ctx: &ActorContext, store: &mut Store<'_>, kind: ActorKind, pos: Pos) {
     if kind == ActorKind::Saw {
         // SawMovementBehaviour.onBlockBroken: leaves fell nothing.
         let w = World { game };
         let leaves = w.tag(pos, "minecraft:leaves");
         let cut = w.tree_block(pos);
         for stack in destroy(game, pos, None) {
-            drop_from(game, ctx, stack);
+            collect(game, ctx, store, stack);
         }
         if !leaves {
+            // dropItemFromCutTree: into the storage first.
             let from = ctx.position.unwrap_or(pos.map(|v| f64::from(v) + 0.5));
             let way = ctx.relative_motion;
-            fell(game, pos, cut, |game, at, stack| throw_from(game, at, from, way, stack));
+            fell(game, pos, cut, |game, at, stack| {
+                let states = store.states();
+                let left = storage_items(game, &states, store.entities, false, |items| {
+                    insert_item(items, stack, |a, b| a.same_item_same_components(b))
+                });
+                if let Some(left) = left {
+                    throw_from(game, at, from, way, left);
+                }
+            });
         }
         return;
     }
     let snow = kind == ActorKind::Plough && game.res.facts().get(block_at(game, pos)).name.as_ref() == "minecraft:snow";
     let shovel = snow.then(|| ItemStack::new("minecraft:iron_shovel", 1));
     for stack in destroy(game, pos, shovel.as_ref()) {
-        drop_from(game, ctx, stack);
+        collect(game, ctx, store, stack);
     }
 }
 
 /// An actor's visit to a new block (`visitNewPosition`).
-fn visit(game: &mut Game<'_>, slot: &mut Slot, pos: Pos, turn: &dyn Fn([f64; 3]) -> [f64; 3]) {
+/// `Direction.getNearest` of a vector, and how far the vector is from it.
+fn nearest(v: [f64; 3]) -> (Dir, f64) {
+    let mut best = (Dir::Up, f64::MAX);
+    for d in Dir::ALL {
+        let n = d.normal();
+        let dist = (0..3).map(|k| (v[k] - f64::from(n[k])).powi(2)).sum::<f64>().sqrt();
+        if dist < best.1 {
+            best = (d, dist);
+        }
+    }
+    best
+}
+
+/// A deployer's state, as its block carries it (`HzDeployer`).
+fn deployer_of(store: &Store<'_>, index: usize) -> super::create_deployer::Deployer<ItemStack> {
+    let text = store
+        .entities
+        .get(index)
+        .and_then(|e| e.as_ref())
+        .and_then(|c| match c.get(&"HzDeployer".into()) {
+            Some(Tag::String(t)) => Some(t.to_string_lossy()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    super::create_arms::moving_deployer(&text)
+}
+
+fn set_deployer(store: &mut Store<'_>, index: usize, d: &super::create_deployer::Deployer<ItemStack>) {
+    if let Some(e) = store.entities.get_mut(index) {
+        let text = super::create_arms::moving_deployer_text(d);
+        e.get_or_insert_with(Compound::new)
+            .insert("HzDeployer".into(), Tag::String(text.as_str().into()));
+    }
+}
+
+/// `DeployerMovementBehaviour.activate` and `tryDisposeOfExcess`: true
+/// while it breaks a block.
+fn deploy(game: &mut Game<'_>, slot: &mut Slot, store: &mut Store<'_>, at: Pos, facing: Dir) -> bool {
+    let mut d = deployer_of(store, slot.index);
+    let breaking = super::create_arms::deploy_moving(game, at, facing, &mut d);
+    for stack in std::mem::take(&mut d.inventory) {
+        collect(game, &slot.ctx, store, stack);
+    }
+    set_deployer(store, slot.index, &d);
+    breaking
+}
+
+/// `PortableStorageInterfaceMovement.getCurrentFacingIfValid`.
+fn psi_facing(slot: &Slot, turn: &dyn Fn([f64; 3]) -> [f64; 3]) -> Option<Dir> {
+    let (d, dist) = nearest(turn(slot.facing.normal().map(f64::from)));
+    (dist <= 0.5).then_some(d)
+}
+
+/// `getStationaryInterfaceAt`: an interface facing back the other way.
+fn stationary_at(game: &Game<'_>, pos: Pos, facing: Dir) -> bool {
+    let id = block_at(game, pos);
+    game.res.facts().get(id).name.as_ref() == super::create_actors::PSI
+        && prop(game, id, "facing").and_then(|f| Dir::parse(&f)) == Some(facing.opposite())
+}
+
+/// An actor's visit to a new block (`visitNewPosition`).
+fn visit(
+    game: &mut Game<'_>,
+    mover: Mover,
+    slot: &mut Slot,
+    store: &mut Store<'_>,
+    pos: Pos,
+    turn: &dyn Fn([f64; 3]) -> [f64; 3],
+) {
     if !game.world.loaded(pos[0], pos[2]) {
         return;
     }
@@ -388,17 +542,81 @@ fn visit(game: &mut Game<'_>, slot: &mut Slot, pos: Pos, turn: &dyn Fn([f64; 3])
             visit_breaker(&mut slot.ctx, slot.kind, &World { game }, pos);
             till(game, &slot.ctx, pos);
         }
-        ActorKind::Harvester => harvest_at(game, &slot.ctx, pos),
+        ActorKind::Harvester => harvest_at(game, &slot.ctx, store, pos),
         ActorKind::Saw => {
             visit_breaker(&mut slot.ctx, slot.kind, &World { game }, pos);
             saw_visit_end(&mut slot.ctx, turn(slot.facing.normal().map(f64::from)));
         }
+        ActorKind::Deployer => {
+            // tryGrabbingItem: one item of the storage into an empty hand.
+            let mut d = deployer_of(store, slot.index);
+            if d.held.is_none() {
+                let states = store.states();
+                d.held = storage_items(game, &states, store.entities, false, |items| extract_one(items, |_| true));
+                set_deployer(store, slot.index, &d);
+            }
+            let (facing, _) = nearest(turn(slot.facing.normal().map(f64::from)));
+            slot.target = Some((pos, facing));
+            slot.ctx.stall = deploy(game, slot, store, pos, facing);
+        }
+        ActorKind::Psi => {
+            // findInterface: one or two blocks ahead.
+            slot.target = None;
+            let Some(facing) = psi_facing(slot, turn) else {
+                return;
+            };
+            let n = facing.normal();
+            let found = (0..2)
+                .map(|i| [pos[0] + n[0] * i, pos[1] + n[1] * i, pos[2] + n[2] * i])
+                .find(|p| stationary_at(game, *p, facing));
+            let Some(at) = found else {
+                return;
+            };
+            let dim = game.dim.id().to_owned();
+            let mut guard = state();
+            let s = guard.get_or_insert_with(State::default);
+            let psi = s.psis.entry((dim, at)).or_default();
+            if psi.powered {
+                return;
+            }
+            let position = slot.ctx.position.unwrap_or_default();
+            let diff: f64 = (0..3).map(|k| (f64::from(at[k]) + 0.5 - position[k]) * f64::from(n[k])).sum();
+            psi.start_transferring_to(mover, (diff.abs() + 1.85 - 1.0) as f32);
+            slot.target = Some((at, facing));
+        }
     }
+}
+
+/// `PortableStorageInterfaceMovement.tick` on the server.
+fn psi_actor_tick(game: &Game<'_>, mover: Mover, slot: &mut Slot, turn: &dyn Fn([f64; 3]) -> [f64; 3]) {
+    let Some((at, _)) = slot.target else {
+        psi_tick(&mut slot.ctx, None, None);
+        return;
+    };
+    let target = at.map(|v| f64::from(v) + 0.5);
+    let valid = psi_facing(slot, turn).filter(|f| stationary_at(game, at, *f));
+    let dim = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let timer = valid.and_then(|_| {
+        let psi = s.psis.entry((dim, at)).or_default();
+        if psi.connected.is_none() {
+            let distance = psi.distance;
+            psi.start_transferring_to(mover, distance);
+        }
+        let timer = psi.transfer_timer;
+        psi.keep_alive = 2;
+        Some(timer)
+    });
+    if timer.is_none() {
+        slot.target = None;
+    }
+    psi_tick(&mut slot.ctx, Some(target), timer);
 }
 
 fn slots_of(game: &Game<'_>, s: &mut State, blocks: &[(Pos, BlockStateId)]) -> Vec<Slot> {
     let mut slots = Vec::new();
-    for &(local, state) in blocks {
+    for (index, &(local, state)) in blocks.iter().enumerate() {
         let Some(name) = game.pack.assets.registry.state(state).map(|b| b.name.clone()) else {
             continue;
         };
@@ -414,6 +632,8 @@ fn slots_of(game: &Game<'_>, s: &mut State, blocks: &[(Pos, BlockStateId)]) -> V
             facing,
             ctx: ActorContext::default(),
             id: next_id(s),
+            index,
+            target: None,
         });
     }
     slots
@@ -433,7 +653,9 @@ pub(super) fn tick_actors(
     unrotate: &dyn Fn([f64; 3]) -> [f64; 3],
     turn: &dyn Fn([f64; 3]) -> [f64; 3],
     centre: Option<(Dir, f32)>,
+    entities: &mut [Option<Compound>],
 ) -> bool {
+    let mut store = Store { blocks, entities };
     let key = (game.dim.id().to_owned(), mover);
     let mut moving = {
         let mut guard = state();
@@ -460,12 +682,23 @@ pub(super) fn tick_actors(
             visited = super::create_actors::bearing_centre_trigger(&mut slot.ctx, slot.local, offset, facing, delta);
         }
         slot.ctx.position = Some(actor_pos);
-        if !is_active(slot.facing, slot.ctx.relative_motion) {
+        if !slot.kind.active(slot.facing, slot.ctx.relative_motion) {
             continue;
         }
         if visited && !slot.ctx.stall {
-            visit(game, slot, grid, turn);
+            visit(game, mover, slot, &mut store, grid, turn);
             slot.ctx.first_movement = false;
+        }
+        // DeployerMovementBehaviour.tick: it strikes the block again.
+        if slot.kind == ActorKind::Deployer
+            && slot.ctx.stall
+            && deployer_strikes(&mut slot.ctx)
+            && let Some((at, facing)) = slot.target
+        {
+            slot.ctx.stall = deploy(game, slot, &mut store, at, facing);
+        }
+        if slot.kind == ActorKind::Psi {
+            psi_actor_tick(game, mover, slot, turn);
         }
         if slot.kind.breaks() {
             let speed = moving_break_speed(slot.ctx.motion);
@@ -473,11 +706,11 @@ pub(super) fn tick_actors(
             if let Some(e) = event {
                 show(game, slot.id, e);
                 if let BreakEvent::Broken { pos, .. } = e {
-                    broken(game, &slot.ctx, slot.kind, pos);
+                    broken(game, &slot.ctx, &mut store, slot.kind, pos);
                 }
             }
             if let Some(again) = tick_waiting(&mut slot.ctx) {
-                visit(game, slot, again, turn);
+                visit(game, mover, slot, &mut store, again, turn);
             }
         }
         stalled |= slot.ctx.stall;
@@ -512,7 +745,89 @@ pub(super) fn stop_actors(game: &mut Game<'_>, mover: Mover) {
         if let Some(e) = cancel_stall(&mut slot.ctx) {
             show(game, slot.id, e);
         }
+        if slot.kind == ActorKind::Deployer
+            && let Some((at, facing)) = slot.target
+        {
+            super::create_arms::stop_deploying(game, at, facing);
+        }
     }
+    // Interfaces it was connected to let go (its entity is gone).
+    if let Some(s) = state().as_mut() {
+        for ((d, _), psi) in s.psis.iter_mut() {
+            if *d == key.0 && psi.connected == Some(mover) {
+                psi.stop_transferring();
+            }
+        }
+    }
+}
+
+/// `PortableStorageInterfaceBlockEntity.tick` for the dimension's
+/// interfaces at work (after the structures moved).
+pub(super) fn psis_tick(game: &Game<'_>, dimension: &str) {
+    let mut guard = state();
+    let Some(s) = guard.as_mut() else {
+        return;
+    };
+    s.psis.retain(|(d, p), psi| {
+        if d != dimension {
+            return true;
+        }
+        if game.res.facts().get(block_at(game, *p)).name.as_ref() != super::create_actors::PSI {
+            return false;
+        }
+        psi.tick();
+        !psi.idle()
+    });
+}
+
+/// The stationary interface at `pos` and the structure it can hand items
+/// to now (`canTransfer`).
+fn psi_mover(game: &Game<'_>, pos: Pos) -> Option<Mover> {
+    let dim = game.dim.id().to_owned();
+    let connected = state().as_ref()?.psis.get(&(dim.clone(), pos))?.connected?;
+    let alive = super::create_contraptions::with_storage(game, connected, |_, _| ()).is_some();
+    let mut guard = state();
+    let psi = guard.as_mut()?.psis.get_mut(&(dim, pos))?;
+    psi.can_transfer(alive).then_some(connected)
+}
+
+/// The slots an interface offers (`InterfaceItemHandler`): none unless it
+/// is connected.
+pub(super) fn psi_slots(game: &Game<'_>, pos: Pos) -> usize {
+    let Some(mover) = psi_mover(game, pos) else {
+        return 0;
+    };
+    super::create_contraptions::with_storage(game, mover, |states, entities| {
+        storage_items(game, states, entities, true, |items| items.len())
+    })
+    .unwrap_or(0)
+}
+
+/// `f` on the connected structure's slots through the interface at `pos`;
+/// a change keeps it connected (`onContentTransferred`).
+pub(super) fn psi_items<R>(
+    game: &mut Game<'_>,
+    pos: Pos,
+    simulate: bool,
+    f: impl FnOnce(&mut Vec<Option<ItemStack>>) -> R,
+) -> Option<R> {
+    let mover = psi_mover(game, pos)?;
+    let mut changed = false;
+    let r = super::create_contraptions::with_storage(game, mover, |states, entities| {
+        storage_items(game, states, entities, simulate, |items| {
+            let before = items.clone();
+            let r = f(items);
+            changed = *items != before;
+            r
+        })
+    })?;
+    if changed && !simulate {
+        let dim = game.dim.id().to_owned();
+        if let Some(psi) = state().as_mut().and_then(|s| s.psis.get_mut(&(dim, pos))) {
+            psi.transferred();
+        }
+    }
+    Some(r)
 }
 
 /// `DrillBlockEntity.tick` and `SawBlockEntity.tick` for the dimension's

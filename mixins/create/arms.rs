@@ -396,6 +396,9 @@ pub(super) enum Inv {
     Belt(Pos),
     /// A chest or barrel (`InvWrapper`).
     Chest(Pos),
+    /// A portable storage interface's `InterfaceItemHandler`: the storage of
+    /// the structure it is connected to.
+    Psi(Pos),
 }
 
 /// `Capabilities.ItemHandler.BLOCK` at `pos`.
@@ -403,6 +406,9 @@ pub(super) fn handler_at(game: &Game<'_>, pos: Pos) -> Option<Inv> {
     use horizon_client::containers::BlockEntity as B;
     if deployer_at(game, pos).is_some() {
         return Some(Inv::Deployer(pos));
+    }
+    if block_name(game, pos).as_deref() == Some(super::create_actors::PSI) {
+        return Some(Inv::Psi(pos));
     }
     if super::create_logistics::is_belt(block_name(game, pos)?.as_str()) {
         return Some(Inv::Belt(pos));
@@ -530,6 +536,7 @@ impl ItemHandler for Inv {
                 })
             }
             Inv::Chest(pos) => chest_items(game, *pos).map_or(0, |i| i.len()),
+            Inv::Psi(pos) => super::create_actor_glue::psi_slots(game, *pos),
         }
     }
 
@@ -686,6 +693,13 @@ impl ItemHandler for Inv {
                 }
             })
             .unwrap_or(Some(stack)),
+            Inv::Psi(pos) => super::create_actor_glue::psi_items(game, *pos, simulate, |items| {
+                match items.get_mut(slot) {
+                    Some(s) => slot_insert(s, stack.clone(), max),
+                    None => Some(stack.clone()),
+                }
+            })
+            .unwrap_or(Some(stack)),
         }
     }
 
@@ -768,6 +782,10 @@ impl ItemHandler for Inv {
                 slot_extract(items.get_mut(slot)?, amount, 64)
             })
             .flatten(),
+            Inv::Psi(pos) => super::create_actor_glue::psi_items(game, *pos, simulate, |items| {
+                slot_extract(items.get_mut(slot)?, amount, 64)
+            })
+            .flatten(),
         }
     }
 }
@@ -823,7 +841,7 @@ pub(super) fn insert_into(
     stack: &ItemStack,
 ) -> Option<Option<ItemStack>> {
     let inv = handler_at(game, pos)?;
-    if !matches!(inv, Inv::Vault(_) | Inv::Deployer(_)) {
+    if !matches!(inv, Inv::Vault(_) | Inv::Deployer(_) | Inv::Psi(_)) {
         return None;
     }
     Some(insert_item_stacked(game, &inv, stack.clone(), false))
@@ -839,7 +857,7 @@ pub(super) fn extract_from(
     test: &dyn Fn(&ItemStack) -> bool,
 ) -> Option<Option<ItemStack>> {
     let inv = handler_at(game, pos)?;
-    if !matches!(inv, Inv::Vault(_) | Inv::Deployer(_)) {
+    if !matches!(inv, Inv::Vault(_) | Inv::Deployer(_) | Inv::Psi(_)) {
         return None;
     }
     let mut out: Option<ItemStack> = None;
@@ -880,7 +898,7 @@ pub(super) fn extract_from(
 /// Whether a funnel or chute finds an inventory here that isn't a block
 /// entity's (a deployer).
 pub(super) fn has_inventory(game: &Game<'_>, pos: Pos) -> bool {
-    deployer_at(game, pos).is_some()
+    deployer_at(game, pos).is_some() || block_name(game, pos).as_deref() == Some(super::create_actors::PSI)
 }
 
 // ---- The mechanical arm -----------------------------------------------------
@@ -1152,6 +1170,7 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
         && name != super::create_actors::PLOUGH
         && name != super::create_actors::SAW
         && name != super::create_actors::SAW_ALONG
+        && name != super::create_actors::PSI
     {
         return;
     }
@@ -1383,6 +1402,15 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
                 _ => horizontal_facing(p.yaw).clockwise(Axis::Y).axis(),
             };
             set_block(game, pos, ROPE_PULLEY, &[("axis", axis.name())]);
+        }
+        // PortableStorageInterfaceBlock.getStateForPlacement: facing the
+        // player (away when sneaking).
+        super::create_actors::PSI => {
+            let mut facing = nearest_looking(p.yaw, p.pitch).opposite();
+            if p.sneaking {
+                facing = facing.opposite();
+            }
+            set_block(game, pos, super::create_actors::PSI, &[("facing", facing.name())]);
         }
         n if n == super::create_actors::HARVESTER || n == super::create_actors::PLOUGH => {
             // AttachedActorBlock.getStateForPlacement: on a floor or a
@@ -1791,22 +1819,33 @@ fn parse_stack(f: &[&str]) -> Option<ItemStack> {
     Some(s)
 }
 
-fn load(game: &Game<'_>, dimension: &str) {
-    let root = game.save.root.clone();
-    let fresh = with_state(|s| {
-        s.root.get_or_insert_with(|| root.clone());
-        s.loaded.insert(dimension.to_owned())
-    });
-    if !fresh {
-        return;
+/// A deployer's save lines (`DeployerBlockEntity.write`).
+fn deployer_text(p: Pos, d: &Deployer<ItemStack>) -> String {
+    let mut out = format!(
+        "deployer {} {} {} {} {} {} {} {}\n",
+        p[0],
+        p[1],
+        p[2],
+        d.state.code(),
+        if d.mode == Mode::Punch { "punch" } else { "use" },
+        d.timer,
+        d.reach,
+        u8::from(d.redstone_locked)
+    );
+    if let Some(h) = &d.held {
+        out.push_str(&stack_line("held", h));
     }
-    let Ok(text) = std::fs::read_to_string(save_path(&root, dimension)) else {
-        return;
-    };
-    let mut lines = text.lines();
-    if lines.next() != Some("create-deployers 1") {
-        return;
+    for o in &d.overflow {
+        out.push_str(&stack_line("overflow", o));
     }
+    for i in &d.inventory {
+        out.push_str(&stack_line("inventory", i));
+    }
+    out
+}
+
+/// The deployers in save lines.
+fn parse_deployers<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<(Pos, Deployer<ItemStack>)> {
     let mut out: Vec<(Pos, Deployer<ItemStack>)> = Vec::new();
     for line in lines {
         let f: Vec<&str> = line.split(' ').collect();
@@ -1815,11 +1854,7 @@ fn load(game: &Game<'_>, dimension: &str) {
                 let n = |i: usize| f[i].parse::<i32>().unwrap_or(0);
                 let mut d = Deployer::new();
                 d.state = State::from_code(n(4) as u8);
-                d.mode = if f[5] == "punch" {
-                    Mode::Punch
-                } else {
-                    Mode::Use
-                };
+                d.mode = if f[5] == "punch" { Mode::Punch } else { Mode::Use };
                 d.timer = n(6);
                 d.reach = f[7].parse().unwrap_or(0.0);
                 d.redstone_locked = f[8] == "1";
@@ -1843,6 +1878,79 @@ fn load(game: &Game<'_>, dimension: &str) {
             _ => {}
         }
     }
+    out
+}
+
+/// A deployer taken onto a moving structure: its state goes with its block
+/// (`DeployerBlockEntity`'s data), as save lines.
+pub(super) fn take_deployer(dim: &str, pos: Pos) -> String {
+    let d = with_state(|s| s.deployers.remove(&(dim.to_owned(), pos))).unwrap_or_default();
+    deployer_text(pos, &d)
+}
+
+/// A deployer put back from a moving structure, with the state it carried.
+pub(super) fn put_deployer(dim: &str, pos: Pos, text: &str) {
+    let d = parse_deployers(text.lines()).pop().map(|(_, d)| d).unwrap_or_default();
+    with_state(|s| s.deployers.insert((dim.to_owned(), pos), d));
+}
+
+/// A moving deployer's state from what its block carries.
+pub(super) fn moving_deployer(text: &str) -> Deployer<ItemStack> {
+    parse_deployers(text.lines()).pop().map(|(_, d)| d).unwrap_or_default()
+}
+
+/// What its block carries again.
+pub(super) fn moving_deployer_text(d: &Deployer<ItemStack>) -> String {
+    deployer_text([0; 3], d)
+}
+
+/// `DeployerHandler.activate` for a deployer on a moving structure, its hand
+/// reaching `clicked` the way it faces in the world (`shouldActivate`
+/// first in use mode). True while it is breaking a block there.
+pub(super) fn deploy_moving(game: &mut Game<'_>, clicked: Pos, facing: Dir, d: &mut Deployer<ItemStack>) -> bool {
+    let n = facing.normal();
+    let pos = [0, 1, 2].map(|k| clicked[k] - 2 * n[k]);
+    let dim = game.dim.id().to_owned();
+    let mut front = Front {
+        game,
+        dim: dim.clone(),
+        pos,
+        facing,
+    };
+    if d.mode == Mode::Use && !front.should_activate(d.held.as_ref()) {
+        return false;
+    }
+    front.activate(d.mode, &mut d.held, &mut d.inventory);
+    with_state(|s| s.breaking.contains_key(&(dim, pos)))
+}
+
+/// `cancelStall`: a moving deployer stops breaking at `clicked`.
+pub(super) fn stop_deploying(game: &mut Game<'_>, clicked: Pos, facing: Dir) {
+    let n = facing.normal();
+    let pos = [0, 1, 2].map(|k| clicked[k] - 2 * n[k]);
+    let dim = game.dim.id().to_owned();
+    if with_state(|s| s.breaking.remove(&(dim, pos))).is_some() {
+        game.destroy_block_progress(-(pos[0] ^ pos[2] ^ pos[1]).abs() - 1000, clicked, -1);
+    }
+}
+
+fn load(game: &Game<'_>, dimension: &str) {
+    let root = game.save.root.clone();
+    let fresh = with_state(|s| {
+        s.root.get_or_insert_with(|| root.clone());
+        s.loaded.insert(dimension.to_owned())
+    });
+    if !fresh {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(save_path(&root, dimension)) else {
+        return;
+    };
+    let mut lines = text.lines();
+    if lines.next() != Some("create-deployers 1") {
+        return;
+    }
+    let out = parse_deployers(lines);
     with_state(|s| {
         for (p, d) in out {
             s.deployers.insert((dimension.to_owned(), p), d);
@@ -1870,30 +1978,7 @@ pub(super) fn save_all() {
                 .collect();
             all.sort_by_key(|(p, _)| **p);
             for (p, d) in all {
-                out.push_str(&format!(
-                    "deployer {} {} {} {} {} {} {} {}\n",
-                    p[0],
-                    p[1],
-                    p[2],
-                    d.state.code(),
-                    if d.mode == Mode::Punch {
-                        "punch"
-                    } else {
-                        "use"
-                    },
-                    d.timer,
-                    d.reach,
-                    u8::from(d.redstone_locked)
-                ));
-                if let Some(h) = &d.held {
-                    out.push_str(&stack_line("held", h));
-                }
-                for o in &d.overflow {
-                    out.push_str(&stack_line("overflow", o));
-                }
-                for i in &d.inventory {
-                    out.push_str(&stack_line("inventory", i));
-                }
+                out.push_str(&deployer_text(*p, d));
             }
             if let Err(e) = std::fs::write(save_path(&root, &dimension), out) {
                 log::warn!("Create: can't save the deployers of {dimension}: {e}");
