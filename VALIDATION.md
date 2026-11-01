@@ -41,6 +41,11 @@ Seen working after the fixes:
   6 after two logs); pole and hand drawn, its state saved in `create_deployers_*.txt`.
 - Vault: three blocks in a row join; a hopper fills the first block, an andesite funnel on the last one takes the
   iron out of the whole vault.
+- Crafting: horizon-port-pack drops the crafting recipes of the blocks it leaves out; `prepare_content.py --jar` now
+  carries the ones for blocks it declares (andesite funnel, fluid pipe, fluid tank, item vault, mechanical arm,
+  deployer), and NeoForge's vanilla convention tags those and the carried recipes name (`c:barrels/wooden`,
+  `c:dyes/*`, `c:chests/wooden`...). In survival, alloy over dried kelp in the inventory grid gave 2 andesite
+  funnels, and copper sheet, barrel, copper sheet at a crafting table a fluid tank.
 
 ## Milestone 4, fluids (cloud)
 
@@ -103,9 +108,8 @@ recipes; the arm and deployer as kinetic blocks (a cog drives the arm, the deplo
 
 Not checked yet (arm, deployer, vault):
 
-- Crafting the andesite funnel, fluid pipe, fluid tank, item vault, mechanical arm and deployer: horizon-port-pack
-  leaves their blocks out and drops their crafting recipes with them (`recipes_unregistered`), so the content mod has
-  none (they come from the creative menu or commands). See docs/PLAN.md.
+- Crafting the fluid pipe, item vault, mechanical arm and deployer at a table (their recipes are carried from the
+  jar now as the funnel's and tank's, which were crafted: see above).
 - Vault: placing by hand (its axis from the player or a lone vault beside it), a 2×2×2 vault, chutes and arms on a
   vault, breaking a block of a multiblock, the wrench from above, right clicks not opening the barrel's menu.
 - Arm: belts, basins, millstones, chutes, deployers and funnels as points; round robin; out-of-range points on

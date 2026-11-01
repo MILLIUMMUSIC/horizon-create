@@ -237,9 +237,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   through `create_fluids::FluidAccess` (`has_handler`, `handler_tanks`, `fill`, `drain`, `drain_any` at a block
   face), which `fluid_glue::Access` answers for tanks and basins; a capability hook would answer it instead.
 - horizon-port-pack leaves out the blocks no template fits (the andesite funnel, fluid pipe and tank, item vault,
-  mechanical arm, deployer...) and drops their crafting recipes with them (`recipes_unregistered` in its carry
-  report): `prepare_content.py` declares the blocks itself but has no recipe for them yet. Next: carry those
-  recipes from the jar, upgraded to 26.3's format (string ingredients) as horizon-port-pack upgrades the others.
+  mechanical arm, deployer...) and drops their recipes with them (`recipes_unregistered` in its carry report):
+  `prepare_content.py` declares those blocks itself and, given `--jar`, carries the crafting recipes of the ones it
+  declares from the jar (`take_left_out_recipes`, ingredients upgraded to 26.3's strings). Recipes of blocks not
+  ported yet stay out.
 - NeoForge's convention tags (`c:stripped_logs`, `c:cobblestones`...) aren't in Horizon: `prepare_content.py` adds
   NeoForge 21.1's values for vanilla's items (`CONVENTION_TAGS`); tags only other mods fill stay empty.
 - Horizon's client doesn't run native mods, so a click on a block whose template has no use of its own also sends

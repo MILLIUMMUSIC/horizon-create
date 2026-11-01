@@ -132,6 +132,18 @@ CONVENTION_TAGS = {
     "ingots/netherite": ["minecraft:netherite_ingot"],
     "nuggets/iron": ["minecraft:iron_nugget"],
     "nuggets/gold": ["minecraft:gold_nugget"],
+    "barrels/wooden": ["minecraft:barrel"],
+    "chests/wooden": ["minecraft:chest", "minecraft:trapped_chest"],
+    **{f"dyes/{c}": [f"minecraft:{c}_dye"] for c in COLORS},
+    "feathers": ["minecraft:feather"],
+    "gunpowders": ["minecraft:gunpowder"],
+    "leathers": ["minecraft:leather"],
+    "netherracks": ["minecraft:netherrack"],
+    "sands/colorless": ["minecraft:sand"],
+    "sands/red": ["minecraft:red_sand"],
+    "slimeballs": ["minecraft:slime_ball"],
+    "storage_blocks/copper": ["minecraft:copper_block"],
+    "storage_blocks/iron": ["minecraft:iron_block"],
     "cobblestones": ["minecraft:cobblestone", "minecraft:infested_cobblestone", "minecraft:mossy_cobblestone",
                      "minecraft:cobbled_deepslate"],
     "dusts/redstone": ["minecraft:redstone"],
@@ -590,6 +602,58 @@ def take_obj_models(jar, out):
             target.write_bytes(z.read(f))
 
 
+def ingredient_26(ing):
+    """A 1.21.1 ingredient as 26.3 writes it (`"x"`, `"#tag"`, or a list),
+    as horizon-port-pack upgrades the recipes it carries; None when it has
+    a form only NeoForge reads."""
+    if isinstance(ing, list):
+        parts = [ingredient_26(i) for i in ing]
+        return None if any(p is None for p in parts) else parts
+    if isinstance(ing, dict) and set(ing) == {"item"}:
+        return ing["item"]
+    if isinstance(ing, dict) and set(ing) == {"tag"}:
+        return "#" + ing["tag"]
+    return None
+
+
+def take_left_out_recipes(jar, out):
+    """horizon-port-pack drops the recipes of the blocks it leaves out
+    (`recipes_unregistered`); for the ones declared here, carry their
+    crafting recipes from the player's jar, upgraded to 26.3's format and
+    flattened as `fit` names the others."""
+    import zipfile
+    blocks = out / "data" / "create" / "horizon" / "block"
+    recipes = out / "data" / "create" / "recipe"
+    if jar is None:
+        print("warning: no --jar: the crafting recipes horizon-port-pack drops aren't carried", file=sys.stderr)
+        return
+    prefix = "data/create/recipe/"
+    with zipfile.ZipFile(jar) as z:
+        for name in z.namelist():
+            if not (name.startswith(prefix + "crafting/") and name.endswith(".json")):
+                continue
+            flat = recipes / (name[len(prefix):-len(".json")].replace("/", ".") + ".json")
+            if flat.exists():
+                continue
+            recipe = json.loads(z.read(name))
+            if recipe.get("type") not in ("minecraft:crafting_shaped", "minecraft:crafting_shapeless"):
+                continue
+            result = recipe.get("result", {}).get("id", "")
+            if not result.startswith("create:") or not (blocks / f"{result[len('create:'):]}.json").exists():
+                continue
+            if recipe["type"] == "minecraft:crafting_shaped":
+                key = {k: ingredient_26(v) for k, v in recipe["key"].items()}
+                if any(v is None for v in key.values()):
+                    continue
+                recipe["key"] = key
+            else:
+                ingredients = [ingredient_26(i) for i in recipe["ingredients"]]
+                if any(i is None for i in ingredients):
+                    continue
+                recipe["ingredients"] = ingredients
+            write_json(flat, recipe)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--jar", type=Path, help="the player's Create jar (create-1.21.1-6.0.10.jar)")
@@ -611,6 +675,7 @@ def main():
         shutil.copytree(carried, out)
     fit(out)
     take_obj_models(args.jar.resolve() if args.jar else None, out)
+    take_left_out_recipes(args.jar.resolve() if args.jar else None, out)
     print(out)
     return 0
 
