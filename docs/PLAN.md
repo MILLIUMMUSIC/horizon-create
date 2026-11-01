@@ -212,9 +212,37 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      toggle (the wrench switches the mode instead); the goggle tooltip; its item handler (`BrassTunnelItemHandler`:
      funnels and hoppers inserting into it); the distribution's stack drawn (`BrassTunnelRenderer`).
    Later: smart chutes, the remaining belt features above.
-5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions) — need
-   entities with block collision, their own rendering and network sync. The biggest engine gap; expect
-   upstream Horizon work (hook points for custom entities and their rendering).
+5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions). In Create a
+   contraption is an entity (`AbstractContraptionEntity`) holding the moved blocks (`Contraption`), drawn by its
+   renderer and colliding through `ContraptionCollider`. Horizon (as of `aa27eca`) has no mod entities and no
+   collision hook, so the port keeps contraptions in the native mod instead (researched 2026-11-01):
+   - **What Horizon gives**: `transient_block_geometry` draws any block state at any transform (the kinetic
+     parts already use it), `native_set_block` takes blocks out and puts them back, `native_teleport_mob` /
+     `native_push_mob` move mobs, the local and LAN players' positions are reachable from `crate::game`, and the
+     redstone hooks (`native_block_signal`, `native_neighbor_changed`) can power them.
+   - **The model** (`contraption.rs`, no Horizon types, unit-tested): `Contraption` with its blocks (local
+     position, state, block entity data), its anchor and bounds; `searchMovedStructure` with the subset of
+     `BlockMovementChecks` the ported blocks need (movement necessary/allowed, brittle, not supportive, attached
+     towards); assembly (blocks taken out, `customBlockRemoval`), disassembly at the rounded offset
+     (`customBlockPlacement`, blocks put back, drops for those that can't be), saving beside the world and a
+     channel (`create:contraptions`) carrying blocks once and offsets each tick.
+   - **Collision** is the open problem. Plan: entities standing on a contraption move with it (its delta each
+     tick, as `ContraptionCollider` carries riders), entities in its way are pushed out along the motion; the
+     player can't stand on or bump into a moving structure without engine help, so between the two the port
+     puts hidden collision blocks (a barrier-like template, nothing drawn) at the cells a slow linear contraption
+     covers, moved with it. This is a stand-in; the real fix is an engine hook for extra collision boxes per
+     level (to propose upstream with the capability hook).
+   Parts:
+   1. Mechanical piston and sticky piston, extension poles, piston head (`MechanicalPistonBlockEntity`,
+      `LinearActuatorBlockEntity`, `PistonContraption`): kinetic block, its speed as linear motion
+      (`convertToLinear`, clamped to ±0.49 a tick), assembly on movement, the structure in front (a line of
+      blocks, without glue or chassis yet), disassembly at the end of its range or when it stops; drawing the
+      moved blocks and poles; riders carried; the collision stand-in. The contraption core is built here.
+   2. Super glue and linear and radial chassis (what a structure takes in), the mechanical bearing and windmill
+      bearing (rotating contraptions: drawn turned; collision of turned structures stays a gap).
+   3. Gantry carriage and shaft, rope and elevator pulley.
+   4. Actors on contraptions (drill, saw, harvester, plough, deployer, portable storage interfaces).
+   5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.
 7. **Everything else**: Ponder scenes, schematics and the schematicannon, decoration sets, Create's
    compatibility with other mods.
