@@ -1,5 +1,31 @@
 # Validation
 
+## Milestone 4, part 3: checked on the Mac (macOS, offscreen)
+
+Built with `tools/horizon.py build` against the pinned Horizon and horizon-mixins, the content mod from Create
+6.0.10's jar, run offscreen. 123 unit tests pass, clippy has no warnings.
+
+Fixed here: **nothing could be placed on a belt** (a tunnel, or a funnel on its top): the belt's right click took
+every click so that its grindstone template's menu wouldn't open, where Create's `BeltBlock.useItemOn` passes other
+items on to their own use. A held block item is now placed against the belt through Horizon's placement rules
+(`place_against` in `logistics.rs`, the face's centre standing for the hit position, which the hook doesn't give).
+
+Seen working:
+
+- Crafting recipes for the brass funnel and both tunnels are in the content mod (carried from the jar).
+- Brass funnel on a chest's side holding gold and iron: its iron filter (set by a right click on its front with an
+  ingot) makes it take out the whole iron stack and leave the gold; the filter item is drawn on the funnel.
+- Andesite tunnel placed on a belt by hand: it turns into a cross between two depots, and a stack of 8 passing
+  under it leaves one ingot on each depot and goes on.
+- Brass tunnel in its place: Split spreads 9 ingots 3 / 3 / 3 over the two depots and the belt on; the wrench
+  switches it to Round robin ("Brass Tunnel: Round Robin" on the action bar), then two stacks of 4 go whole, one
+  to each depot; the mode is saved (`create_logistics_*.txt`).
+
+Still not checked (from the list below): brass funnels collecting and as belt funnels, the filter over a reload and
+on vertical funnels, tunnel shapes as neighbours change, windows, a tunnel breaking off, connected brass tunnels
+over parallel belts, an empty hand taking a group's stacks, brass funnels filtering a tunnel's sides, and the
+regressions listed.
+
 ## Milestone 4, part 3: brass funnel and belt tunnels (cloud)
 
 Ported in a cloud session on Linux (x86_64), Rust 1.99.1, Python 3.12, against the pinned Horizon (`aa27eca`) and

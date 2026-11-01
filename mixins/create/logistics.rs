@@ -1007,9 +1007,57 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
                 }
             }
         }
-        _ => {}
+        // BeltBlock.useItemOn passes other items to their own use: a block
+        // item is placed against the belt (a tunnel or funnel on it). The
+        // grindstone template's menu would take the click instead, so the
+        // block is placed here, as the item would place it.
+        Some(stack) => place_against(game, pos, face, &stack, mode == 1),
     }
     true
+}
+
+/// `BlockItem.useOn` of `stack` on the face `face` of the block at `pos`
+/// (the hook has no hit position: the face's centre stands for it).
+fn place_against(game: &mut Game<'_>, pos: Pos, face: [i32; 3], stack: &ItemStack, creative: bool) {
+    if game.items().get(&stack.item).and_then(|i| i.block).is_none() {
+        return;
+    }
+    let dir = Dir::nearest(face);
+    let n = dir.normal();
+    let hit = [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5 + f64::from(n[i]) * 0.5);
+    let ctx = horizon_world::level::PlaceContext {
+        clicked_pos: horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+        face: core_dir(dir),
+        hit: horizon_core::geometry::Vec3::new(hit[0], hit[1], hit[2]),
+        inside: false,
+        yaw: game.yaw,
+        pitch: game.pitch,
+        sneaking: game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
+        item: stack.item.to_string(),
+        can_use_game_master_blocks: false,
+    };
+    let outcome = game.with_level(|b, level, ticks| b.place_block(level, ticks, &ctx));
+    let horizon_world::level::PlaceOutcome::Placed { pos: at, state } = outcome else {
+        let _ = game.process_level_events();
+        return;
+    };
+    let placed = [at.x, at.y, at.z];
+    let state = game.apply_item_block_state(placed, state, stack).unwrap_or(state);
+    let name = game.res.facts().get(state).name.clone();
+    if let Some(entity) = game.new_block_entity(&name) {
+        game.world
+            .block_entities
+            .insert((placed[0], placed[1], placed[2]), entity);
+        game.apply_placed_item(placed, stack, false);
+    }
+    let _ = game.process_level_events();
+    game.swing_arm();
+    if !creative && let Some(h) = game.held_mut().as_mut() {
+        h.count -= 1;
+        if h.count == 0 {
+            *game.held_mut() = None;
+        }
+    }
 }
 
 fn set_belt(game: &mut Game<'_>, pos: Pos, state: BeltState) -> bool {
