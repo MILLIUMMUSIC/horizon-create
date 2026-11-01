@@ -56,6 +56,36 @@ pub enum SelectionMode {
     PreferFirst,
 }
 
+impl SelectionMode {
+    pub const ALL: [SelectionMode; 3] = [
+        SelectionMode::RoundRobin,
+        SelectionMode::ForcedRoundRobin,
+        SelectionMode::PreferFirst,
+    ];
+    /// Its place in the list (`ScrollValue`).
+    pub fn code(self) -> i32 {
+        Self::ALL.iter().position(|m| *m == self).unwrap_or(0) as i32
+    }
+    pub fn from_code(code: i32) -> SelectionMode {
+        Self::ALL
+            .get(code.max(0) as usize)
+            .copied()
+            .unwrap_or(SelectionMode::RoundRobin)
+    }
+    /// One step along the list, as the value box scrolls (not round).
+    pub fn step(self, up: bool) -> SelectionMode {
+        Self::from_code((self.code() + if up { 1 } else { -1 }).clamp(0, 2))
+    }
+    /// `create.mechanical_arm.selection_mode.*`'s English names.
+    pub fn label(self) -> &'static str {
+        match self {
+            SelectionMode::RoundRobin => "Round Robin",
+            SelectionMode::ForcedRoundRobin => "Forced Round Robin",
+            SelectionMode::PreferFirst => "Prefer First Target",
+        }
+    }
+}
+
 /// `ArmInteractionPoint.Mode`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -76,6 +106,12 @@ pub enum PointType {
     /// `FunnelPoint`, with `FunnelBlock.getFunnelFacing`.
     Funnel(Dir),
     Millstone,
+    /// `CampfirePoint`: food in, nothing out.
+    Campfire,
+    /// `ComposterPoint`: compostables in, bone meal out.
+    Composter,
+    /// `RespawnAnchorPoint`: glowstone in.
+    RespawnAnchor,
 }
 
 impl PointType {
@@ -89,11 +125,17 @@ impl PointType {
             PointType::Depot => "create:depot",
             PointType::Funnel(_) => "create:funnel",
             PointType::Millstone => "create:millstone",
+            PointType::Campfire => "create:campfire",
+            PointType::Composter => "create:composter",
+            PointType::RespawnAnchor => "create:respawn_anchor",
         }
     }
     /// `DepositOnlyArmInteractionPoint`.
     pub fn deposit_only(self) -> bool {
-        matches!(self, PointType::Funnel(_))
+        matches!(
+            self,
+            PointType::Funnel(_) | PointType::Campfire | PointType::RespawnAnchor
+        )
     }
     /// `getInteractionPositionVector`, from the block's corner.
     pub fn interaction_offset(self) -> [f64; 3] {
@@ -110,7 +152,9 @@ impl PointType {
                 let n = f.normal();
                 [0, 1, 2].map(|i| 0.5 + f64::from(n[i]) * -0.15)
             }
-            PointType::Basin | PointType::Millstone => [0.5, 0.5, 0.5],
+            PointType::Basin | PointType::Millstone | PointType::Campfire => [0.5, 0.5, 0.5],
+            PointType::Composter => [0.5, 13.0 / 16.0, 0.5],
+            PointType::RespawnAnchor => [0.5, 1.0, 0.5],
         }
     }
     /// `getInteractionDirection`: the way the claw faces.

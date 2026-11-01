@@ -1,5 +1,14 @@
 # Validation
 
+## Arm selection modes and new points (macOS, offscreen)
+
+Seen working: the mouse wheel over a mechanical arm's side steps its mode (the action bar says Forced Round Robin,
+then Prefer First Target); an arm set to take from a depot and deposit into a composter puts wheat seeds into it
+(the composter's level rises).
+
+Not checked yet: the modes' effect on several targets, campfires, respawn anchors, bone meal taken out of a full
+composter.
+
 ## Funnel clicks and amounts, tunnels' item handler (macOS, offscreen)
 
 Seen working: cobblestone clicked into a collecting andesite funnel on a chest goes into the chest (the whole

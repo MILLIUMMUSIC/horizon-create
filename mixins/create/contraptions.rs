@@ -2007,6 +2007,11 @@ fn add(p: Pos, d: Dir) -> Pos {
     [0, 1, 2].map(|k| p[k] + d.normal()[k])
 }
 
+/// An action bar line for `player` at the next level tick.
+pub(super) fn tell_later(player: u128, text: horizon_client::text::Text) {
+    state().get_or_insert_with(State::default).told.push((player, text));
+}
+
 fn tell(game: &mut Game<'_>, text: horizon_client::text::Text) {
     if let Some(player) = game.native_acting_player() {
         game.native_action_bar(player.uuid, text);

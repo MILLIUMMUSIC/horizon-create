@@ -399,6 +399,90 @@ pub(super) enum Inv {
     /// A portable storage interface's `InterfaceItemHandler`: the storage of
     /// the structure it is connected to.
     Psi(Pos),
+    /// The arm's `CampfirePoint`, `ComposterPoint` and `RespawnAnchorPoint`.
+    Campfire(Pos),
+    Composter(Pos),
+    Anchor(Pos),
+}
+
+/// A vanilla block's state property.
+fn vanilla_prop(game: &Game<'_>, pos: Pos, key: &str) -> Option<String> {
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    game.pack.assets.registry.state(id)?.properties.get(key).cloned()
+}
+
+/// `CampfirePoint.insert`: one cookable item into a free slot.
+fn campfire_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack, simulate: bool) -> Option<ItemStack> {
+    use horizon_client::containers::BlockEntity as B;
+    let Some(time) = game.recipes().cook("minecraft:campfire_cooking", &stack).map(|r| r.time as i32) else {
+        return Some(stack);
+    };
+    let key = (pos[0], pos[1], pos[2]);
+    let Some(B::Campfire(c)) = game.world.block_entities.get_mut(&key) else {
+        return Some(stack);
+    };
+    let mut rest = stack.clone();
+    if simulate {
+        if !c.items.iter().any(Option::is_none) {
+            return Some(stack);
+        }
+        rest.count -= 1;
+    } else if !c.place_food(&mut rest, time) {
+        return Some(stack);
+    } else {
+        game.mark_block_entity_updated(key);
+    }
+    (rest.count > 0).then_some(rest)
+}
+
+/// `ComposterPoint.insert` (the composter's container from above): one
+/// compostable while it isn't full.
+fn composter_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack, simulate: bool) -> Option<ItemStack> {
+    let level: i32 = vanilla_prop(game, pos, "level").and_then(|l| l.parse().ok()).unwrap_or(8);
+    let compostable = game.items().get(&stack.item).is_some_and(|i| i.compostable.is_some());
+    if level >= 7 || !compostable {
+        return Some(stack);
+    }
+    if simulate {
+        return (stack.count > 1).then(|| with_count(&stack, stack.count - 1));
+    }
+    let one = with_count(&stack, 1);
+    let left = game.native_insert_item(pos, horizon_core::geometry::Direction::Up, one);
+    let used = u32::from(left.is_none());
+    (stack.count > used).then(|| with_count(&stack, stack.count - used))
+}
+
+/// `ComposterPoint.extract` (from below): its bone meal when full.
+fn composter_extract(game: &mut Game<'_>, pos: Pos, simulate: bool) -> Option<ItemStack> {
+    let level: i32 = vanilla_prop(game, pos, "level").and_then(|l| l.parse().ok()).unwrap_or(0);
+    if level != 8 {
+        return None;
+    }
+    if !simulate {
+        let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+        game.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
+    }
+    Some(ItemStack::new("minecraft:bone_meal", 1))
+}
+
+/// `RespawnAnchorPoint.insert`: glowstone charges it while it isn't full.
+fn anchor_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack, simulate: bool) -> Option<ItemStack> {
+    let charge: i32 = vanilla_prop(game, pos, "charges").and_then(|l| l.parse().ok()).unwrap_or(4);
+    if &*stack.item != "minecraft:glowstone" || charge >= 4 {
+        return Some(stack);
+    }
+    if !simulate {
+        let id = game.world.block(pos[0], pos[1], pos[2]);
+        if let Some(next) = game.with_props(id, &[("charges", &(charge + 1).to_string())]) {
+            let dim = game.dim.id().to_owned();
+            game.native_set_block(&dim, pos, next, super::native_hooks::flags::UPDATE_ALL);
+            let c = pos.map(|v| f64::from(v) + 0.5);
+            game.with_level(|_, level, _| {
+                level.native_play_sound("minecraft:block.respawn_anchor.charge", c, 4, 1.0, 1.0)
+            });
+        }
+    }
+    (stack.count > 1).then(|| with_count(&stack, stack.count - 1))
 }
 
 /// `Capabilities.ItemHandler.BLOCK` at `pos`.
@@ -537,6 +621,7 @@ impl ItemHandler for Inv {
             }
             Inv::Chest(pos) => chest_items(game, *pos).map_or(0, |i| i.len()),
             Inv::Psi(pos) => super::create_actor_glue::psi_slots(game, *pos),
+            Inv::Campfire(_) | Inv::Composter(_) | Inv::Anchor(_) => 1,
         }
     }
 
@@ -700,6 +785,9 @@ impl ItemHandler for Inv {
                 }
             })
             .unwrap_or(Some(stack)),
+            Inv::Campfire(pos) => campfire_insert(game, *pos, stack, simulate),
+            Inv::Composter(pos) => composter_insert(game, *pos, stack, simulate),
+            Inv::Anchor(pos) => anchor_insert(game, *pos, stack, simulate),
         }
     }
 
@@ -786,6 +874,8 @@ impl ItemHandler for Inv {
                 slot_extract(items.get_mut(slot)?, amount, 64)
             })
             .flatten(),
+            Inv::Composter(pos) => composter_extract(game, *pos, simulate).filter(|_| amount > 0),
+            Inv::Campfire(_) | Inv::Anchor(_) => None,
         }
     }
 }
@@ -914,6 +1004,9 @@ fn point_type_at(game: &Game<'_>, pos: Pos) -> Option<PointType> {
         super::create_machines::DEPOT => Some(PointType::Depot),
         super::create_logistics::CHUTE => Some(PointType::Chute),
         "create:millstone" => Some(PointType::Millstone),
+        "minecraft:campfire" | "minecraft:soul_campfire" => Some(PointType::Campfire),
+        "minecraft:composter" => Some(PointType::Composter),
+        "minecraft:respawn_anchor" => Some(PointType::RespawnAnchor),
         // FunnelType: a funnel that isn't extracting.
         super::create_funnel::COLLECTING_FUNNEL | super::create_funnel::BRASS_COLLECTING_FUNNEL => {
             Some(PointType::Funnel(Dir::parse(&prop(game, pos, "facing")?)?))
@@ -947,6 +1040,9 @@ impl ArmAt<'_, '_> {
                 let behind = add(point.pos, f.opposite().normal());
                 handler_at(self.game, behind)
             }),
+            PointType::Campfire => Some(Inv::Campfire(point.pos)),
+            PointType::Composter => Some(Inv::Composter(point.pos)),
+            PointType::RespawnAnchor => Some(Inv::Anchor(point.pos)),
             _ => handler_at(self.game, point.pos),
         }
     }
@@ -1015,6 +1111,18 @@ fn read_points(nbt: &Compound, arm: Pos, game: &Game<'_>) -> Vec<Point> {
         .collect()
 }
 
+/// The arm's selection mode value box scrolled one step (`ScrollOptionBehaviour`):
+/// its new mode's name, for the action bar.
+pub(super) fn step_arm_mode(game: &Game<'_>, pos: Pos, up: bool) -> Option<&'static str> {
+    let dim = game.dim.id().to_owned();
+    with_state(|s| {
+        let arm = s.arms.get_mut(&(dim, pos))?;
+        arm.selection_mode = arm.selection_mode.step(up);
+        arm.dirty = true;
+        Some(arm.selection_mode.label())
+    })
+}
+
 fn write_arm(arm: &Arm<ItemStack>, pos: Pos, nbt: &mut Compound) {
     let points: Vec<String> = arm
         .inputs
@@ -1041,6 +1149,7 @@ fn write_arm(arm: &Arm<ItemStack>, pos: Pos, nbt: &mut Compound) {
     put(nbt, "Powered", Tag::Byte(i8::from(arm.redstone_locked)));
     put(nbt, "LastInput", Tag::Int(arm.last_input_index));
     put(nbt, "LastOutput", Tag::Int(arm.last_output_index));
+    put(nbt, "ScrollValue", Tag::Int(arm.selection_mode.code()));
 }
 
 fn read_arm(nbt: &Compound, pos: Pos, game: &Game<'_>) -> Arm<ItemStack> {
@@ -1055,6 +1164,7 @@ fn read_arm(nbt: &Compound, pos: Pos, game: &Game<'_>) -> Arm<ItemStack> {
         matches!(nbt.get(&JavaString::from("Powered")), Some(Tag::Byte(b)) if *b != 0);
     arm.last_input_index = get_int(nbt, "LastInput").unwrap_or(-1);
     arm.last_output_index = get_int(nbt, "LastOutput").unwrap_or(-1);
+    arm.selection_mode = super::create_arm::SelectionMode::from_code(get_int(nbt, "ScrollValue").unwrap_or(0));
     arm.dirty = false;
     arm
 }

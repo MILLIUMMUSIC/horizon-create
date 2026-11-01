@@ -153,9 +153,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      `ArmInteractionPointHandler` does (on the server: the action bar says the mode), and the placed arm takes the
      points within 5 blocks. Its base, lower and upper arm, claw and grips are drawn from Create's partials with
      `ArmRenderer`'s transforms and the angles the server works out as Create's client does (`create:arms`); its held
-     item in the claw. As in Create 6, chests and vaults are no arm points. Not yet: the selection mode's value box
-     (round robin only), ceiling arms, jukeboxes, composters, campfires, blaze burners, crafters,
-     saws, the dance, the selection's outlines, left click to deselect, goggles on the arm, sounds.
+     item in the claw. As in Create 6, chests and vaults are no arm points. The mouse wheel over an arm's side steps its selection mode (round robin, forced round robin, prefer first; saved, said on the action bar); campfires (food), composters (compostables in, bone meal out) and respawn anchors (glowstone) are points. Not yet: ceiling arms, jukeboxes (Horizon keeps starting a disc's song to itself), blaze burners, crafters, saws, the dance, the selection's outlines, left click to deselect, goggles on the arm, sounds.
    - Deployer (`deployer.rs`: `DeployerBlockEntity`'s cycle, `DeployerItemHandler`, `BeltDeployerCallbacks`,
      `create:deploying` and `create:item_application`; `arms.rs`): a kinetic block (`Kind::Deployer`, 4 su, its
      shaft by `axis_along_first`) with a block per `axis_along_first` on a lightning rod's template, placed as
