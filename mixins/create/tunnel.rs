@@ -327,40 +327,59 @@ pub fn group(
     Some(out)
 }
 
-/// `BrassTunnelBlockEntity.SelectionMode`: the two ported here.
+/// `BrassTunnelBlockEntity.SelectionMode`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SelectionMode {
     #[default]
     Split,
+    ForcedSplit,
     RoundRobin,
+    ForcedRoundRobin,
+    PreferNearest,
+    Randomize,
+    Synchronize,
 }
 
 impl SelectionMode {
+    pub const ALL: [SelectionMode; 7] = [
+        SelectionMode::Split,
+        SelectionMode::ForcedSplit,
+        SelectionMode::RoundRobin,
+        SelectionMode::ForcedRoundRobin,
+        SelectionMode::PreferNearest,
+        SelectionMode::Randomize,
+        SelectionMode::Synchronize,
+    ];
+    /// The next option, as its value box steps them.
     pub fn next(self) -> SelectionMode {
-        match self {
-            SelectionMode::Split => SelectionMode::RoundRobin,
-            SelectionMode::RoundRobin => SelectionMode::Split,
-        }
+        let i = Self::ALL.iter().position(|m| *m == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
     }
     /// `create.tunnel.selection_mode.*`'s English names.
     pub fn label(self) -> &'static str {
         match self {
             SelectionMode::Split => "Split",
+            SelectionMode::ForcedSplit => "Forced Split",
             SelectionMode::RoundRobin => "Round Robin",
+            SelectionMode::ForcedRoundRobin => "Forced Round Robin",
+            SelectionMode::PreferNearest => "Prefer Nearest",
+            SelectionMode::Randomize => "Randomize",
+            SelectionMode::Synchronize => "Synchronize Inputs",
         }
     }
     pub fn key(self) -> &'static str {
         match self {
             SelectionMode::Split => "split",
+            SelectionMode::ForcedSplit => "forced_split",
             SelectionMode::RoundRobin => "round_robin",
+            SelectionMode::ForcedRoundRobin => "forced_round_robin",
+            SelectionMode::PreferNearest => "prefer_nearest",
+            SelectionMode::Randomize => "randomize",
+            SelectionMode::Synchronize => "synchronize",
         }
     }
     pub fn parse(s: &str) -> Option<SelectionMode> {
-        match s {
-            "split" => Some(SelectionMode::Split),
-            "round_robin" => Some(SelectionMode::RoundRobin),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|m| m.key() == s)
     }
 }
 
@@ -382,6 +401,18 @@ pub trait TunnelWorld<S>: TunnelLevel {
     /// The tunnel at `tunnel` throws `stack` off the belt's end towards
     /// `side` (an item entity).
     fn eject(&mut self, tunnel: Pos, side: Dir, stack: S);
+    /// `level.random.nextInt(n)`.
+    fn random(&mut self, _n: usize) -> usize {
+        0
+    }
+    /// Whether the brass tunnel at `pos` holds a stack (another than the
+    /// one ticking).
+    fn has_stack(&self, _pos: Pos) -> bool {
+        false
+    }
+    /// `syncedOutputActive` of the brass tunnel at `pos` (another than the
+    /// one ticking).
+    fn set_synced(&mut self, _pos: Pos, _active: bool) {}
 }
 
 /// `testFlapFilter` with no filter of its own (sided filters aren't
@@ -505,6 +536,8 @@ pub struct BrassTunnel<S> {
     pub targets: [Vec<(Pos, Dir)>; 2],
     pub new_item_arrived: bool,
     pub mode: SelectionMode,
+    /// `syncedOutputActive`: Synchronize lets its group go.
+    pub synced: bool,
 }
 
 impl<S> Default for BrassTunnel<S> {
@@ -517,14 +550,15 @@ impl<S> Default for BrassTunnel<S> {
             targets: [Vec::new(), Vec::new()],
             new_item_arrived: false,
             mode: SelectionMode::Split,
+            synced: false,
         }
     }
 }
 
 impl<S: Stack> BrassTunnel<S> {
-    /// `canTakeItems` (no synchronised outputs here).
+    /// `canTakeItems`.
     pub fn can_take(&self) -> bool {
-        self.stack.as_ref().is_none_or(|s| s.count() == 0)
+        self.stack.as_ref().is_none_or(|s| s.count() == 0) && !self.synced
     }
 
     /// `setStackToDistribute`.
@@ -550,12 +584,40 @@ impl<S: Stack> BrassTunnel<S> {
         if speed == 0.0 {
             return false;
         }
-        let Some(stack) = self.stack.clone().filter(|s| s.count() > 0) else {
+        let stack = self.stack.clone().filter(|s| s.count() > 0);
+        if stack.is_none() && !self.synced {
             return false;
-        };
+        }
+        let synchronize = self.mode == SelectionMode::Synchronize;
         if self.progress == -1 {
             self.targets = [Vec::new(), Vec::new()];
-            let Some(outputs) = gather_valid_outputs(world, pos) else {
+            let outputs = gather_valid_outputs(world, pos).filter(|_| self.synced || !synchronize);
+            // Synchronize: the group goes once every tunnel of it holds a
+            // stack, and holds again once all are empty.
+            if synchronize && let Some(group) = group(world, pos, |p| world.is_loaded(p)) {
+                let held = |t: Pos| {
+                    if t == pos {
+                        stack.is_some()
+                    } else {
+                        world.has_stack(t)
+                    }
+                };
+                let all_empty = group.iter().all(|t| !held(*t));
+                let all_full = group.iter().all(|t| held(*t));
+                if all_full || all_empty {
+                    for t in group {
+                        if t == pos {
+                            self.synced = !all_empty;
+                        } else {
+                            world.set_synced(t, !all_empty);
+                        }
+                    }
+                }
+            }
+            let Some(outputs) = outputs else {
+                return false;
+            };
+            let Some(stack) = stack.clone() else {
                 return false;
             };
             for (tunnel, side) in outputs {
@@ -572,7 +634,9 @@ impl<S: Stack> BrassTunnel<S> {
                 self.new_item_arrived = false;
                 self.progress = 2;
             } else {
-                self.progress = BRASS_TUNNEL_TIMER;
+                if !synchronize || self.synced {
+                    self.progress = BRASS_TUNNEL_TIMER;
+                }
                 return false;
             }
         }
@@ -605,8 +669,15 @@ impl<S: Stack> BrassTunnel<S> {
         if n == 0 {
             return false;
         }
-        let split = self.mode == SelectionMode::Split;
-        let robin = self.mode == SelectionMode::RoundRobin;
+        let force = matches!(
+            self.mode,
+            SelectionMode::ForcedSplit | SelectionMode::ForcedRoundRobin
+        );
+        let split = matches!(self.mode, SelectionMode::Split | SelectionMode::ForcedSplit);
+        let robin = matches!(
+            self.mode,
+            SelectionMode::RoundRobin | SelectionMode::ForcedRoundRobin
+        );
         let with_count = |c: u32| {
             let mut s = stack.clone();
             s.set_count(c);
@@ -623,7 +694,11 @@ impl<S: Stack> BrassTunnel<S> {
             };
         let mut distributed: Vec<((Pos, Dir), u32)> = Vec::new();
         let mut full: Vec<(Pos, Dir)> = Vec::new();
-        let index_start = self.previous_index % n;
+        let index_start = match self.mode {
+            SelectionMode::Randomize => world.random(n) % n,
+            SelectionMode::PreferNearest | SelectionMode::Synchronize => 0,
+            _ => self.previous_index % n,
+        };
         let mut to_distribute = stack.count();
         for distribute_again in [true, false] {
             let mut this_cycle = to_distribute;
@@ -640,7 +715,7 @@ impl<S: Stack> BrassTunnel<S> {
                 let mut split_remainder = (stack_size % remaining as u32) as i32;
                 let mut visited = 0;
                 this_cycle = to_distribute;
-                if !split && simulate {
+                if !(force || split) && simulate {
                     continue;
                 }
                 while visited < n {
@@ -675,6 +750,10 @@ impl<S: Stack> BrassTunnel<S> {
                         }
                     };
                     if refused {
+                        // Forced: all of them or nothing.
+                        if force {
+                            return false;
+                        }
                         if split && simulate {
                             remaining -= 1;
                         }
@@ -981,6 +1060,43 @@ mod tests {
         assert_eq!(w.received[&[2, 0, 0]], 2);
         assert_eq!(w.received[&[2, 0, 1]], 8);
         assert!(t[0].stack.is_none());
+    }
+
+    #[test]
+    fn forced_prefer_nearest_and_modes() {
+        // Forced split: one target full, nothing goes.
+        let (mut w, mut t) = parallel(2, SelectionMode::ForcedSplit);
+        w.inputs.insert([2, 0, 1], 0);
+        let targets = gather_valid_outputs(&w, [1, 1, 0]).unwrap();
+        t[0].set_stack(Some(Item(4)), Some(Dir::West));
+        assert!(!t[0].distribute(&targets, &mut w));
+        assert_eq!(t[0].stack, Some(Item(4)));
+        // Plain split gives what it can.
+        t[0].mode = SelectionMode::Split;
+        t[0].distribute(&targets, &mut w);
+        assert_eq!(w.received.get(&[2, 0, 0]), Some(&4));
+        // Prefer nearest: always its own belt first.
+        let (mut w, mut t) = parallel(2, SelectionMode::PreferNearest);
+        let targets = gather_valid_outputs(&w, [1, 1, 0]).unwrap();
+        for _ in 0..3 {
+            t[0].set_stack(Some(Item(4)), Some(Dir::West));
+            t[0].distribute(&targets, &mut w);
+        }
+        assert_eq!(w.received.get(&[2, 0, 0]), Some(&12));
+        assert_eq!(w.received.get(&[2, 0, 1]), None);
+        // The value box steps through all seven, and they're saved by key.
+        let mut m = SelectionMode::Split;
+        for _ in 0..7 {
+            assert_eq!(SelectionMode::parse(m.key()), Some(m));
+            m = m.next();
+        }
+        assert_eq!(m, SelectionMode::Split);
+        // Synchronize: a synced tunnel takes nothing more.
+        let b: BrassTunnel<Item> = BrassTunnel {
+            synced: true,
+            ..BrassTunnel::default()
+        };
+        assert!(!b.can_take());
     }
 
     #[test]

@@ -1,5 +1,14 @@
 # Validation
 
+## Brass tunnel modes (unit-tested only)
+
+`tunnel.rs` has all seven of `BrassTunnelBlockEntity.SelectionMode` (Forced split and Forced round robin give
+nothing unless every target takes it, Prefer nearest always starts at its own belt, Randomize at a random one,
+Synchronize holds its group's stacks until every tunnel of it has one); the wrench steps through them. 166 unit
+tests pass (1 new), `horizon.py check` passes.
+
+Not checked yet: any of the five new modes in the game.
+
 ## Parts drawn on moving structures (macOS, offscreen)
 
 Seen working: a piston pushing a slime block with a shaft, a cogwheel, a drill and a harvester: the shaft's and

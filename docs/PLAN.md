@@ -206,8 +206,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      robin (standing in for the value box, as Horizon can't open the value settings board; an action bar line
      says the mode) for the whole connected group, and a tunnel placed beside others gives them its mode
      (`updateTunnelConnections`); an empty hand takes the group's stacks (`grabAllStacksOfGroup`); a broken one
-     drops its stack. Mode and stack are saved in `create_logistics_*.txt`. Not yet: Forced split, Forced round
-     robin, Prefer nearest, Randomize and Synchronize; sided filters on the tunnel itself
+     drops its stack. Mode and stack are saved in `create_logistics_*.txt`. Not yet: sided filters on the tunnel itself
      (`SidedFilteringBehaviour`); the brass tunnel's connected textures (`BrassTunnelCTBehaviour`); its window
      toggle (the wrench switches the mode instead); the goggle tooltip; its item handler (`BrassTunnelItemHandler`:
      funnels and hoppers inserting into it); the distribution's stack drawn (`BrassTunnelRenderer`).

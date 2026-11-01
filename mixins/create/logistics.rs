@@ -1519,8 +1519,8 @@ fn set_mode(game: &Game<'_>, pos: Pos, mode: SelectionMode) {
     });
 }
 
-/// The wrench on a tunnel: a brass tunnel switches between Split and
-/// Round robin (standing in for its value box, which Horizon can't open;
+/// The wrench on a tunnel: a brass tunnel steps to its next selection mode
+/// (standing in for its value box, which Horizon can't open;
 /// the window of a straight brass tunnel isn't toggled), an andesite one
 /// opens or closes its window (`onWrenched`). True when it was a tunnel.
 pub(super) fn wrench_tunnel(game: &mut Game<'_>, pos: Pos) -> bool {
@@ -1613,6 +1613,22 @@ impl TunnelWorld<ItemStack> for TunnelsAt<'_, '_> {
             f64::from(n[2] as f32 * movement),
         ];
         self.game.spawn_item(stack, [at[0], at[1] + 6.0 / 16.0, at[2]], motion, PICKUP_DELAY);
+    }
+    fn random(&mut self, n: usize) -> usize {
+        use horizon_core::random::RandomSource;
+        self.game.world.random.next_int_bound(n.max(1) as i32).unwrap_or(0) as usize
+    }
+    fn has_stack(&self, pos: Pos) -> bool {
+        let dim = self.game.dim.id().to_owned();
+        with_state(|s| s.tunnels.get(&(dim, pos)).is_some_and(|t| t.brass.stack.is_some()))
+    }
+    fn set_synced(&mut self, pos: Pos, active: bool) {
+        let dim = self.game.dim.id().to_owned();
+        with_state(|s| {
+            if let Some(t) = s.tunnels.get_mut(&(dim, pos)) {
+                t.brass.synced = active;
+            }
+        });
     }
 }
 
@@ -1713,7 +1729,7 @@ pub(super) fn tunnels_tick(game: &mut Game<'_>, dimension: &str) {
         let Some(mut t) = with_state(|s| s.tunnels.remove(&key)) else {
             continue;
         };
-        if t.brass.stack.is_some() || t.brass.progress > 0 {
+        if t.brass.stack.is_some() || t.brass.progress > 0 || t.brass.synced {
             t.brass.tick(pos, &mut TunnelsAt { game });
         }
         with_state(|s| s.tunnels.insert(key, t));
