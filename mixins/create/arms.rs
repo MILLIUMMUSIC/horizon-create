@@ -826,19 +826,52 @@ pub(super) fn insert_into(
     Some(insert_item_stacked(game, &inv, stack.clone(), false))
 }
 
-/// For logistics: `ItemHelper.extract` of up to `max` of one item from a
-/// vault or deployer; none for other blocks.
-pub(super) fn extract_from(game: &mut Game<'_>, pos: Pos, max: u32) -> Option<Option<ItemStack>> {
+/// For logistics: `ItemHelper.extract` (`UPTO`) of up to `max` of one item
+/// passing `test` from a vault or deployer, gathered from every slot
+/// holding it, up to a stack; none for other blocks.
+pub(super) fn extract_from(
+    game: &mut Game<'_>,
+    pos: Pos,
+    max: u32,
+    test: &dyn Fn(&ItemStack) -> bool,
+) -> Option<Option<ItemStack>> {
     let inv = handler_at(game, pos)?;
     if !matches!(inv, Inv::Vault(_) | Inv::Deployer(_)) {
         return None;
     }
+    let mut out: Option<ItemStack> = None;
+    let mut cap = max;
     for i in 0..inv.slots(game) {
-        if let Some(s) = inv.extract(game, i, max, false) {
-            return Some(Some(s));
+        let want = cap - out.as_ref().map_or(0, |o| o.count);
+        let Some(probe) = inv.extract(game, i, want, true) else {
+            continue;
+        };
+        let same = match &out {
+            None => test(&probe),
+            Some(o) => {
+                let mut p = probe.clone();
+                p.count = o.count;
+                p == *o
+            }
+        };
+        if !same {
+            continue;
+        }
+        let Some(taken) = inv.extract(game, i, want, false) else {
+            continue;
+        };
+        match out.as_mut() {
+            None => {
+                cap = max.min(super::create_belt::Stack::max_stack(&taken)).max(1);
+                out = Some(taken);
+            }
+            Some(o) => o.count += taken.count,
+        }
+        if out.as_ref().is_some_and(|o| o.count >= cap) {
+            break;
         }
     }
-    Some(None)
+    Some(out)
 }
 
 /// Whether a funnel or chute finds an inventory here that isn't a block
@@ -861,7 +894,7 @@ fn point_type_at(game: &Game<'_>, pos: Pos) -> Option<PointType> {
         super::create_logistics::CHUTE => Some(PointType::Chute),
         "create:millstone" => Some(PointType::Millstone),
         // FunnelType: a funnel that isn't extracting.
-        super::create_funnel::COLLECTING_FUNNEL => {
+        super::create_funnel::COLLECTING_FUNNEL | super::create_funnel::BRASS_COLLECTING_FUNNEL => {
             Some(PointType::Funnel(Dir::parse(&prop(game, pos, "facing")?)?))
         }
         n if super::create_logistics::is_belt(n) => {
@@ -926,7 +959,11 @@ impl ArmWorld<ItemStack> for ArmAt<'_, '_> {
             return Some(stack);
         };
         if let PointType::Funnel(_) = point.kind {
-            // FunnelPoint: the funnel's inserter (`insertItemStacked`).
+            // FunnelPoint: the funnel's filter, then its inserter
+            // (`insertItemStacked`).
+            if !super::create_logistics::funnel_accepts(self.game, point.pos, &stack) {
+                return Some(stack);
+            }
             return insert_item_stacked(self.game, &h, stack, simulate);
         }
         insert_item(self.game, &h, stack, simulate)

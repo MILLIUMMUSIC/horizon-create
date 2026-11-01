@@ -1,5 +1,75 @@
 # Validation
 
+## Milestone 4, part 3: checked on the Mac (macOS, offscreen)
+
+Built with `tools/horizon.py build` against the pinned Horizon and horizon-mixins, the content mod from Create
+6.0.10's jar, run offscreen. 123 unit tests pass, clippy has no warnings.
+
+Fixed here: **nothing could be placed on a belt** (a tunnel, or a funnel on its top): the belt's right click took
+every click so that its grindstone template's menu wouldn't open, where Create's `BeltBlock.useItemOn` passes other
+items on to their own use. A held block item is now placed against the belt through Horizon's placement rules
+(`place_against` in `logistics.rs`, the face's centre standing for the hit position, which the hook doesn't give).
+
+Seen working:
+
+- Crafting recipes for the brass funnel and both tunnels are in the content mod (carried from the jar).
+- Brass funnel on a chest's side holding gold and iron: its iron filter (set by a right click on its front with an
+  ingot) makes it take out the whole iron stack and leave the gold; the filter item is drawn on the funnel.
+- Andesite tunnel placed on a belt by hand: it turns into a cross between two depots, and a stack of 8 passing
+  under it leaves one ingot on each depot and goes on.
+- Brass tunnel in its place: Split spreads 9 ingots 3 / 3 / 3 over the two depots and the belt on; the wrench
+  switches it to Round robin ("Brass Tunnel: Round Robin" on the action bar), then two stacks of 4 go whole, one
+  to each depot; the mode is saved (`create_logistics_*.txt`).
+
+Still not checked (from the list below): brass funnels collecting and as belt funnels, the filter over a reload and
+on vertical funnels, tunnel shapes as neighbours change, windows, a tunnel breaking off, connected brass tunnels
+over parallel belts, an empty hand taking a group's stacks, brass funnels filtering a tunnel's sides, and the
+regressions listed.
+
+## Milestone 4, part 3: brass funnel and belt tunnels (cloud)
+
+Ported in a cloud session on Linux (x86_64), Rust 1.99.1, Python 3.12, against the pinned Horizon (`aa27eca`) and
+horizon-mixins (`3f99a5c`). **Not built with `tools/horizon.py build` and not run in the game.**
+
+| Check | How | Result |
+|---|---|---|
+| Rule modules (all of `src/lib.rs`, now with `tunnel.rs`) | `cargo fmt --all --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` | 123 tests pass (8 new), no warnings |
+| The bundle applies and the game compiles | `python3.12 tools/horizon.py check --horizon ../horizon --no-audio` (Linux: the container has no ALSA) | Pass, no warnings |
+| `prepare_content.py`'s funnel and tunnel blocks | `fit_logistics` run on a scratch tree with Create 6.0.10's generated `andesite_tunnel`, `brass_tunnel`, `brass_funnel` and `andesite_funnel` blockstates (from the source tag, not committed) | Each tunnel shape gets a block with `axis=x/y/z` variants (y as x), its loot table in 26.3's format and its base's `mineable` tag; the brass funnel gets its extracting and collecting blocks as the andesite one |
+| `tools/horizon.py build`, the content mod from the jar, the game | Not run | — |
+
+What the unit tests cover: tunnel block names and states; `getTunnelState` (T left/right and cross from belts across
+it and side inputs, a belt along it not counting, windows between tunnels, a closed window kept); sides and flaps of
+straight, T and cross tunnels, flaps closed by a neighbouring tunnel; `canSurvive`; connected brass tunnels
+(`getAdjacent`, `isConnected`, `hasDistributionBehaviour`), `gatherValidOutputs` (own sides first, the belt's end,
+not into a solid block, nothing on a stopped belt); `distribute` in Split (nine items over three belts, three each;
+overflow from a nearly full target to the others) and Round robin (whole stacks in turn, waiting on a full target);
+the tick's timing (targets, then two ticks for a new item); a stack entering an andesite cross giving one item to
+each side and going on, a single item passing, a brass tunnel taking a stack and holding the next item back at
+0.99; the brass funnel's blocks, filter (`test`, set, cleared), amount (a full stack, one for an andesite
+extractor) and filter slot positions.
+
+Not checked yet (part 3):
+
+- Crafting the brass funnel and both tunnels (their recipes should be carried from the jar as the andesite funnel's).
+- Brass funnel: placing (extracting, sneaking for collecting), breaking with a pickaxe and dropping itself; the
+  filter set and cleared by right clicks on its front (any side of an upright one), and not by clicks on other
+  faces; the filter item drawn in its slot (position, tilt, size, flat items against block items) on horizontal
+  and vertical funnels; extracting a whole stack of the filtered item from a chest with mixed items; collecting
+  only the filtered item; as a belt funnel, pulling only the filtered item off the belt (others pass, or wait in
+  front of a funnel facing them) and pushing whole stacks onto it; an arm depositing into it; the filter kept over
+  a save and reload.
+- Andesite tunnel: placing on a belt (the straight block turning to the belt's axis), its shape changing as belts,
+  depots and funnels come and go beside it, the window between two tunnels and the wrench closing it; splitting a
+  stack onto belts and depots at its sides; breaking off when the belt below goes; drops; models and collision.
+- Brass tunnel: a T over a belt with a side belt splitting stacks; three tunnels side by side over parallel belts
+  sharing stacks evenly; Round robin after the wrench (the action bar line, the whole group switching); a tunnel
+  placed beside a group; an empty hand taking the stacks; a broken tunnel dropping its stack; items thrown off a
+  belt's end through it; stacks and modes kept over a save and reload; brass funnels on the side belts filtering
+  what a side takes.
+- Regressions: andesite funnels and chutes (they now gather an item from every slot, up to a stack, as Create's
+  `ItemHelper.extract`), belts without tunnels, arms depositing into andesite funnels.
+
 ## Milestone 4, part 2 and fluids: checked on the Mac (macOS, offscreen)
 
 Both cloud PRs merged together, then built with `tools/horizon.py build` (Python 3.12) against the pinned Horizon

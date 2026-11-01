@@ -458,6 +458,22 @@ impl Ending {
     }
 }
 
+/// A belt tunnel above a segment, as an item entering it meets it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TunnelAbove {
+    pub brass: bool,
+    /// Its `HORIZONTAL_AXIS`.
+    pub axis: Axis,
+    /// `BeltTunnelBlock.isJunction`.
+    pub junction: bool,
+    /// Its `flaps`.
+    pub flaps: Vec<Dir>,
+    /// A brass tunnel's `hasDistributionBehaviour`.
+    pub distributes: bool,
+    /// A brass tunnel's `canTakeItems` (it holds nothing).
+    pub can_take: bool,
+}
+
 /// What a belt's items need of the world around it.
 pub trait BeltWorld<S> {
     /// A press (`BeltProcessingBehaviour`) two above `segment`'s position
@@ -490,6 +506,21 @@ pub trait BeltWorld<S> {
     fn solid_side(&self, pos: Pos, face: Dir) -> bool;
     /// An item entity at `at` moving at `motion`.
     fn eject(&mut self, stack: S, at: [f64; 3], motion: [f64; 3]);
+    /// The belt tunnel at `pos` (above a segment).
+    fn tunnel(&self, _pos: Pos) -> Option<TunnelAbove> {
+        None
+    }
+    /// The brass tunnel at `pos` takes `stack` to distribute
+    /// (`setStackToDistribute`), entered from `from`.
+    fn tunnel_take(&mut self, _pos: Pos, _stack: S, _from: Dir) {}
+    /// `Level.isLoaded`.
+    fn loaded(&self, _pos: Pos) -> bool {
+        true
+    }
+    /// `canInsertFromSide(side)` of the direct input at `pos`.
+    fn can_insert_from_side(&self, pos: Pos, _side: Dir) -> bool {
+        self.has_direct_input(pos)
+    }
 }
 
 /// The belt a controller drives, as its inventory sees it.
@@ -677,6 +708,15 @@ impl<S: Stack> BeltInventory<S> {
                 continue;
             }
             if no_movement {
+                front = Some(self.items[i].belt_position);
+                i += 1;
+                continue;
+            }
+            if horizontal && self.check_for_tunnels(belt, world, i, next_offset) {
+                if self.items[i].stack.count() == 0 {
+                    self.items.remove(i);
+                    continue;
+                }
                 front = Some(self.items[i].belt_position);
                 i += 1;
                 continue;
@@ -901,6 +941,83 @@ impl<S: Stack> BeltInventory<S> {
             self.dirty = true;
             if blocking || self.items[i].stack.count() == 0 {
                 return true;
+            }
+        }
+        false
+    }
+
+    /// `BeltTunnelInteractionHandler.flapTunnelsAndCheckIfStuck` for item
+    /// `i` (a tunnel needs a horizontal belt, `getTunnelOnSegment`): true
+    /// when it doesn't move on this tick. A brass tunnel that distributes
+    /// takes the stack (or holds it back while it still has one); an
+    /// andesite junction along the belt puts one item of a stack onto each
+    /// side's belt or block with a flap.
+    fn check_for_tunnels(
+        &mut self,
+        belt: &Belt,
+        world: &mut dyn BeltWorld<S>,
+        i: usize,
+        next_offset: f32,
+    ) -> bool {
+        let positive = self.movement_positive;
+        let current = self.items[i].belt_position as i32;
+        let mut upcoming = next_offset as i32;
+        if !positive && next_offset == 0.0 {
+            upcoming = -1;
+        }
+        if current == upcoming {
+            return false;
+        }
+        let movement_facing = belt.movement_facing();
+        let segment = belt.position_for_offset(upcoming);
+        let tunnel_pos = [segment[0], segment[1] + 1, segment[2]];
+        let Some(tunnel) = world.tunnel(tunnel_pos) else {
+            return false;
+        };
+        // stuckAtTunnel: a brass tunnel that can't take it (`canInsert`).
+        if tunnel.brass && tunnel.distributes && !tunnel.can_take {
+            self.items[i].belt_position = current as f32 + if positive { 0.99 } else { 0.01 };
+            return true;
+        }
+        if tunnel.brass {
+            if !tunnel.distributes {
+                return false;
+            }
+            let stack = self.items[i].stack.clone();
+            self.items[i].stack.set_count(0);
+            world.tunnel_take(tunnel_pos, stack, movement_facing.opposite());
+            self.dirty = true;
+            return true;
+        }
+        if self.items[i].stack.count() > 1
+            && tunnel.junction
+            && movement_facing.axis() == tunnel.axis
+        {
+            for d in [Dir::South, Dir::West, Dir::North, Dir::East] {
+                if d.axis() == tunnel.axis || !tunnel.flaps.contains(&d) {
+                    continue;
+                }
+                let n = d.normal();
+                let out = [segment[0] + n[0], segment[1] + n[1], segment[2] + n[2]];
+                if !world.loaded(out) {
+                    return true;
+                }
+                if !world.has_direct_input(out) || !world.can_insert_from_side(out, d) {
+                    continue;
+                }
+                let mut one = self.items[i].copied();
+                one.stack.set_count(1);
+                match world.direct_insert(out, &one, d) {
+                    Some(None) => {}
+                    Some(Some(left)) if left.count() == 0 => {}
+                    _ => return true,
+                }
+                let count = self.items[i].stack.count();
+                self.items[i].stack.set_count(count - 1);
+                self.dirty = true;
+                if count - 1 <= 1 {
+                    break;
+                }
             }
         }
         false
@@ -1505,6 +1622,8 @@ mod tests {
         presses: Vec<Pos>,
         funnels: HashMap<Pos, BeltFunnel>,
         funnelled: Vec<Item>,
+        tunnels: HashMap<Pos, TunnelAbove>,
+        tunnelled: Vec<(Pos, Item, Dir)>,
         /// The press's running ticks (`PressingBehaviour`), none at rest.
         cycle: Option<i32>,
     }
@@ -1614,6 +1733,12 @@ mod tests {
         }
         fn eject(&mut self, stack: Item, at: [f64; 3], motion: [f64; 3]) {
             self.ejected.push((stack, at, motion));
+        }
+        fn tunnel(&self, pos: Pos) -> Option<TunnelAbove> {
+            self.tunnels.get(&pos).cloned()
+        }
+        fn tunnel_take(&mut self, pos: Pos, stack: Item, from: Dir) {
+            self.tunnelled.push((pos, stack, from));
         }
     }
 
@@ -1852,6 +1977,80 @@ mod tests {
         assert!(inv.items.is_empty());
         assert_eq!(b.funnelled, vec![Item("y", 5)]);
         assert!(b.ejected.is_empty());
+    }
+
+    #[test]
+    fn tunnels_split_and_take_items() {
+        // An andesite cross over the middle segment of a belt moving south,
+        // with a depot on each side: one item each, the rest goes on.
+        let mut b = Blocks::default();
+        flat(&mut b, Dir::South, 3);
+        let andesite = TunnelAbove {
+            brass: false,
+            axis: Axis::Z,
+            junction: true,
+            flaps: vec![Dir::South, Dir::West, Dir::North, Dir::East],
+            distributes: false,
+            can_take: true,
+        };
+        b.tunnels.insert([0, 1, 1], andesite.clone());
+        b.inputs.extend([[-1, 0, 1], [1, 0, 1]]);
+        let belt = belt(Dir::South, 3, 64.0);
+        let mut inv: BeltInventory<Item> = BeltInventory::new();
+        inv.insert_at(&belt, 0, Item("y", 5), 180, false);
+        for _ in 0..60 {
+            inv.tick(&belt, &mut b);
+        }
+        assert_eq!(
+            b.inserted,
+            vec![
+                ([-1, 0, 1], Item("y", 1), Dir::West),
+                ([1, 0, 1], Item("y", 1), Dir::East)
+            ]
+        );
+        assert_eq!(b.ejected.len(), 1);
+        assert_eq!(b.ejected[0].0, Item("y", 3));
+        // A single item passes; so does anything through a straight one.
+        let mut b2 = Blocks::default();
+        flat(&mut b2, Dir::South, 3);
+        b2.tunnels.insert([0, 1, 1], andesite);
+        b2.inputs.extend([[-1, 0, 1], [1, 0, 1]]);
+        let mut inv: BeltInventory<Item> = BeltInventory::new();
+        inv.insert_at(&belt, 0, Item("y", 1), 180, false);
+        for _ in 0..60 {
+            inv.tick(&belt, &mut b2);
+        }
+        assert!(b2.inserted.is_empty());
+        // A brass tunnel that distributes takes the stack as it enters;
+        // one still holding a stack keeps the item waiting at its edge.
+        let mut b3 = Blocks::default();
+        flat(&mut b3, Dir::South, 3);
+        let brass = TunnelAbove {
+            brass: true,
+            axis: Axis::Z,
+            junction: false,
+            flaps: vec![Dir::North, Dir::South],
+            distributes: true,
+            can_take: false,
+        };
+        b3.tunnels.insert([0, 1, 1], brass.clone());
+        let mut inv: BeltInventory<Item> = BeltInventory::new();
+        inv.insert_at(&belt, 0, Item("y", 7), 180, false);
+        for _ in 0..30 {
+            inv.tick(&belt, &mut b3);
+        }
+        assert_eq!(inv.items.len(), 1);
+        assert!((inv.items[0].belt_position - 0.99).abs() < 1e-4);
+        b3.tunnels.insert(
+            [0, 1, 1],
+            TunnelAbove {
+                can_take: true,
+                ..brass
+            },
+        );
+        inv.tick(&belt, &mut b3);
+        assert!(inv.items.is_empty());
+        assert_eq!(b3.tunnelled, vec![([0, 1, 1], Item("y", 7), Dir::North)]);
     }
 
     #[test]

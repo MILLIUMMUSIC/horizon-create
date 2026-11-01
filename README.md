@@ -11,7 +11,9 @@ Status: **milestones 1, 2 and 3 (part 1): kinetics, their visuals, and the first
 OBJ model) is checked in the game in part (see VALIDATION.md for what was seen). **Milestone 4 part 1** (mechanical belt, chute,
 andesite funnel) is checked in the game. **Milestone 4, fluids** (straight fluid pipes, mechanical pump,
 single fluid tanks, basin fluids) and **milestone 4 part 2** (item vault, mechanical arm, deployer) are ported and
-unit-tested and checked in the game in part (VALIDATION.md says what was seen). See
+unit-tested and checked in the game in part (VALIDATION.md says what was seen). **Milestone 4 part 3** (brass funnel
+with its filter, andesite and brass belt tunnels in Split and Round robin) is ported, unit-tested and compiled
+into the game, **not yet run in the game**. See
 [docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next, and [VALIDATION.md](VALIDATION.md) for what was
 checked how.
 
@@ -34,6 +36,7 @@ checked how.
 | `BeltBlock`, `BeltBlockEntity`, `BeltInventory`, `TransportedItemStack`, `BeltHelper`, `BeltConnectorItem`, `BeltRenderer` (not yet run in the game) | `mixins/create/belt.rs` (chain, movement, items, connector, tested), `logistics.rs` (items in the world, saving, drawing), `glue.rs` (the belt's partials with the scrolling texture) |
 | `ChuteBlockEntity` (falling items only), `FunnelBlockEntity`/`BeltFunnelInteractionHandler` for the andesite funnel (not yet run in the game) | `mixins/create/chute.rs`, `funnel.rs` (rules, tested), `logistics.rs` |
 | `FluidTransportBehaviour`, `PipeConnection`, `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`, `PumpBlockEntity`, `FluidTankBlockEntity` (single tanks), `FluidTankRenderer`, the basin's tanks, fluid `create:mixing` recipes (not yet run in the game) | `mixins/create/fluids.rs` (rules, tested; fluid holders behind the `FluidAccess` trait), `fluid_glue.rs` (pipes, pumps and tanks in the world, buckets, drawing), `processing.rs` (fluid ingredients) |
+| `BrassFunnelBlock`/`FunnelBlockEntity`'s filter (`FilteringBehaviour`, one item), `BeltTunnelBlock`/`BeltTunnelBlockEntity`, `BrassTunnelBlockEntity` (Split and Round robin), `BeltTunnelInteractionHandler` (compiled and unit-tested only) | `mixins/create/funnel.rs`, `tunnel.rs`, `belt.rs` (rules, tested), `logistics.rs` (filters, tunnels' shapes and stacks, saving, drawing the filter) |
 | `ItemVaultBlock`/`ItemVaultBlockEntity` and `ConnectivityHandler`, `ArmBlockEntity`/`ArmInteractionPoint`/`ArmAngleTarget`/`ArmRenderer`, `DeployerBlockEntity`/`BeltDeployerCallbacks`/`DeployerRenderer` (compiled and unit-tested only) | `mixins/create/vault.rs`, `arm.rs`, `deployer.rs` (rules, tested), `arms.rs` (block entities, the item handler, the deployer's actions, drawing) |
 
 Hand crank: right click to turn it (10 ticks per click, as in Create). Creative motor: look at the value box on one
@@ -48,7 +51,10 @@ in water draws it, one in the air pours it. Buckets fill and empty fluid tanks a
 
 Mechanical arm: before placing it, right click the depots, belts, basins, chutes, deployers, millstones or collecting
 funnels it should use (once: take from, twice: put into); drive it with a cogwheel beside it. Deployer: right click
-its front to give it an item, wrench its front to switch between using and punching. Item vault: sneak to place
+its front to give it an item, wrench its front to switch between using and punching. Brass funnel: right click its front (any side of an upright one) with an item to
+filter by it, with an empty hand to clear it. Belt tunnels: place them on a belt (they take their shape from what
+is beside the belt); the wrench opens or closes an andesite tunnel's window and switches a brass tunnel (and the
+brass tunnels beside it) between Split and Round robin; an empty hand takes what brass tunnels hold. Item vault: sneak to place
 blocks against it (a plain right click on it does nothing, as the barrel template's menu is stopped).
 
 ## Layout
@@ -61,13 +67,14 @@ mixins/create/
   fan.rs               the encased fan's air current and fan processing rules, no Horizon types
   obj.rs               OBJ/MTL model parsing (the water wheel's), no Horizon types
   belt.rs              the mechanical belt: chain, movement, items, belt funnels, connector, no Horizon types
-  chute.rs, funnel.rs  the chute's falling item and the andesite funnel's modes, no Horizon types
+  chute.rs, funnel.rs  the chute's falling item, the funnels' modes and the brass funnel's filter, no Horizon types
+  tunnel.rs            belt tunnels' shapes and sides, the brass tunnel's distribution, no Horizon types
   fluids.rs            fluid pipes, networks, pumps' pressure, open ends, tanks, no Horizon types
   fluid_glue.rs        Horizon's side of fluids: pipes, pumps and tanks in the world, buckets, drawing
   vault.rs, arm.rs,    the item vault's multiblock, the mechanical arm's phases and angles, the deployer's
   deployer.rs          cycle and belt callbacks, no Horizon types
   arms.rs              Horizon's side of vaults, arms and deployers: block entities, the item handler, drawing
-  logistics.rs         Horizon's side of belts, chutes and funnels: items in the world, saving, drawing
+  logistics.rs         Horizon's side of belts, chutes, funnels and tunnels: items in the world, saving, drawing
   machines.rs          Horizon's side of the machines: depot, millstone and basin block entities, press, mixer
                        and fan work, water wheel flow
   glue.rs              Horizon's side: hooks, per-dimension state, network messages, drawing

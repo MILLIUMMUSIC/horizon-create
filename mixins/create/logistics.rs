@@ -3,20 +3,26 @@
 // `BeltInventory` per controller, kept per dimension and saved beside the
 // world: belts have no block entity here), what they meet (presses, depots,
 // chutes, funnels, the next belt, walls), items dropped on belts, the belt
-// connector, the chute (a mod block entity), andesite funnels (no block
-// entity: their timers live here), and drawing what belts and chutes carry.
-// The rules are in belt.rs, chute.rs and funnel.rs.
+// connector, the chute (a mod block entity), andesite and brass funnels (no
+// block entity: their timers and filters live here), belt tunnels (no block
+// entity: a brass tunnel's stack and mode live here), and drawing what
+// belts and chutes carry and funnels filter.
+// The rules are in belt.rs, chute.rs, funnel.rs and tunnel.rs.
 
 use super::Game;
 use super::create_belt::{
     Belt, BeltFunnel, BeltInventory, BeltLevel, BeltState, BeltWorld, Chain, ConnectorLevel,
-    Conversion, ProcessingResult, Slope, Stack, Transported, belt_chain, belts_between, can_connect,
-    find_chain, item_place, on_removed,
+    Conversion, FunnelShape, ProcessingResult, Slope, Stack, Transported, TunnelAbove, belt_chain,
+    belts_between, can_connect, find_chain, item_place, on_removed,
 };
 use super::create_chute::{Chute, ChuteWorld, item_motion};
 use super::create_funnel::{
-    BeltBelow, EXTRACTION_TIMER, FunnelState, Mode, amount_to_extract, as_belt_funnel,
-    collects_entity_at, extracted_item, mode, overflow_area, tick_cooldown,
+    BeltBelow, EXTRACTION_TIMER, Filter, FunnelState, Mode, amount_to_extract, as_belt_funnel,
+    collects_entity_at, extracted_item, filter_slot, mode, overflow_area, tick_cooldown,
+};
+use super::create_tunnel::{
+    BrassTunnel, SelectionMode, TunnelLevel, TunnelState, TunnelWorld, adjacent, can_survive,
+    has_distribution, is_connected, updated_state,
 };
 use super::create_kinetics::{Axis, Dir, Pos};
 use horizon_client::containers::ModBlockEntity;
@@ -42,11 +48,30 @@ struct Entry {
     belt: Belt,
 }
 
+/// A funnel's `FunnelBlockEntity` here: its extraction timer and, for a
+/// brass one, its filter.
+#[derive(Clone, Debug, Default)]
+struct FunnelData {
+    cooldown: i32,
+    filter: Filter,
+}
+
+/// A tunnel's block entity here (a brass tunnel's stack and mode).
+#[derive(Clone, Debug, Default)]
+struct TunnelData {
+    brass: BrassTunnel<ItemStack>,
+    /// Placed since the last tick: its mode goes to the tunnels it joins
+    /// (`updateTunnelConnections`).
+    fresh: bool,
+}
+
 #[derive(Default)]
 struct Logistics {
     belts: HashMap<(String, Pos), Entry>,
-    /// Funnels by dimension, with their extraction timers.
-    funnels: HashMap<(String, Pos), i32>,
+    /// Funnels by dimension, with their extraction timers and filters.
+    funnels: HashMap<(String, Pos), FunnelData>,
+    /// Tunnels by dimension.
+    tunnels: HashMap<(String, Pos), TunnelData>,
     /// Dimensions read from their save.
     loaded: HashSet<String>,
     /// Belts clients were told hold items.
@@ -119,8 +144,8 @@ pub(super) fn is_belt(name: &str) -> bool {
 pub(super) fn is_ours(name: &str) -> bool {
     is_belt(name)
         || name == CHUTE
-        || name == super::create_funnel::EXTRACTING_FUNNEL
-        || name == super::create_funnel::COLLECTING_FUNNEL
+        || super::create_funnel::is_funnel(name)
+        || TunnelState::from_block(name, |_| None).is_some()
 }
 
 fn belt_at(game: &Game<'_>, pos: Pos) -> Option<BeltState> {
@@ -138,6 +163,53 @@ fn funnel_at(game: &Game<'_>, pos: Pos) -> Option<FunnelState> {
     FunnelState::from_block(&name, |k| if k == "facing" { facing.as_deref() } else { None })
 }
 
+fn tunnel_at(game: &Game<'_>, pos: Pos) -> Option<TunnelState> {
+    let name = block_name(game, pos)?;
+    let axis = prop(game, pos, "axis");
+    TunnelState::from_block(&name, |k| if k == "axis" { axis.as_deref() } else { None })
+}
+
+/// The filter of the brass funnel at `pos` (an andesite funnel's isn't
+/// active: none).
+fn funnel_filter(game: &Game<'_>, pos: Pos) -> Option<Filter> {
+    funnel_at(game, pos).filter(|f| f.brass)?;
+    let dim = game.dim.id().to_owned();
+    Some(with_state(|s| s.funnels.get(&(dim, pos)).map(|f| f.filter.clone()).unwrap_or_default()))
+}
+
+/// `FilteringBehaviour.test` of the funnel at `pos` for `stack`.
+pub(super) fn funnel_accepts(game: &Game<'_>, pos: Pos, stack: &ItemStack) -> bool {
+    funnel_filter(game, pos).is_none_or(|f| f.test(&stack.item))
+}
+
+/// The belt segment under the funnel at `pos`, as the funnel sees it.
+fn belt_under(game: &Game<'_>, pos: Pos) -> Option<BeltBelow> {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    belt_at(game, below).filter(|b| b.can_transport_objects()).map(|b| {
+        let speed = super::create_glue::with_kinetics(game, |k, level| k.speed_of(level, below));
+        BeltBelow {
+            facing: b.facing,
+            movement: b.movement_facing(speed),
+        }
+    })
+}
+
+/// A belt segment's `getSpeed`.
+fn belt_speed(game: &Game<'_>, pos: Pos) -> f32 {
+    super::create_glue::with_kinetics(game, |k, level| k.speed_of(level, pos))
+}
+
+/// `DirectBeltInputBehaviour.canInsertFromSide` of what is at `pos`: a
+/// belt that moves and doesn't come towards `side` (`canInsertFrom`), any
+/// other input.
+fn can_insert_from_side(game: &Game<'_>, pos: Pos, side: Dir) -> bool {
+    if let Some(b) = belt_at(game, pos) {
+        let speed = belt_speed(game, pos);
+        return b.can_transport_objects() && speed != 0.0 && b.movement_facing(speed) != side.opposite();
+    }
+    has_direct_input(game, pos)
+}
+
 fn is_chute(game: &Game<'_>, pos: Pos) -> bool {
     block_name(game, pos).as_deref() == Some(CHUTE)
 }
@@ -152,6 +224,29 @@ impl BeltLevel for World<'_, '_> {
     }
     fn is_loaded(&self, pos: Pos) -> bool {
         self.game.world.loaded(pos[0], pos[2])
+    }
+}
+
+impl TunnelLevel for World<'_, '_> {
+    fn tunnel(&self, pos: Pos) -> Option<TunnelState> {
+        tunnel_at(self.game, pos)
+    }
+    fn flat_belt_axis(&self, pos: Pos) -> Option<Axis> {
+        belt_at(self.game, pos).filter(|b| b.slope == Slope::Horizontal).map(|b| b.facing.axis())
+    }
+    fn belt_axis(&self, pos: Pos) -> Option<Axis> {
+        belt_at(self.game, pos).map(|b| b.facing.axis())
+    }
+    fn has_direct_input(&self, pos: Pos) -> bool {
+        has_direct_input(self.game, pos)
+    }
+    fn can_insert_from_side(&self, pos: Pos, side: Dir) -> bool {
+        can_insert_from_side(self.game, pos, side)
+    }
+    fn extended_funnel(&self, _: Pos) -> Option<Dir> {
+        // Belt funnels here are never extended (`getShapeForPosition`'s
+        // upright items aren't ported).
+        None
     }
 }
 
@@ -228,16 +323,22 @@ fn insert_on_belt_segment(game: &Game<'_>, pos: Pos, stack: ItemStack) -> Option
     })
 }
 
-/// `ItemHelper.extract` of up to `max` of one item from the inventory at
-/// `pos` (chests and mod block entities' output slots).
-fn extract_from(game: &mut Game<'_>, pos: Pos, max: u32) -> Option<ItemStack> {
+/// `ItemHelper.extract` (`UPTO`) of up to `max` of one item that passes
+/// `test` from the inventory at `pos`: the first such item, gathered from
+/// every slot holding it, up to a stack (chests and mod block entities'
+/// output slots; vaults and deployers slot by slot).
+fn extract_from(game: &mut Game<'_>, pos: Pos, max: u32, test: &dyn Fn(&ItemStack) -> bool) -> Option<ItemStack> {
     use horizon_client::containers::BlockEntity as B;
-    if let Some(taken) = super::create_arms::extract_from(game, pos, max) {
+    if let Some(taken) = super::create_arms::extract_from(game, pos, max, test) {
         return taken;
     }
     // ItemHandlerBeltSegment.extractItem: the item over the segment.
     if belt_at(game, pos).is_some() {
-        return with_belt_segment(game, pos, |inv, _, index| inv.extract_at(index, max, false)).flatten();
+        return with_belt_segment(game, pos, |inv, _, index| {
+            inv.extract_at(index, max, true).filter(|s| test(s))?;
+            inv.extract_at(index, max, false)
+        })
+        .flatten();
     }
     let key = (pos[0], pos[1], pos[2]);
     if let Some(B::Mod(m)) = game.world.block_entities.get(&key) {
@@ -247,37 +348,53 @@ fn extract_from(game: &mut Game<'_>, pos: Pos, max: u32) -> Option<ItemStack> {
         let outputs = mod_outputs(&m.id);
         return game
             .native_with_mod_block_entity(pos, |be| {
-                for i in outputs {
-                    let Some(Some(s)) = be.items.get_mut(i) else {
-                        continue;
-                    };
-                    let n = s.count.min(max);
-                    let mut out = s.clone();
-                    out.count = n;
-                    s.count -= n;
-                    if s.count == 0 {
-                        be.items[i] = None;
-                    }
-                    return Some(out);
-                }
-                None
+                let mut slots: Vec<&mut Option<ItemStack>> = be
+                    .items
+                    .iter_mut()
+                    .enumerate()
+                    .filter(|(i, _)| outputs.contains(i))
+                    .map(|(_, s)| s)
+                    .collect();
+                gather(&mut slots, max, test)
             })
             .flatten();
     }
     let Some(B::Chest(items)) = game.world.block_entities.get_mut(&key) else {
         return None;
     };
-    let slot = items.iter_mut().find(|s| s.is_some())?;
-    let s = slot.as_mut()?;
-    let n = s.count.min(max);
-    let mut out = s.clone();
-    out.count = n;
-    s.count -= n;
-    if s.count == 0 {
-        *slot = None;
-    }
+    let mut slots: Vec<&mut Option<ItemStack>> = items.iter_mut().collect();
+    let out = gather(&mut slots, max, test)?;
     game.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
     Some(out)
+}
+
+/// `ItemHelper.extract`'s gathering: the first stack passing `test`, then
+/// more of the same item from later slots, up to `max` and a stack.
+fn gather(slots: &mut [&mut Option<ItemStack>], max: u32, test: &dyn Fn(&ItemStack) -> bool) -> Option<ItemStack> {
+    let first = slots.iter().position(|s| s.as_ref().is_some_and(test))?;
+    let mut out = slots[first].clone()?;
+    let cap = max.min(out.max_stack()).max(1);
+    out.count = 0;
+    for slot in slots.iter_mut().skip(first) {
+        let Some(s) = slot.as_mut() else {
+            continue;
+        };
+        let mut probe = s.clone();
+        probe.count = out.count;
+        if probe != out {
+            continue;
+        }
+        let n = (cap - out.count).min(s.count);
+        s.count -= n;
+        out.count += n;
+        if s.count == 0 {
+            **slot = None;
+        }
+        if out.count >= cap {
+            break;
+        }
+    }
+    (out.count > 0).then_some(out)
 }
 
 // ---- Belts in the world -------------------------------------------------------
@@ -333,6 +450,9 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
     }
     fn funnel_insert(&mut self, pos: Pos, stack: &ItemStack) -> Option<ItemStack> {
         let f = funnel_at(self.game, pos)?;
+        if !funnel_accepts(self.game, pos, stack) {
+            return Some(stack.clone());
+        }
         let behind = f.behind(pos);
         if !has_inventory(self.game, behind) {
             return Some(stack.clone());
@@ -364,6 +484,30 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
     }
     fn eject(&mut self, stack: ItemStack, at: [f64; 3], motion: [f64; 3]) {
         self.game.spawn_item(stack, at, motion, PICKUP_DELAY);
+    }
+    fn tunnel(&self, pos: Pos) -> Option<TunnelAbove> {
+        let t = tunnel_at(self.game, pos)?;
+        let level = World { game: self.game };
+        let dim = self.game.dim.id().to_owned();
+        let can_take = with_state(|s| s.tunnels.get(&(dim, pos)).is_none_or(|d| d.brass.can_take()));
+        Some(TunnelAbove {
+            brass: t.brass,
+            axis: t.axis,
+            junction: t.shape.is_junction(),
+            flaps: t.flaps(pos, &level),
+            distributes: t.brass && has_distribution(&level, pos),
+            can_take,
+        })
+    }
+    fn tunnel_take(&mut self, pos: Pos, stack: ItemStack, from: Dir) {
+        let dim = self.game.dim.id().to_owned();
+        with_state(|s| s.tunnels.entry((dim, pos)).or_default().brass.set_stack(Some(stack), Some(from)));
+    }
+    fn loaded(&self, pos: Pos) -> bool {
+        self.game.world.loaded(pos[0], pos[2])
+    }
+    fn can_insert_from_side(&self, pos: Pos, side: Dir) -> bool {
+        can_insert_from_side(self.game, pos, side)
     }
 }
 
@@ -418,7 +562,7 @@ fn direct_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack) -> Option<Opti
             .flatten(),
         _ => {
             let f = funnel_at(game, pos)?;
-            if !f.takes_from_belt_end() {
+            if !f.takes_from_belt_end() || !funnel_accepts(game, pos, &stack) {
                 return None;
             }
             let behind = f.behind(pos);
@@ -820,7 +964,10 @@ pub(super) fn draw_chute(
 /// `native_right_click_block` on a belt: an empty hand takes the items on
 /// the segment (`BeltBlock.useItemOn`), a shaft on a middle segment makes a
 /// pulley. True for every belt: the template's own menu never opens.
-pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
+pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
+    if right_click_filter(game, pos, face) || right_click_tunnel(game, pos) {
+        return true;
+    }
     let Some(state) = belt_at(game, pos) else {
         return false;
     };
@@ -860,9 +1007,57 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
                 }
             }
         }
-        _ => {}
+        // BeltBlock.useItemOn passes other items to their own use: a block
+        // item is placed against the belt (a tunnel or funnel on it). The
+        // grindstone template's menu would take the click instead, so the
+        // block is placed here, as the item would place it.
+        Some(stack) => place_against(game, pos, face, &stack, mode == 1),
     }
     true
+}
+
+/// `BlockItem.useOn` of `stack` on the face `face` of the block at `pos`
+/// (the hook has no hit position: the face's centre stands for it).
+fn place_against(game: &mut Game<'_>, pos: Pos, face: [i32; 3], stack: &ItemStack, creative: bool) {
+    if game.items().get(&stack.item).and_then(|i| i.block).is_none() {
+        return;
+    }
+    let dir = Dir::nearest(face);
+    let n = dir.normal();
+    let hit = [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5 + f64::from(n[i]) * 0.5);
+    let ctx = horizon_world::level::PlaceContext {
+        clicked_pos: horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+        face: core_dir(dir),
+        hit: horizon_core::geometry::Vec3::new(hit[0], hit[1], hit[2]),
+        inside: false,
+        yaw: game.yaw,
+        pitch: game.pitch,
+        sneaking: game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
+        item: stack.item.to_string(),
+        can_use_game_master_blocks: false,
+    };
+    let outcome = game.with_level(|b, level, ticks| b.place_block(level, ticks, &ctx));
+    let horizon_world::level::PlaceOutcome::Placed { pos: at, state } = outcome else {
+        let _ = game.process_level_events();
+        return;
+    };
+    let placed = [at.x, at.y, at.z];
+    let state = game.apply_item_block_state(placed, state, stack).unwrap_or(state);
+    let name = game.res.facts().get(state).name.clone();
+    if let Some(entity) = game.new_block_entity(&name) {
+        game.world
+            .block_entities
+            .insert((placed[0], placed[1], placed[2]), entity);
+        game.apply_placed_item(placed, stack, false);
+    }
+    let _ = game.process_level_events();
+    game.swing_arm();
+    if !creative && let Some(h) = game.held_mut().as_mut() {
+        h.count -= 1;
+        if h.count == 0 {
+            *game.held_mut() = None;
+        }
+    }
 }
 
 fn set_belt(game: &mut Game<'_>, pos: Pos, state: BeltState) -> bool {
@@ -973,7 +1168,7 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
     let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let dim = game.dim.id().to_owned();
     with_state(|s| {
-        s.funnels.insert((dim.clone(), pos), 0);
+        s.funnels.insert((dim.clone(), pos), FunnelData::default());
         if sneaking && f.extracting {
             s.sneak_placed.push((dim, pos));
         }
@@ -1003,8 +1198,14 @@ pub(super) fn wrench_funnel(game: &mut Game<'_>, pos: Pos) -> bool {
 
 /// The item a block of ours drops when a wrench picks it up.
 pub(super) fn item_of(name: &str) -> &str {
-    if name == super::create_funnel::COLLECTING_FUNNEL {
-        super::create_funnel::EXTRACTING_FUNNEL
+    if let Some(f) = FunnelState::from_block(name, |_| Some("north")) {
+        f.item()
+    } else if let Some(t) = TunnelState::from_block(name, |_| None) {
+        if t.brass {
+            super::create_tunnel::BRASS_TUNNEL
+        } else {
+            super::create_tunnel::ANDESITE_TUNNEL
+        }
     } else if name == super::create_kinetics::DEPLOYER_ALONG {
         super::create_kinetics::DEPLOYER
     } else {
@@ -1014,16 +1215,26 @@ pub(super) fn item_of(name: &str) -> &str {
 
 // ---- Funnels ------------------------------------------------------------------
 
-/// Block changes of ours outside the kinetics: funnels come and go.
+/// Block changes of ours outside the kinetics: funnels and tunnels come
+/// and go (a tunnel that is gone drops its stack at its next tick).
 pub(super) fn changed(game: &Game<'_>, dimension: &str, positions: &[Pos]) {
-    let found: Vec<(Pos, bool)> = positions.iter().map(|&p| (p, funnel_at(game, p).is_some())).collect();
+    let found: Vec<(Pos, bool, bool)> = positions
+        .iter()
+        .map(|&p| (p, funnel_at(game, p).is_some(), tunnel_at(game, p).is_some()))
+        .collect();
     with_state(|s| {
-        for (p, funnel) in found {
+        for (p, funnel, tunnel) in found {
             let key = (dimension.to_owned(), p);
             if funnel {
-                s.funnels.entry(key).or_insert(0);
+                s.funnels.entry(key.clone()).or_default();
             } else {
                 s.funnels.remove(&key);
+            }
+            if tunnel {
+                s.tunnels.entry(key).or_insert_with(|| TunnelData {
+                    fresh: true,
+                    ..TunnelData::default()
+                });
             }
         }
     });
@@ -1049,14 +1260,14 @@ pub(super) fn funnels_tick(game: &mut Game<'_>, dimension: &str) {
             set_funnel(game, p, f.wrenched());
         }
     }
-    let funnels: Vec<(Pos, i32)> = with_state(|s| {
+    let funnels: Vec<(Pos, FunnelData)> = with_state(|s| {
         s.funnels
             .iter()
             .filter(|((d, _), _)| d == dimension)
-            .map(|((_, p), c)| (*p, *c))
+            .map(|((_, p), c)| (*p, c.clone()))
             .collect()
     });
-    for (pos, mut cooldown) in funnels {
+    for (pos, data) in funnels {
         if !game.world.loaded(pos[0], pos[2]) {
             continue;
         }
@@ -1064,23 +1275,23 @@ pub(super) fn funnels_tick(game: &mut Game<'_>, dimension: &str) {
             with_state(|s| s.funnels.remove(&(dimension.to_owned(), pos)));
             continue;
         };
+        let mut cooldown = data.cooldown;
+        let filter = f.brass.then_some(&data.filter);
+        if f.brass {
+            // FilteringRenderer: clients draw the filter's item.
+            let view = data.filter.item.iter().map(|i| (i.clone(), 1)).collect();
+            super::create_machines::note_view(game, pos, view);
+        }
         let below = [pos[0], pos[1] - 1, pos[2]];
-        let belt = belt_at(game, below).filter(|b| b.can_transport_objects()).map(|b| {
-            let speed = super::create_glue::with_kinetics(game, |k, level| k.speed_of(level, below));
-            BeltBelow {
-                facing: b.facing,
-                movement: b.movement_facing(speed),
-            }
-        });
-        let m = mode(f, belt);
+        let m = mode(f, belt_under(game, pos));
         if m == Mode::Collect {
-            collect(game, pos, f);
+            collect(game, pos, f, filter);
         }
         if tick_cooldown(&mut cooldown, m) {
             let behind = f.behind(pos);
             let acted = match m {
-                Mode::Extract => extract(game, pos, f, behind),
-                Mode::PushingToBelt => push_to_belt(game, below, f, behind),
+                Mode::Extract => extract(game, pos, f, behind, filter),
+                Mode::PushingToBelt => push_to_belt(game, below, f, behind, filter),
                 _ => false,
             };
             if acted {
@@ -1089,15 +1300,20 @@ pub(super) fn funnels_tick(game: &mut Game<'_>, dimension: &str) {
         }
         with_state(|s| {
             if let Some(c) = s.funnels.get_mut(&(dimension.to_owned(), pos)) {
-                *c = cooldown;
+                c.cooldown = cooldown;
             }
         });
     }
 }
 
+/// `FilteringBehaviour.test` as a predicate on stacks.
+fn passes(filter: Option<&Filter>) -> impl Fn(&ItemStack) -> bool + '_ {
+    move |s| filter.is_none_or(|f| f.test(&s.item))
+}
+
 /// `activateExtractor`: one item out of the inventory behind, unless an
 /// item still lies in front.
-fn extract(game: &mut Game<'_>, pos: Pos, f: FunnelState, behind: Pos) -> bool {
+fn extract(game: &mut Game<'_>, pos: Pos, f: FunnelState, behind: Pos, filter: Option<&Filter>) -> bool {
     let (lo, hi) = overflow_area(pos, f.facing);
     let blocked = game.dropped.iter().any(|d| {
         let p = d.position;
@@ -1112,7 +1328,7 @@ fn extract(game: &mut Game<'_>, pos: Pos, f: FunnelState, behind: Pos) -> bool {
     if blocked {
         return false;
     }
-    let Some(stack) = extract_from(game, behind, amount_to_extract(Mode::Extract)) else {
+    let Some(stack) = extract_from(game, behind, amount_to_extract(Mode::Extract, filter), &passes(filter)) else {
         return false;
     };
     let (at, motion) = extracted_item(pos, f.facing);
@@ -1122,7 +1338,7 @@ fn extract(game: &mut Game<'_>, pos: Pos, f: FunnelState, behind: Pos) -> bool {
 
 /// `activateExtractingBeltFunnel`: one item onto the belt below, from the
 /// funnel's side.
-fn push_to_belt(game: &mut Game<'_>, below: Pos, f: FunnelState, behind: Pos) -> bool {
+fn push_to_belt(game: &mut Game<'_>, below: Pos, f: FunnelState, behind: Pos, filter: Option<&Filter>) -> bool {
     let Some(segment_state) = belt_at(game, below) else {
         return false;
     };
@@ -1138,7 +1354,8 @@ fn push_to_belt(game: &mut Game<'_>, below: Pos, f: FunnelState, behind: Pos) ->
     if !free {
         return false;
     }
-    let Some(stack) = extract_from(game, behind, amount_to_extract(Mode::PushingToBelt)) else {
+    let amount = amount_to_extract(Mode::PushingToBelt, filter);
+    let Some(stack) = extract_from(game, behind, amount, &passes(filter)) else {
         return false;
     };
     let left = with_state(|s| {
@@ -1162,7 +1379,7 @@ fn push_to_belt(game: &mut Game<'_>, below: Pos, f: FunnelState, behind: Pos) ->
 
 /// `FunnelBlock.entityInside`: items at its open side go into the
 /// inventory behind.
-fn collect(game: &mut Game<'_>, pos: Pos, f: FunnelState) {
+fn collect(game: &mut Game<'_>, pos: Pos, f: FunnelState, filter: Option<&Filter>) {
     let behind = f.behind(pos);
     if !f.collects() || !has_inventory(game, behind) {
         return;
@@ -1176,7 +1393,8 @@ fn collect(game: &mut Game<'_>, pos: Pos, f: FunnelState) {
             && (lo[0] - 0.125..lo[0] + 1.125).contains(&p[0])
             && (lo[1] - 0.25..lo[1] + 1.0).contains(&p[1])
             && (lo[2] - 0.125..lo[2] + 1.125).contains(&p[2]);
-        if !inside || !collects_entity_at(pos, f.facing, p) {
+        // tryInsert: what the filter refuses stays.
+        if !inside || !collects_entity_at(pos, f.facing, p) || !passes(filter)(&d.stack) {
             continue;
         }
         let stack = d.stack.clone();
@@ -1189,6 +1407,353 @@ fn collect(game: &mut Game<'_>, pos: Pos, f: FunnelState) {
     }
     if changed {
         game.dropped.retain(|d| d.stack.count > 0);
+    }
+}
+
+/// `FilteringBehaviour.onShortInteract` on a brass funnel's filter side
+/// (Horizon's click has no hit position to test the value box with: the
+/// whole face counts): the held item becomes the filter, an empty hand
+/// clears it. Items aren't used up (only Create's filter items are).
+fn right_click_filter(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
+    let Some(f) = funnel_at(game, pos).filter(|f| f.brass) else {
+        return false;
+    };
+    if !f.filter_sides().contains(&Dir::nearest(face)) {
+        return false;
+    }
+    let held = game.held().map(|s| s.item.to_string());
+    // canShortInteract: not the wrench or the mechanical arm.
+    if held.as_deref().is_some_and(|i| i == "create:wrench" || i == super::create_arms::ARM) {
+        return false;
+    }
+    if game.native_acting_player().is_some_and(|p| p.game_mode == 3) {
+        return false;
+    }
+    let dim = game.dim.id().to_owned();
+    let filter = with_state(|s| {
+        let data = s.funnels.entry((dim, pos)).or_default();
+        data.filter.set(held.as_deref());
+        data.filter.clone()
+    });
+    let view = filter.item.iter().map(|i| (i.clone(), 1)).collect();
+    super::create_machines::note_view(game, pos, view);
+    true
+}
+
+/// `BrassTunnelBlock.useWithoutItem`: an empty hand takes the stacks the
+/// connected brass tunnels hold (`grabAllStacksOfGroup`).
+fn right_click_tunnel(game: &mut Game<'_>, pos: Pos) -> bool {
+    if !tunnel_at(game, pos).is_some_and(|t| t.brass) || game.held().is_some() {
+        return false;
+    }
+    let Some(group) = super::create_tunnel::group(&World { game }, pos, |p| game.world.loaded(p[0], p[2])) else {
+        return false;
+    };
+    let dim = game.dim.id().to_owned();
+    let stacks: Vec<ItemStack> = with_state(|s| {
+        group
+            .iter()
+            .filter_map(|p| {
+                let t = s.tunnels.get_mut(&(dim.clone(), *p))?;
+                let stack = t.brass.stack.take();
+                t.brass.set_stack(None, None);
+                stack
+            })
+            .collect()
+    });
+    if stacks.is_empty() {
+        return false;
+    }
+    for stack in stacks {
+        game.give_or_drop(stack);
+    }
+    true
+}
+
+// ---- Tunnels ------------------------------------------------------------------
+
+fn set_tunnel(game: &mut Game<'_>, pos: Pos, t: TunnelState) -> bool {
+    let Some(base) = game.pack.assets.registry.default_state(&t.block()) else {
+        return false;
+    };
+    let axis = if t.axis == Axis::Z { "z" } else { "x" };
+    let Some(id) = game.with_props(base, &[("axis", axis)]) else {
+        return false;
+    };
+    let dimension = game.dim.id().to_owned();
+    game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL)
+}
+
+/// The brass tunnels connected to the one at `pos` one way after another
+/// (`isConnected`, as `selectionMode`'s callback walks them).
+fn connected_group(game: &Game<'_>, pos: Pos) -> Vec<Pos> {
+    let level = World { game };
+    let mut out = vec![pos];
+    for left in [true, false] {
+        let mut at = pos;
+        while is_connected(&level, at, left) {
+            let Some(next) = adjacent(&level, at, left) else {
+                break;
+            };
+            if out.contains(&next) {
+                break;
+            }
+            out.push(next);
+            at = next;
+        }
+    }
+    out
+}
+
+/// Sets the mode of the brass tunnel at `pos` and the ones connected to it.
+fn set_mode(game: &Game<'_>, pos: Pos, mode: SelectionMode) {
+    let group = connected_group(game, pos);
+    let dim = game.dim.id().to_owned();
+    with_state(|s| {
+        for p in group {
+            s.tunnels.entry((dim.clone(), p)).or_default().brass.mode = mode;
+        }
+    });
+}
+
+/// The wrench on a tunnel: a brass tunnel switches between Split and
+/// Round robin (standing in for its value box, which Horizon can't open;
+/// the window of a straight brass tunnel isn't toggled), an andesite one
+/// opens or closes its window (`onWrenched`). True when it was a tunnel.
+pub(super) fn wrench_tunnel(game: &mut Game<'_>, pos: Pos) -> bool {
+    let Some(t) = tunnel_at(game, pos) else {
+        return false;
+    };
+    if t.brass {
+        let dim = game.dim.id().to_owned();
+        let mode = with_state(|s| s.tunnels.get(&(dim, pos)).map(|d| d.brass.mode).unwrap_or_default()).next();
+        set_mode(game, pos, mode);
+        if let Some(player) = game.native_acting_player() {
+            let line = format!("Brass Tunnel: {}", mode.label());
+            game.native_action_bar(player.uuid, horizon_client::text::Text::literal(line));
+        }
+        return true;
+    }
+    if let Some(w) = t.wrenched() {
+        set_tunnel(game, pos, w);
+    }
+    true
+}
+
+/// The world as a brass tunnel's distribution sees it.
+struct TunnelsAt<'a, 'g> {
+    game: &'a mut Game<'g>,
+}
+
+impl TunnelLevel for TunnelsAt<'_, '_> {
+    fn tunnel(&self, pos: Pos) -> Option<TunnelState> {
+        tunnel_at(self.game, pos)
+    }
+    fn flat_belt_axis(&self, pos: Pos) -> Option<Axis> {
+        World { game: self.game }.flat_belt_axis(pos)
+    }
+    fn belt_axis(&self, pos: Pos) -> Option<Axis> {
+        World { game: self.game }.belt_axis(pos)
+    }
+    fn has_direct_input(&self, pos: Pos) -> bool {
+        has_direct_input(self.game, pos)
+    }
+    fn can_insert_from_side(&self, pos: Pos, side: Dir) -> bool {
+        can_insert_from_side(self.game, pos, side)
+    }
+    fn extended_funnel(&self, _: Pos) -> Option<Dir> {
+        None
+    }
+}
+
+impl TunnelWorld<ItemStack> for TunnelsAt<'_, '_> {
+    fn is_loaded(&self, pos: Pos) -> bool {
+        self.game.world.loaded(pos[0], pos[2])
+    }
+    fn belt(&self, pos: Pos) -> Option<(f32, Dir)> {
+        let b = belt_at(self.game, pos).filter(|b| b.can_transport_objects())?;
+        let speed = belt_speed(self.game, pos);
+        Some((speed, b.movement_facing(speed)))
+    }
+    fn pulling_funnel(&self, pos: Pos, facing: Dir) -> bool {
+        let Some(f) = funnel_at(self.game, pos).filter(|f| f.facing == facing) else {
+            return false;
+        };
+        as_belt_funnel(f, belt_under(self.game, pos)).is_some_and(|b| b.shape == FunnelShape::Pulling)
+    }
+    fn solid_side(&self, pos: Pos, face: Dir) -> bool {
+        sturdy(self.game, pos, face)
+    }
+    fn filter(&self, pos: Pos, stack: &ItemStack) -> Option<(bool, bool)> {
+        let f = funnel_filter(self.game, pos)?;
+        Some((f.test(&stack.item), f.item.is_none()))
+    }
+    fn insert(&mut self, pos: Pos, side: Dir, stack: ItemStack, simulate: bool) -> Option<ItemStack> {
+        side_insert(self.game, pos, side, stack, simulate)
+    }
+    fn eject(&mut self, tunnel: Pos, side: Dir, stack: ItemStack) {
+        let segment = [tunnel[0], tunnel[1] - 1, tunnel[2]];
+        let Some((controller, index)) = segment_of(self.game, segment) else {
+            return;
+        };
+        let dim = self.game.dim.id().to_owned();
+        let Some(belt) = with_state(|s| s.belts.get(&(dim, controller)).map(|e| e.belt)) else {
+            return;
+        };
+        let speed = belt.movement_speed();
+        let movement = speed.abs().max(1.0 / 8.0);
+        let at = belt.vector_for_offset((index + i32::from(speed > 0.0)) as f32);
+        let n = side.normal();
+        let motion = [
+            f64::from(n[0] as f32 * movement),
+            f64::from(n[1] as f32 * movement + 1.0 / 8.0),
+            f64::from(n[2] as f32 * movement),
+        ];
+        self.game.spawn_item(stack, [at[0], at[1] + 6.0 / 16.0, at[2]], motion, PICKUP_DELAY);
+    }
+}
+
+/// `DirectBeltInputBehaviour.handleInsertion(stack, side, simulate)` at
+/// `pos`: what is left. Containers behind a funnel can't be simulated here:
+/// hopeful.
+fn side_insert(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack, simulate: bool) -> Option<ItemStack> {
+    if let Some(segment_state) = belt_at(game, pos) {
+        let Some((controller, index)) = segment_of(game, pos) else {
+            return Some(stack);
+        };
+        let dim = game.dim.id().to_owned();
+        return with_state(|s| {
+            let angle = s.angle();
+            let Some(e) = s.belts.get_mut(&(dim, controller)) else {
+                return Some(stack.clone());
+            };
+            let belt = e.belt;
+            if simulate {
+                let busy = !segment_state.can_transport_objects() || e.inv.is_occupied(&belt, index, side);
+                return busy.then(|| stack.clone());
+            }
+            e.inv.insert_from_side(&belt, segment_state, index, &Transported::new(stack.clone(), angle), side, false)
+        });
+    }
+    if simulate {
+        let free = match block_name(game, pos).as_deref() {
+            Some(super::create_machines::DEPOT) | Some(CHUTE) => {
+                use horizon_client::containers::BlockEntity as B;
+                match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+                    Some(B::Mod(m)) => m.items.iter().all(Option::is_none),
+                    _ => false,
+                }
+            }
+            _ => funnel_at(game, pos)
+                .is_some_and(|f| f.takes_from_belt_end() && funnel_accepts(game, pos, &stack)),
+        };
+        return (!free).then_some(stack);
+    }
+    match direct_insert(game, pos, stack.clone()) {
+        Some(left) => left,
+        None => Some(stack),
+    }
+}
+
+/// Every tunnel of the level: its shape kept up with its neighbours
+/// (`updateTunnel`), broken off a belt it no longer stands on
+/// (`neighborChanged`), its stack dropped when it is gone (`destroy`), and
+/// brass tunnels' distribution (`BrassTunnelBlockEntity.tick`).
+pub(super) fn tunnels_tick(game: &mut Game<'_>, dimension: &str) {
+    let tunnels: Vec<(Pos, bool)> = with_state(|s| {
+        s.tunnels
+            .iter()
+            .filter(|((d, _), _)| d == dimension)
+            .map(|((_, p), t)| (*p, t.fresh))
+            .collect()
+    });
+    let mut brass = Vec::new();
+    for (pos, fresh) in tunnels {
+        if !game.world.loaded(pos[0], pos[2]) {
+            continue;
+        }
+        let key = (dimension.to_owned(), pos);
+        let Some(state) = tunnel_at(game, pos) else {
+            let gone = with_state(|s| s.tunnels.remove(&key));
+            if let Some(stack) = gone.and_then(|t| t.brass.stack) {
+                game.spawn_item(stack, pos.map(|v| f64::from(v) + 0.5), [0.0; 3], PICKUP_DELAY);
+            }
+            continue;
+        };
+        if !can_survive(pos, &World { game }) {
+            let [x, y, z] = pos;
+            game.native_run_command(&format!("execute in {dimension} run setblock {x} {y} {z} air destroy"));
+            continue;
+        }
+        let new = updated_state(&World { game }, pos, state);
+        if new != state {
+            set_tunnel(game, pos, new);
+        }
+        if fresh {
+            with_state(|s| {
+                if let Some(t) = s.tunnels.get_mut(&key) {
+                    t.fresh = false;
+                }
+            });
+            if state.brass {
+                // The tunnels it joins take its mode.
+                let mode = with_state(|s| s.tunnels.get(&key).map(|t| t.brass.mode).unwrap_or_default());
+                set_mode(game, pos, mode);
+            }
+        }
+        if state.brass {
+            brass.push(pos);
+        }
+    }
+    for pos in brass {
+        let key = (dimension.to_owned(), pos);
+        let Some(mut t) = with_state(|s| s.tunnels.remove(&key)) else {
+            continue;
+        };
+        if t.brass.stack.is_some() || t.brass.progress > 0 {
+            t.brass.tick(pos, &mut TunnelsAt { game });
+        }
+        with_state(|s| s.tunnels.insert(key, t));
+    }
+}
+
+/// `FilteringRenderer` on a brass funnel: its filter's item in each of its
+/// filter slots (`ValueBoxRenderer.renderItemIntoValueBox`).
+pub(super) fn draw_funnel_filter(
+    game: &Game<'_>,
+    camera: glam::DVec3,
+    pos: Pos,
+    slots: &[(String, u32)],
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    let Some((id, _)) = slots.first().filter(|(id, c)| *c > 0 && !id.is_empty()) else {
+        return;
+    };
+    let Some(f) = funnel_at(game, pos).filter(|f| f.brass) else {
+        return;
+    };
+    let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+    if corner.distance_squared(camera) > 32.0 * 32.0 {
+        return;
+    }
+    let light = game.world.light(pos[0], pos[1], pos[2]);
+    // isGui3d: block items stand at full size, others lie flat at half.
+    let block = game.pack.assets.registry.default_state(id).is_some();
+    let scale = if block { 1.0 } else { 0.5 } + 1.0 / 64.0;
+    let z_offset = if block { 0.0 } else { -0.15 };
+    let stack = ItemStack::new(id, 1);
+    for side in f.filter_sides() {
+        let (at, y_rot, x_rot) = filter_slot(f, side);
+        let centre = corner + glam::DVec3::new(f64::from(at[0]), f64::from(at[1]), f64::from(at[2]));
+        let m = glam::Mat4::from_translation((centre - camera).as_vec3())
+            * glam::Mat4::from_rotation_y(y_rot.to_radians())
+            * glam::Mat4::from_rotation_x(x_rot.to_radians())
+            * glam::Mat4::from_scale(glam::Vec3::splat(0.5 * scale))
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z_offset));
+        let owner = super::item_draw::owner_at(centre.to_array(), 0.0, f.block());
+        let resolved =
+            game.resolve_item(&stack, horizon_assets::item_model::DisplayContext::Fixed, Some(&owner), pos[0] ^ pos[2]);
+        game.submit_item_world(&resolved, m, horizon_client::block_entity_render::vertex_light(light), out);
     }
 }
 
@@ -1279,7 +1844,7 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
         if is_chute(self.game, above) {
             return None;
         }
-        extract_from(self.game, above, max)
+        extract_from(self.game, above, max, &|_| true)
     }
 }
 
@@ -1324,6 +1889,7 @@ fn load(game: &Game<'_>, dimension: &str) {
     };
     let mut belts: Vec<(Pos, BeltInventory<ItemStack>)> = Vec::new();
     let mut funnels = Vec::new();
+    let mut tunnels = Vec::new();
     let mut lines = text.lines();
     if lines.next() != Some("create-logistics 1") {
         return;
@@ -1355,7 +1921,34 @@ fn load(game: &Game<'_>, dimension: &str) {
                 t.inserted_at = int(4);
                 inv.items.push(t);
             }
-            Some("funnel") if f.len() == 4 => funnels.extend(pos(&f)),
+            // A brass funnel's filter: its amount and item.
+            Some("funnel") if f.len() == 4 || f.len() == 6 => {
+                if let Some(p) = pos(&f) {
+                    let mut filter = Filter::default();
+                    if f.len() == 6 {
+                        filter.count = f[4].parse().unwrap_or(64);
+                        filter.set(Some(f[5]));
+                    }
+                    funnels.push((p, filter));
+                }
+            }
+            // A tunnel: its mode, and a brass tunnel's stack (where it came
+            // from, count, damage, item).
+            Some("tunnel") if f.len() == 5 || f.len() == 9 => {
+                let Some(p) = pos(&f) else {
+                    continue;
+                };
+                let mut t = TunnelData::default();
+                t.brass.mode = SelectionMode::parse(f[4]).unwrap_or_default();
+                if f.len() == 9 {
+                    let mut stack = ItemStack::new(f[8], f[6].parse::<u32>().unwrap_or(1).max(1));
+                    stack.damage = f[7].parse().unwrap_or(0);
+                    t.brass.stack = Some(stack);
+                    t.brass.entered_from = Dir::parse(f[5]);
+                    t.brass.progress = -1;
+                }
+                tunnels.push((p, t));
+            }
             _ => {}
         }
     }
@@ -1373,14 +1966,18 @@ fn load(game: &Game<'_>, dimension: &str) {
             };
             s.belts.insert((dimension.to_owned(), p), Entry { inv, belt });
         }
-        for p in funnels {
-            s.funnels.insert((dimension.to_owned(), p), 0);
+        for (p, filter) in funnels {
+            s.funnels.insert((dimension.to_owned(), p), FunnelData { cooldown: 0, filter });
+        }
+        for (p, t) in tunnels {
+            s.tunnels.insert((dimension.to_owned(), p), t);
         }
     });
 }
 
-/// Saves every dimension's belts and funnels beside the world (items keep
-/// their id, count and damage; other components aren't saved yet).
+/// Saves every dimension's belts, funnels and tunnels beside the world
+/// (items keep their id, count and damage; other components aren't saved
+/// yet).
 pub(super) fn save_all() {
     with_state(|s| {
         let Some(root) = s.root.clone() else {
@@ -1403,11 +2000,28 @@ pub(super) fn save_all() {
                     ));
                 }
             }
-            let mut funnels: Vec<Pos> =
-                s.funnels.keys().filter(|(d, _)| *d == dimension).map(|(_, p)| *p).collect();
-            funnels.sort();
-            for p in funnels {
-                out.push_str(&format!("funnel {} {} {}\n", p[0], p[1], p[2]));
+            let mut funnels: Vec<(&Pos, &FunnelData)> =
+                s.funnels.iter().filter(|((d, _), _)| *d == dimension).map(|((_, p), f)| (p, f)).collect();
+            funnels.sort_by_key(|(p, _)| **p);
+            for (p, f) in funnels {
+                match &f.filter.item {
+                    Some(item) => {
+                        out.push_str(&format!("funnel {} {} {} {} {item}\n", p[0], p[1], p[2], f.filter.count))
+                    }
+                    None => out.push_str(&format!("funnel {} {} {}\n", p[0], p[1], p[2])),
+                }
+            }
+            let mut tunnels: Vec<(&Pos, &TunnelData)> =
+                s.tunnels.iter().filter(|((d, _), _)| *d == dimension).map(|((_, p), t)| (p, t)).collect();
+            tunnels.sort_by_key(|(p, _)| **p);
+            for (p, t) in tunnels {
+                let b = &t.brass;
+                out.push_str(&format!("tunnel {} {} {} {}", p[0], p[1], p[2], b.mode.key()));
+                if let Some(stack) = &b.stack {
+                    let from = b.entered_from.map_or("-", Dir::name);
+                    out.push_str(&format!(" {from} {} {} {}", stack.count, stack.damage, stack.item));
+                }
+                out.push('\n');
             }
             if let Err(e) = std::fs::write(save_path(&root, &dimension), out) {
                 log::warn!("Create: can't save the belts of {dimension}: {e}");
