@@ -1531,6 +1531,7 @@ pub(super) fn fan_tick(game: &mut Game<'_>, dimension: &str, fans: &[(Pos, Dir, 
         }
         let current = fan.current.clone();
         fan_items(game, dimension, pos, facing, speed, &current, &mut processing);
+        fan_entities(game, dimension, pos, facing, speed, &current);
         for (spot, segment) in current.handler_spots(pos) {
             let name = game
                 .pack
@@ -1559,8 +1560,101 @@ pub(super) fn fan_tick(game: &mut Game<'_>, dimension: &str, fans: &[(Pos, Dir, 
     m.processing.extend(processing);
 }
 
-/// `AirCurrent.tickAffectedEntities` for the item entities in the current
-/// (other entities aren't pushed or hurt yet).
+/// Horses' `CreateHaunting` progress, by dimension and mob.
+static HAUNTING: std::sync::Mutex<Vec<((String, u32), i32)>> = std::sync::Mutex::new(Vec::new());
+
+/// `AirCurrent.tickAffectedEntities` for the mobs and players in the
+/// current: mobs pushed along (from rest: Horizon gives no mob's motion),
+/// then each processing type's `affectEntity`, through vanilla commands
+/// (`damage`, `effect`, `data`) with vanilla damage types standing in for
+/// Create's. Players aren't pushed (no hook moves them).
+fn fan_entities(game: &mut Game<'_>, dimension: &str, pos: Pos, facing: Dir, speed: f32, current: &AirCurrent) {
+    let flow = if current.pushing { facing } else { facing.opposite() };
+    let centre = pos.map(|v| f64::from(v) + 0.5);
+    let in_current = |p: [f64; 3]| current.touches([p[0] - 0.3, p[1], p[2] - 0.3, p[0] + 0.3, p[1] + 1.8, p[2] + 0.3]);
+    let mut commands = Vec::new();
+    let mut sounds: Vec<(&str, [f64; 3], f32, f32)> = Vec::new();
+    for m in game.native_mobs(dimension) {
+        if m.kind == "minecraft:item" || !in_current(m.pos) {
+            continue;
+        }
+        let d = ((0..3).map(|k| (m.pos[k] - centre[k]).powi(2)).sum::<f64>()).sqrt().max(0.01);
+        let v = super::create_fan::push([0.0; 3], flow, speed, d, current.max_distance);
+        game.native_push_mob(dimension, m.id, v);
+        let Some(kind) = current.type_at(aligned_distance_to_face(m.pos, pos, facing) as f32) else {
+            continue;
+        };
+        let e = super::create_fan::entity_effect(kind);
+        let [x, y, z] = m.pos;
+        let sel = format!("@e[type={},limit=1,sort=nearest,distance=..0.75]", m.kind);
+        let run = |c: String| format!("execute in {dimension} positioned {x} {y} {z} run {c}");
+        if e.fire_seconds > 0 {
+            commands.push(run(format!("data merge entity {sel} {{Fire:{}s}}", e.fire_seconds * 20)));
+        }
+        if let Some((amount, ty)) = e.damage
+            && (e.hurt_kinds.is_empty() || e.hurt_kinds.contains(&m.kind.as_str()))
+        {
+            commands.push(run(format!("damage {sel} {amount} {ty}")));
+        }
+        if e.extinguish {
+            commands.push(run(format!("data merge entity {sel} {{Fire:0s}}")));
+        }
+        if e.blind_and_slow {
+            commands.push(run(format!("effect give {sel} minecraft:blindness 2 0 true")));
+            commands.push(run(format!("effect give {sel} minecraft:slowness 1 1 true")));
+        }
+        if e.haunts_horses && m.kind == "minecraft:horse" {
+            let key = (dimension.to_owned(), m.id);
+            let mut h = HAUNTING.lock().unwrap_or_else(|e| e.into_inner());
+            let progress = h.iter().find(|(k, _)| *k == key).map_or(0, |(_, p)| *p);
+            let (next, sound, turns) = super::create_fan::haunt_horse(progress);
+            h.retain(|(k, _)| *k != key);
+            if turns {
+                drop(h);
+                sounds.push(("minecraft:block.fire.extinguish", m.pos, 1.25, 0.65));
+                let spawn = Default::default();
+                if game.native_spawn_mob(dimension, "minecraft:skeleton_horse", m.pos, &spawn).is_some() {
+                    game.native_remove_mob(dimension, m.id);
+                }
+                continue;
+            }
+            h.push((key, next));
+            if sound {
+                sounds.push(("minecraft:particle.soul_escape", m.pos, 1.0, 1.5 * progress as f32 / 100.0));
+            }
+        }
+    }
+    for p in game.native_server_players() {
+        if p.dimension != dimension || p.game_mode == 3 || !in_current(p.position) {
+            continue;
+        }
+        let Some(kind) = current.type_at(aligned_distance_to_face(p.position, pos, facing) as f32) else {
+            continue;
+        };
+        let e = super::create_fan::entity_effect(kind);
+        if let Some((amount, ty)) = e.damage
+            && e.hurt_kinds.is_empty()
+        {
+            commands.push(format!("damage {} {amount} {ty}", p.name));
+        }
+        if e.blind_and_slow {
+            commands.push(format!("effect give {} minecraft:blindness 2 0 true", p.name));
+            commands.push(format!("effect give {} minecraft:slowness 1 1 true", p.name));
+        }
+    }
+    for c in commands {
+        game.native_run_command(&c);
+    }
+    if !sounds.is_empty() {
+        game.with_level(|_, level, _| {
+            for (sound, at, volume, pitch) in sounds {
+                level.native_play_sound(sound, at, 6, volume, pitch);
+            }
+        });
+    }
+}
+
+/// `AirCurrent.tickAffectedEntities` for the item entities in the current.
 fn fan_items(
     game: &mut Game<'_>,
     dimension: &str,

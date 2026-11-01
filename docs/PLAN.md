@@ -45,8 +45,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      per 16 items (`create:splashing`, `create:haunting`, vanilla smoking, smelting/blasting, items without a
      smelting result burnt unless fire resistant); a depot's held item in it (or a block below a horizontal
      current) processed the same way. Rebuilt every 30 ticks and when its speed changes. The propeller partial
-     turns at five times the speed (80 to 1280). Not yet: pushing mobs and players, burning and hurting them,
-     haunting horses, the air particles and sound, crafting remainders of the results, chutes and nozzles.
+     turns at five times the speed (80 to 1280). Mobs in the current are pushed (from rest: Horizon gives no mob's motion), set on fire, hurt (vanilla damage types standing in for Create's), blinded and slowed, horses haunted into skeleton horses; players in it are hurt and blinded through commands. Not yet: pushing players (no hook moves them), the air particles and the fan's sound (Create's own particle and sound: Horizon plays vanilla sounds only), crafting remainders of the results, chutes and nozzles.
    - Mechanical mixer and basin: the mixer (4 su, a small cog, needs 30 RPM) runs `MechanicalMixerBlockEntity`'s
      40-tick cycle with its `processingTicks` (`log2(512 / speed) * 15 + 1` at the bottom) over a basin two below;
      the basin is a mod block entity with 9 input and 9 output slots (hoppers in and out, items thrown in, an empty
@@ -71,7 +70,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      `water_wheel.obj` and `.mtl` from the game's resources (the content mod made from the player's jar) at
      runtime, client side, and draws it turned with `rotateToFaceVertical` and spun with the network, in spruce
      (the default material: oak planks and log swapped for spruce's). The block's own model (its frame) stays in
-     the chunk mesh. Not yet: other materials (right-clicking planks), the large water wheel.
+     the chunk mesh. Planks (vanilla woods) clicked on a wheel make it of their wood. Not yet: the large water wheel.
 4. **Logistics**. Part 1 (**compiled and unit-tested only, not yet run in the game**):
    - Mechanical belt (`belt.rs`: `BeltBlock`, `BeltBlockEntity`, `BeltInventory`, `TransportedItemStack`,
      `BeltHelper`, `ItemHandlerBeltSegment`, `BeltConnectorItem`; `logistics.rs`): the belt connector joins two

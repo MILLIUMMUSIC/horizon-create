@@ -414,6 +414,73 @@ pub fn push(motion: [f64; 3], flow: Dir, speed: f32, distance: f64, max_distance
     out
 }
 
+/// What `FanProcessingType.affectEntity` does to an entity in the current.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EntityEffect {
+    /// `igniteForSeconds` (not for fire-immune entities).
+    pub fire_seconds: i32,
+    /// `hurt` by this much, and the vanilla damage type standing in for
+    /// Create's own (`fan_lava`, `fan_fire`); for splashing, only the kinds
+    /// in `hurt_kinds`.
+    pub damage: Option<(f32, &'static str)>,
+    pub hurt_kinds: &'static [&'static str],
+    /// Haunting: blindness (30 ticks) and slowness II (20 ticks).
+    pub blind_and_slow: bool,
+    /// Splashing: fire put out.
+    pub extinguish: bool,
+    /// Haunting: horses turn into skeleton horses.
+    pub haunts_horses: bool,
+}
+
+/// `affectEntity` of each type.
+pub fn entity_effect(kind: FanType) -> EntityEffect {
+    let none = EntityEffect {
+        fire_seconds: 0,
+        damage: None,
+        hurt_kinds: &[],
+        blind_and_slow: false,
+        extinguish: false,
+        haunts_horses: false,
+    };
+    match kind {
+        FanType::Blasting => EntityEffect {
+            fire_seconds: 10,
+            damage: Some((4.0, "minecraft:lava")),
+            ..none
+        },
+        FanType::Smoking => EntityEffect {
+            fire_seconds: 2,
+            damage: Some((2.0, "minecraft:in_fire")),
+            ..none
+        },
+        FanType::Haunting => EntityEffect {
+            blind_and_slow: true,
+            haunts_horses: true,
+            ..none
+        },
+        FanType::Splashing => EntityEffect {
+            damage: Some((2.0, "minecraft:drown")),
+            hurt_kinds: &[
+                "minecraft:enderman",
+                "minecraft:snow_golem",
+                "minecraft:blaze",
+            ],
+            extinguish: true,
+            ..none
+        },
+    }
+}
+
+/// A horse's `CreateHaunting` progress for one more tick in a haunting
+/// current: the new progress, whether it plays the soul sound (every 10),
+/// and whether it turns now (at 100).
+pub fn haunt_horse(progress: i32) -> (i32, bool, bool) {
+    if progress < 100 {
+        return (progress + 1, progress % 10 == 0, false);
+    }
+    (progress, false, true)
+}
+
 /// `FanProcessing.decrementProcessingTime`'s starting time for a stack of
 /// `count`: longer for each 16 items.
 pub fn processing_time(count: u32) -> i32 {
@@ -699,6 +766,29 @@ mod tests {
                 || false
             ));
         }
+    }
+
+    #[test]
+    fn entities_in_the_current() {
+        let b = entity_effect(FanType::Blasting);
+        assert_eq!(
+            (b.fire_seconds, b.damage),
+            (10, Some((4.0, "minecraft:lava")))
+        );
+        let s = entity_effect(FanType::Splashing);
+        assert!(s.extinguish && s.hurt_kinds.contains(&"minecraft:blaze"));
+        assert!(entity_effect(FanType::Haunting).haunts_horses);
+        let mut p = 0;
+        let mut sounds = 0;
+        loop {
+            let (next, sound, turns) = haunt_horse(p);
+            sounds += i32::from(sound);
+            if turns {
+                break;
+            }
+            p = next;
+        }
+        assert_eq!((p, sounds), (100, 10));
     }
 
     #[test]

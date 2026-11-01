@@ -657,6 +657,42 @@ pub struct Kinetic {
     pub pressing: Pressing,
     /// `MechanicalMixerBlockEntity`'s cycle.
     pub mixing: Mixing,
+    /// `WaterWheelBlockEntity.material`: its index in `WHEEL_WOODS`.
+    pub material: u8,
+}
+
+/// The woods a water wheel can be made of (`AllBlockTags.WATER_WHEEL_PLANKS`
+/// in vanilla), spruce first (its default).
+pub const WHEEL_WOODS: [&str; 12] = [
+    "spruce", "oak", "birch", "jungle", "acacia", "dark_oak", "mangrove", "cherry", "pale_oak",
+    "bamboo", "crimson", "warped",
+];
+
+/// `applyMaterialIfValid`: the wood of a planks item, if a wheel can be
+/// made of it.
+pub fn wheel_wood_of(item: &str) -> Option<u8> {
+    let wood = item.strip_prefix("minecraft:")?.strip_suffix("_planks")?;
+    WHEEL_WOODS.iter().position(|w| *w == wood).map(|i| i as u8)
+}
+
+/// `WaterWheelRenderer.generateModel`: the spruce wheel's sprite as the
+/// wheel of wood `material` (planks for planks, its log or stem for logs).
+pub fn wheel_sprite(sprite: &str, material: u8) -> String {
+    let wood = WHEEL_WOODS
+        .get(usize::from(material))
+        .copied()
+        .unwrap_or("spruce");
+    let log = match wood {
+        "crimson" | "warped" => format!("{wood}_stem"),
+        "bamboo" => "bamboo_block".to_owned(),
+        _ => format!("{wood}_log"),
+    };
+    match sprite {
+        "block/spruce_planks" => format!("block/{wood}_planks"),
+        "block/spruce_log" => format!("block/{log}"),
+        "block/spruce_log_top" => format!("block/{log}_top"),
+        other => other.to_owned(),
+    }
 }
 
 impl Kinetic {
@@ -684,6 +720,7 @@ impl Kinetic {
             flow_score: 0,
             pressing: Pressing::default(),
             mixing: Mixing::new(),
+            material: 0,
         }
     }
     /// `getGeneratedSpeed`.
@@ -797,6 +834,8 @@ impl Kinetics {
                 }
                 // The scroll value box shows the motor's setting.
                 Kind::CreativeMotor(_) => e.motor_speed as i16,
+                // The wheel's wood.
+                Kind::WaterWheel(_) => i16::from(e.material),
                 _ => -1,
             },
             press_belt: e.pressing.mode == PressMode::Belt,
@@ -1733,6 +1772,19 @@ impl Kinetics {
         e.flow_score = score;
         self.update_generated_rotation(level, pos);
     }
+    /// `applyMaterialIfValid`: the wheel at `pos` is made of `material`;
+    /// false when it already was.
+    pub fn set_wheel_material(&mut self, pos: Pos, material: u8) -> bool {
+        let Some(e) = self.entities.get_mut(&pos) else {
+            return false;
+        };
+        if e.material == material {
+            return false;
+        }
+        e.material = material;
+        self.dirty.insert(pos);
+        true
+    }
     /// The creative motor's scroll value changed.
     pub fn set_motor_speed(&mut self, level: &mut dyn Level, pos: Pos, rpm: i32) -> bool {
         let Some(e) = self.entities.get_mut(&pos) else {
@@ -1769,7 +1821,7 @@ impl Kinetics {
                 .map_or("-".to_owned(), |s| format!("{},{},{}", s[0], s[1], s[2]));
             let network = e.network.map_or("-".to_owned(), |n| n.to_string());
             out.push_str(&format!(
-                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
+                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
                 pos[0],
                 pos[1],
                 pos[2],
@@ -1790,6 +1842,7 @@ impl Kinetics {
                 u8::from(e.pressing.mode == PressMode::Belt),
                 u8::from(e.mixing.running),
                 e.mixing.running_ticks,
+                e.material,
             ));
         }
         out
@@ -1805,8 +1858,8 @@ impl Kinetics {
         for line in lines {
             let f: Vec<&str> = line.split(' ').collect();
             // 14 fields before the water wheel and the press, 18 before the
-            // mixer, 20 since.
-            if ![14, 18, 20].contains(&f.len()) {
+            // mixer, 20 before the wheel's wood, 21 since.
+            if ![14, 18, 20, 21].contains(&f.len()) {
                 continue;
             }
             let num = |i: usize| f[i].parse::<f32>().ok();
@@ -1839,7 +1892,10 @@ impl Kinetics {
                     PressMode::World
                 };
             }
-            if f.len() == 20 {
+            if f.len() >= 21 {
+                e.material = f[20].parse().unwrap_or(0);
+            }
+            if f.len() >= 20 {
                 // MechanicalMixerBlockEntity.read: `Running` and `Ticks`.
                 e.mixing.running = f[18] == "1";
                 e.mixing.running_ticks = int(19).unwrap_or(0);
@@ -2944,5 +3000,29 @@ mod tests {
         assert_eq!(motor_scroll_step(128, true), 192);
         assert_eq!(motor_scroll_step(250, true), 256);
         assert_eq!(motor_scroll_step(-256, false), -256);
+    }
+
+    #[test]
+    fn water_wheel_woods() {
+        assert_eq!(wheel_wood_of("minecraft:cherry_planks"), Some(7));
+        assert_eq!(wheel_wood_of("minecraft:stone"), None);
+        assert_eq!(wheel_wood_of("create:spruce_planks"), None);
+        assert_eq!(
+            wheel_sprite("block/spruce_planks", 7),
+            "block/cherry_planks"
+        );
+        assert_eq!(
+            wheel_sprite("block/spruce_log_top", 10),
+            "block/crimson_stem_top"
+        );
+        assert_eq!(wheel_sprite("block/spruce_log", 9), "block/bamboo_block");
+        assert_eq!(wheel_sprite("create:block/other", 3), "create:block/other");
+        let mut k = Kinetics::new();
+        k.entities
+            .insert([0, 0, 0], Kinetic::new(Kind::WaterWheel(Dir::East)));
+        assert!(k.set_wheel_material([0, 0, 0], 2));
+        assert!(!k.set_wheel_material([0, 0, 0], 2));
+        let loaded = Kinetics::load(&k.save());
+        assert_eq!(loaded.entities[&[0, 0, 0]].material, 2);
     }
 }

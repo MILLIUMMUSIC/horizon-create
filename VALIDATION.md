@@ -1,5 +1,14 @@
 # Validation
 
+## Fan on entities, water wheel woods (macOS, offscreen)
+
+Seen working: a pig in an encased fan's current through a lit campfire (smoking) is pushed along, set on fire and
+dies, dropping a cooked porkchop. Cherry planks clicked on a water wheel make it a cherry wheel (pink paddles,
+cherry log ends); the planks aren't used up. 168 unit tests pass (2 new).
+
+Not checked yet: blasting, splashing on an enderman, haunting a horse, a player in the current, the other woods,
+the wheel's wood after reloading.
+
 ## Brass tunnel modes (unit-tested only)
 
 `tunnel.rs` has all seven of `BrassTunnelBlockEntity.SelectionMode` (Forced split and Forced round robin give

@@ -508,6 +508,19 @@ fn right_click_hand(
             return;
         }
     }
+    // WaterWheelBlock.useItemOn: planks make the wheel of their wood.
+    if matches!(kind_at(game, pos), Some(Kind::WaterWheel(_)))
+        && let Some(wood) = game.held().and_then(|h| super::create_kinetics::wheel_wood_of(&h.item))
+    {
+        *canceled = true;
+        let dimension = game.dim.id().to_owned();
+        let mut guard = server();
+        let s = guard.get_or_insert_with(Server::default);
+        if let Some(k) = s.dims.get_mut(&dimension) {
+            k.set_wheel_material(pos, wood);
+        }
+        return;
+    }
     // Buckets on tanks and basins first: the basin's own click takes any.
     if super::create_fluid_glue::right_click(game, pos)
         || super::create_machines::right_click(game, pos, face)
@@ -1188,7 +1201,7 @@ pub(super) fn draw(
                 * glam::Mat4::from_axis_angle(unit(f.axis()), angle.to_radians())
                 * rotate_to_face_vertical(f)
                 * glam::Mat4::from_translation(-half);
-            draw_wheel(game, c, m, packed, out);
+            draw_wheel(game, c, m, packed, view.aux.max(0) as u8, out);
         }
     }
     drop(guard);
@@ -1303,6 +1316,7 @@ fn draw_wheel(
     c: &mut Client,
     m: glam::Mat4,
     light: u32,
+    material: u8,
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
     let quads = c.wheel.get_or_insert_with(|| {
@@ -1316,7 +1330,8 @@ fn draw_wheel(
         return;
     };
     for q in quads.iter() {
-        let Some(s) = game.gui.atlas.sprites.get(&q.sprite) else {
+        let sprite = super::create_kinetics::wheel_sprite(&q.sprite, material);
+        let Some(s) = game.gui.atlas.sprites.get(&sprite) else {
             continue;
         };
         let n = m.transform_vector3(glam::Vec3::from_array(q.normal));
