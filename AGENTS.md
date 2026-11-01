@@ -34,6 +34,7 @@ motors, depots, basins, the wrench), `native_world_lifecycle` (reset and save),
 `native_net_from_server` / `native_net_from_client` (channels),
 `transient_blocks::transient_block_geometry` (drawing moving parts),
 `native_hud` (goggles, value box tips), `native_wheel` (value box scroll),
+`native_left_click_block` (super glue taken off),
 `native_block_entity*` (mod block entities with inventories).
 
 Adding a block:
@@ -65,13 +66,16 @@ Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 `create:depots` (D1: items held by depots, basins, millstones),
 `create:values` (client → server value box changes, checked by the server),
 `create:fluids` (F1: tanks' and basins' fluids),
-`create:contraptions` (C1: running pistons' offsets and speeds, their blocks when they change).
+`create:contraptions` (C1: running pistons' offsets and speeds, their blocks when they change, then the glue),
+`create:chassis` (client → server: a chassis' range scrolled with the wrench).
 
 Contraptions: `contraption.rs` (rules: structure search, `PistonContraption`,
 the linear actuator) and `contraptions.rs` (Horizon's side: blocks taken out
 and put back, drawn moving, saved in `data/create_contraptions_*.txt`). The
 window's player is carried on its own side from `native_tick` (`tick.rs`):
 in single player the server's copy of the player is not the one that moves.
+Chassis ranges and super glue live in `contraptions.rs`'s state (no block
+entity or entity), saved in the same file and moved with the structure.
 
 Fluids: `fluids.rs` (rules) reaches every fluid holder through the
 `FluidAccess` trait; `fluid_glue.rs` answers it (tanks kept in the native

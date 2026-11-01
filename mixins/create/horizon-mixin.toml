@@ -292,3 +292,15 @@ bindings = [
   { name = "channel", ty = "&str", value = "channel" },
   { name = "data", ty = "&[u8]", value = "data" },
 ]
+
+[[injection]]
+id = "left-click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"
+helper = "left_click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "face", ty = "[i32; 3]", value = "face" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]

@@ -1139,7 +1139,10 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
     let Some(name) = block_name(game, pos) else {
         return;
     };
-    if !is_ours(&name) && super::create_contraption::piston_of(&name).is_none() {
+    if !is_ours(&name)
+        && super::create_contraption::piston_of(&name).is_none()
+        && super::create_contraption::chassis_of(&name).is_none()
+    {
         return;
     }
     let player = game.native_acting_player();
@@ -1300,7 +1303,7 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
                 s.deployers.entry((dim, pos)).or_default();
             });
         }
-        _ => {}
+        _ => super::create_contraptions::placed_chassis(game, pos, p.sneaking, nearest_looking(p.yaw, p.pitch)),
     }
 }
 

@@ -253,6 +253,20 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       server can't move a remote player), sounds and the assembly error on goggles.
    2. Super glue and linear and radial chassis (what a structure takes in), the mechanical bearing and windmill
       bearing (rotating contraptions: drawn turned; collision of turned structures stays a gap).
+      Part 2a, chassis and super glue (**done, checked in the game in part**): `contraption.rs` has
+      `moveChassis` (`addAttachedChasses`, `getIncludedBlockPositions` linear and radial), the chassis' glueable
+      sides (`getGlueableSide`, slime on a side and on a sticky side, `glueAllowedOnSide`, `updateShape`),
+      `SuperGlueEntity.isGlued` in `moveBlock` and `searchGlueGroup` (`isValidFace`, `isSideSticky`).
+      `contraptions.rs` keeps the chassis' ranges (`ChassisBlockEntity.range`, default 8, scrolled with the wrench
+      held, Ctrl for the group) and the glue (two corners per box) per dimension, both saved beside the world and
+      moved with the structure; super glue's corners are chosen by two right clicks on the server
+      (`SuperGlueSelectionPacket`'s checks, one use of the glue), a left click takes the glue around a block off,
+      and players holding glue see its boxes as thin slime edges. Blocks: a log's template keeps `axis`, each set
+      of sticky sides is a hidden `create:hz_<chassis>_<sides>` dropping the plain one; linear chassis take the
+      axis of a chassis beside them or the player's look. Not yet: the selection's preview before the second
+      click (`SuperGlueSelectionHandler`'s client outlines and messages), glue in the off hand gluing a placed
+      block (`SuperGlueHandler`), glue particles and sounds, the sticker, chassis' connected textures and range
+      display (`ChassisRangeDisplay`), Create 6's value board for the range (the wheel steps it here).
    3. Gantry carriage and shaft, rope and elevator pulley.
    4. Actors on contraptions (drill, saw, harvester, plough, deployer, portable storage interfaces).
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.

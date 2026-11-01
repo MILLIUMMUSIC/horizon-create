@@ -1,5 +1,34 @@
 # Validation
 
+## Milestone 5, part 2a: chassis and super glue (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 136 unit tests pass (6 new
+in `contraption.rs`), clippy has no warnings.
+
+Seen working, with the sticky piston rig of part 1 (facing up, one pole):
+
+- A linear chassis on the X axis, both ends slimed, with a plank to the west and three stones and a cobblestone to
+  the east: the piston lifts the whole row; after scrolling its range to 3 with the wrench, the cobblestone (four
+  blocks away) stays behind.
+- A radial chassis on the Y axis, slimed on its east side, with a 3×3 disc of stone east of it and a plank west:
+  the disc rises (radius 3 takes its corners), the plank stays.
+- Slime ball on a chassis' south side makes it sticky there; again on that sticky side makes all four sticky; the
+  slime ball isn't used up.
+- A linear chassis placed against a stone's east face while the player looks north stands on the Z axis; slimed
+  on its south end, then a second chassis placed south of it: the first loses that slime (`updateShape`).
+- Wrench and wheel over a chassis: "Range of Sticky Sides: 6" on the action bar, Ctrl and the wheel: 7 for both
+  chassis of the group.
+- Super glue: a right click on a stone ("First position selected"), another on the stone east of it ("Applying
+  Glue..."): extending the piston takes both, a third stone east of them stays; the glue's box, drawn as green
+  edges while glue is held, moves with them. A left click on the glued stone with glue takes the glue off (the
+  edges go, the stone isn't broken).
+- Glue and ranges are saved beside the world and back after loading: the reloaded glue pulls both stones back
+  down; a stale range where no chassis stands any more is dropped.
+
+Not checked yet: secondary linear chassis, chassis groups moved by one push, sneaking with an empty hand to take
+slime off, glue used up in survival, glue too far or not connected, chassis on a horizontal piston, crafting the
+chassis and glue, the chassis' models in every axis.
+
 ## Milestone 5, part 1: mechanical pistons (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 130 unit tests pass (7 new
@@ -18,10 +47,14 @@ Seen working:
 - A horizontal piston pushing a stone toward obsidian stops on the grid with the stone against it.
 - Placed by a player looking down, a piston faces up (as `DirectionalAxisKineticBlock` places it).
 
-Not checked yet: slime and honey dragging blocks, torches and ladders coming along, chests keeping their items
-through a move, blocks dropped where they can't land, mobs and items carried, long pole chains (the 64-pole cap), a
-piston broken while moving, crafting the pistons and poles, the piston and pole models in every facing and axis,
-a LAN guest seeing it move.
+Seen in the part 2a pass: a slime block on a sticky piston brings the stone beside it, a wall torch on that stone
+and a chest beside the slime (its 5 diamonds kept) up and back down; a pig standing on the slime rides up and down;
+a piston broken mid-move puts its head, the slime, the stone, the torch and the chest down on the grid (the chest
+still holding its diamonds).
+
+Not checked yet: honey, ladders, blocks dropped where they can't land, items carried, long pole chains (the 64-pole
+cap), crafting the pistons and poles, the piston and pole models in every facing and axis, a LAN guest seeing it
+move.
 
 ## Combined pass over milestone 4 (macOS, offscreen)
 

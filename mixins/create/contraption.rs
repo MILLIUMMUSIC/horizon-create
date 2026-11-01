@@ -134,6 +134,185 @@ pub fn piston_block(sticky: bool, along: bool, state: PistonState) -> &'static s
         .map_or(PISTON_BLOCKS[0].0, |(n, ..)| n)
 }
 
+/// `AbstractChassisBlock`'s kinds: `LinearChassisBlock.sameKind` tells the
+/// two linear ones apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChassisKind {
+    Linear,
+    SecondaryLinear,
+    Radial,
+}
+
+impl ChassisKind {
+    fn base(self) -> &'static str {
+        match self {
+            ChassisKind::Linear => "linear_chassis",
+            ChassisKind::SecondaryLinear => "secondary_linear_chassis",
+            ChassisKind::Radial => "radial_chassis",
+        }
+    }
+    /// The sticky properties, in the order of their bits.
+    fn props(self) -> &'static [&'static str] {
+        match self {
+            ChassisKind::Radial => &["north", "east", "south", "west"],
+            _ => &["top", "bottom"],
+        }
+    }
+}
+
+/// A chassis block's name: `create:<kind>` with no sticky side, else a
+/// hidden `create:hz_<kind>_<sides>` (Horizon's log template has `axis`
+/// only). `sticky` holds a bit per property of `ChassisKind::props`.
+pub fn chassis_block(kind: ChassisKind, sticky: u8) -> String {
+    if sticky == 0 {
+        return format!("create:{}", kind.base());
+    }
+    let sides: Vec<&str> = (kind.props().iter().enumerate())
+        .filter(|(i, _)| sticky & (1 << i) != 0)
+        .map(|(_, p)| *p)
+        .collect();
+    format!("create:hz_{}_{}", kind.base(), sides.join("_"))
+}
+
+/// The kind and sticky bits of a chassis block's name.
+pub fn chassis_of(name: &str) -> Option<(ChassisKind, u8)> {
+    let path = name.strip_prefix("create:")?;
+    for kind in [
+        ChassisKind::Linear,
+        ChassisKind::SecondaryLinear,
+        ChassisKind::Radial,
+    ] {
+        if path == kind.base() {
+            return Some((kind, 0));
+        }
+        let Some(sides) = path
+            .strip_prefix("hz_")
+            .and_then(|p| p.strip_prefix(kind.base()))
+        else {
+            continue;
+        };
+        let Some(sides) = sides.strip_prefix('_') else {
+            continue;
+        };
+        let mut bits = 0u8;
+        for side in sides.split('_') {
+            let i = kind.props().iter().position(|p| *p == side)?;
+            bits |= 1 << i;
+        }
+        if chassis_block(kind, bits) == name {
+            return Some((kind, bits));
+        }
+    }
+    None
+}
+
+/// `getGlueableSide`: the bit of the sticky property on `face`, none when
+/// that face takes no slime.
+pub fn glueable_side(kind: ChassisKind, axis: Axis, face: Dir) -> Option<u8> {
+    use Dir::*;
+    const N: u8 = 1;
+    const E: u8 = 2;
+    const S: u8 = 4;
+    const W: u8 = 8;
+    if kind != ChassisKind::Radial {
+        if face.axis() != axis {
+            return None;
+        }
+        return Some(if face.positive() { 1 } else { 2 });
+    }
+    match (axis, face) {
+        (Axis::X, North) => Some(W),
+        (Axis::X, South) => Some(E),
+        (Axis::X, Up) => Some(N),
+        (Axis::X, Down) => Some(S),
+        (Axis::Y, North) => Some(N),
+        (Axis::Y, South) => Some(S),
+        (Axis::Y, East) => Some(E),
+        (Axis::Y, West) => Some(W),
+        (Axis::Z, Up) => Some(N),
+        (Axis::Z, Down) => Some(S),
+        (Axis::Z, East) => Some(E),
+        (Axis::Z, West) => Some(W),
+        _ => None,
+    }
+}
+
+/// A chassis, as the structure search sees it: its block, axis, sticky
+/// bits and `ChassisBlockEntity.range`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Chassis {
+    pub kind: ChassisKind,
+    pub axis: Axis,
+    pub sticky: u8,
+    pub range: i32,
+}
+
+impl Chassis {
+    /// Whether `face` is a sticky side (`state.getValue(getGlueableSide)`).
+    pub fn sticky_on(&self, face: Dir) -> bool {
+        glueable_side(self.kind, self.axis, face).is_some_and(|b| self.sticky & b != 0)
+    }
+
+    /// `glueAllowedOnSide`: a linear chassis takes no slime towards one of
+    /// its kind on its axis.
+    pub fn glue_allowed(&self, other: Option<&Chassis>) -> bool {
+        if self.kind == ChassisKind::Radial {
+            return true;
+        }
+        !other.is_some_and(|o| o.kind == self.kind && o.axis == self.axis)
+    }
+
+    /// `AbstractChassisBlock.useItemOn` with slime (`slime`) or an empty
+    /// hand while sneaking: the new sticky bits, none when nothing changes.
+    /// `neighbour` answers the chassis on each side.
+    pub fn use_item(
+        &self,
+        face: Dir,
+        slime: bool,
+        neighbour: impl Fn(Dir) -> Option<Chassis>,
+    ) -> Option<u8> {
+        let side = glueable_side(self.kind, self.axis, face)?;
+        if slime && self.sticky & side != 0 {
+            // Slime on a sticky side makes every allowed side sticky.
+            let mut bits = self.sticky;
+            for d in Dir::ALL {
+                if let Some(b) = glueable_side(self.kind, self.axis, d)
+                    && bits & b == 0
+                    && self.glue_allowed(neighbour(d).as_ref())
+                {
+                    bits |= b;
+                }
+            }
+            return Some(bits);
+        }
+        if (self.sticky & side != 0) == slime {
+            return None;
+        }
+        if !self.glue_allowed(neighbour(face).as_ref()) {
+            return None;
+        }
+        Some(if slime {
+            self.sticky | side
+        } else {
+            self.sticky & !side
+        })
+    }
+
+    /// `LinearChassisBlock.updateShape`: a side facing one of its kind on
+    /// its axis loses its slime.
+    pub fn update_shape(&self, side: Dir, other: Option<&Chassis>) -> u8 {
+        if self.kind == ChassisKind::Radial {
+            return self.sticky;
+        }
+        match glueable_side(self.kind, self.axis, side) {
+            Some(b) if other.is_some_and(|o| o.kind == self.kind && o.axis == self.axis) => {
+                self.sticky & !b
+            }
+            _ => self.sticky,
+        }
+    }
+}
+
 /// The piston's own blocks, as the structure search sees them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PistonPart {
@@ -184,6 +363,7 @@ pub struct Facts {
     /// `canBeReplaced`.
     pub replaceable: bool,
     pub part: Option<PistonPart>,
+    pub chassis: Option<Chassis>,
 }
 
 impl Facts {
@@ -229,6 +409,169 @@ pub trait StructureWorld {
     fn head(&self, facing: Dir, sticky: bool) -> Self::State;
     /// `PISTON_EXTENSION_POLE` facing `facing`.
     fn pole(&self, facing: Dir) -> Self::State;
+    /// `SuperGlueEntity.isGlued`: the glue holding `pos` to its neighbour
+    /// towards `dir`, by an index of the world's choosing.
+    fn glue(&self, _pos: Pos, _dir: Dir) -> Option<usize> {
+        None
+    }
+}
+
+/// `ChassisBlockEntity.addAttachedChasses`: the chassis this one joins
+/// (a radial one along its axis, a linear one on any side, of its kind and
+/// axis).
+pub fn attached_chassis<W: StructureWorld>(world: &W, pos: Pos, c: &Chassis) -> Vec<Pos> {
+    let mut out = Vec::new();
+    for d in Dir::ALL {
+        if c.kind == ChassisKind::Radial && d.axis() != c.axis {
+            continue;
+        }
+        let next = step(pos, d, 1);
+        if !world.loaded(next) {
+            break;
+        }
+        if world
+            .facts(next)
+            .chassis
+            .is_some_and(|o| o.kind == c.kind && o.axis == c.axis)
+        {
+            out.push(next);
+        }
+    }
+    out
+}
+
+/// `ChassisBlockEntity.getIncludedBlockPositions` for a contraption moving
+/// towards `forced`.
+pub fn chassis_positions<W: StructureWorld>(
+    world: &W,
+    pos: Pos,
+    c: &Chassis,
+    forced: Option<Dir>,
+) -> Vec<Pos> {
+    let mut out = Vec::new();
+    if c.kind != ChassisKind::Radial {
+        // getIncludedBlockPositionsLinear: along the axis, both ways.
+        for facing in [
+            Dir::positive_of(c.axis),
+            Dir::positive_of(c.axis).opposite(),
+        ] {
+            let sticky = c.sticky_on(facing);
+            for i in 1..=c.range {
+                let current = step(pos, facing, i);
+                if forced != Some(facing) && !sticky {
+                    break;
+                }
+                let f = world.facts(current);
+                if !f.necessary || f.brittle {
+                    break;
+                }
+                out.push(current);
+                if f.not_supportive(facing) {
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+    // getIncludedBlockPositionsRadial: a flood in the plane from each
+    // sticky side, within the radius.
+    let reach = (c.range as f64 + 0.5).powi(2);
+    for facing in Dir::ALL {
+        if facing.axis() == c.axis || !c.sticky_on(facing) {
+            continue;
+        }
+        let mut frontier = VecDeque::from([step(pos, facing, 1)]);
+        let mut visited: HashSet<Pos> = HashSet::new();
+        while let Some(search) = frontier.pop_front() {
+            if visited.contains(&search) {
+                continue;
+            }
+            let d2: i32 = (0..3).map(|k| (search[k] - pos[k]).pow(2)).sum();
+            if f64::from(d2) >= reach {
+                continue;
+            }
+            let f = world.facts(search);
+            if !f.necessary || f.brittle {
+                continue;
+            }
+            visited.insert(search);
+            if search != pos {
+                out.push(search);
+            }
+            for offset in Dir::ALL {
+                if offset.axis() == c.axis {
+                    continue;
+                }
+                if search == pos && offset != facing {
+                    continue;
+                }
+                if f.not_supportive(offset) {
+                    continue;
+                }
+                frontier.push_back(step(search, offset, 1));
+            }
+        }
+    }
+    out
+}
+
+/// `SuperGlueEntity.isValidFace`: glue holds on `dir` of this block.
+pub fn glue_valid_face(f: &Facts, dir: Dir) -> bool {
+    f.attached[dir as usize] || (f.necessary && !f.not_supportive(dir))
+}
+
+/// `SuperGlueEntity.isSideSticky`, for the blocks ported: a sticky piston's
+/// front, slime and honey, a chassis' sticky sides.
+pub fn side_sticky(f: &Facts, dir: Dir) -> bool {
+    match f.part {
+        Some(PistonPart::Piston {
+            facing,
+            sticky: true,
+            ..
+        }) => return facing == dir,
+        Some(PistonPart::Piston { .. }) => return false,
+        _ => {}
+    }
+    f.sticky.is_some() || f.chassis.is_some_and(|c| c.sticky_on(dir))
+}
+
+/// The blocks inside `SuperGlueEntity.span(a, b)` (both corners included).
+pub fn in_span(a: Pos, b: Pos, p: Pos) -> bool {
+    (0..3).all(|k| a[k].min(b[k]) <= p[k] && p[k] <= a[k].max(b[k]))
+}
+
+/// `SuperGlueSelectionHelper.searchGlueGroup` as the server asks it
+/// (`includeOther` false): the blocks glue from `start` to `end` would
+/// join, none when it would hold nothing.
+pub fn glue_group<W: StructureWorld>(world: &W, start: Pos, end: Pos) -> Option<HashSet<Pos>> {
+    let mut frontier = VecDeque::from([start]);
+    let mut visited = HashSet::from([start]);
+    let mut attached = HashSet::new();
+    while let Some(current) = frontier.pop_front() {
+        attached.insert(current);
+        let cf = world.facts(current);
+        for d in Dir::ALL {
+            let offset = step(current, d, 1);
+            let of = world.facts(offset);
+            let already_sticky = side_sticky(&of, d.opposite());
+            if !already_sticky && !in_span(start, end, offset) {
+                continue;
+            }
+            if !of.necessary {
+                continue;
+            }
+            if !glue_valid_face(&cf, d) || !glue_valid_face(&of, d.opposite()) {
+                continue;
+            }
+            if visited.insert(offset) {
+                frontier.push_back(offset);
+            }
+        }
+    }
+    if attached.len() < 2 && attached.contains(&end) {
+        return None;
+    }
+    Some(attached)
 }
 
 /// `AssemblyException`.
@@ -278,6 +621,9 @@ pub struct PistonContraption<S> {
     pub blocks: Vec<Moved<S>>,
     pub extension_length: i32,
     pub initial_extension_progress: i32,
+    /// The glue found holding the moved blocks (`glueToRemove`), by the
+    /// world's indices.
+    pub glue: Vec<usize>,
 }
 
 impl<S: Clone> PistonContraption<S> {
@@ -299,6 +645,7 @@ impl<S: Clone> PistonContraption<S> {
             blocks: Vec::new(),
             extension_length: 0,
             initial_extension_progress: 0,
+            glue: Vec::new(),
         };
         let anchoring = c.collect_extensions(world, pos, state)?;
         let forced = if retract {
@@ -411,7 +758,17 @@ impl<S: Clone> PistonContraption<S> {
             if !f.allowed() {
                 return Err(AssemblyError::Unmovable(pos));
             }
-            // Slime blocks (and super glue, not ported) drag adjacent blocks.
+            // moveChassis: its group, and the blocks it holds.
+            if let Some(c) = f.chassis {
+                let mut held = attached_chassis(world, pos, &c);
+                held.extend(chassis_positions(world, pos, &c, Some(forced)));
+                for p in held {
+                    if !visited.contains(&p) && !frontier.contains(&p) {
+                        frontier.push_back(p);
+                    }
+                }
+            }
+            // Slime blocks and super glue drag adjacent blocks.
             for dir in Dir::ALL {
                 let next = step(pos, dir, 1);
                 if anchoring.contains(&next) {
@@ -436,9 +793,15 @@ impl<S: Clone> PistonContraption<S> {
                     stick = false;
                 }
                 let pushed = dir == forced && !f.not_supportive(forced);
+                let glued = world.glue(pos, dir);
+                if let Some(g) = glued
+                    && !self.glue.contains(&g)
+                {
+                    self.glue.push(g);
+                }
                 if !visited.contains(&next)
                     && !frontier.contains(&next)
-                    && (stick || attached || pushed)
+                    && (stick || attached || pushed || glued.is_some())
                 {
                     frontier.push_back(next);
                 }
@@ -792,10 +1155,12 @@ mod tests {
         Torch(Dir),
         Bedrock,
         Part(PistonPart),
+        Chassis(Chassis),
     }
 
+    /// Blocks, and glue as pairs of its corners.
     #[derive(Default)]
-    struct World(HashMap<Pos, B>);
+    struct World(HashMap<Pos, B>, Vec<(Pos, Pos)>);
 
     impl StructureWorld for World {
         type State = String;
@@ -843,7 +1208,20 @@ mod tests {
                     part: Some(*part),
                     ..solid
                 },
+                Some(B::Chassis(c)) => Facts {
+                    chassis: Some(*c),
+                    ..solid
+                },
             }
+        }
+        fn glue(&self, p: Pos, d: Dir) -> Option<usize> {
+            let q = step(p, d, 1);
+            let inside = |a: Pos, b: Pos, x: Pos| {
+                (0..3).all(|k| a[k].min(b[k]) <= x[k] && x[k] <= a[k].max(b[k]))
+            };
+            self.1
+                .iter()
+                .position(|(a, b)| inside(*a, *b, p) && inside(*a, *b, q))
         }
         fn state(&self, p: Pos) -> String {
             format!("{:?}", self.0.get(&p))
@@ -1106,5 +1484,147 @@ mod tests {
             a.tick(0.0, Dir::East, c.anchor, |_, _| false),
             ActuatorStep::Disassemble { grid_offset: 0 }
         );
+    }
+
+    fn moved(c: &PistonContraption<String>) -> Vec<Pos> {
+        c.blocks.iter().map(|b| c.world_pos(b.local, 0)).collect()
+    }
+
+    #[test]
+    fn chassis_names_round_trip() {
+        for kind in [
+            ChassisKind::Linear,
+            ChassisKind::SecondaryLinear,
+            ChassisKind::Radial,
+        ] {
+            let n = if kind == ChassisKind::Radial { 16 } else { 4 };
+            for bits in 0..n {
+                assert_eq!(chassis_of(&chassis_block(kind, bits)), Some((kind, bits)));
+            }
+        }
+        assert_eq!(
+            chassis_block(ChassisKind::Radial, 0b0101),
+            "create:hz_radial_chassis_north_south"
+        );
+        assert_eq!(chassis_of("create:hz_linear_chassis_bottom_top"), None);
+    }
+
+    #[test]
+    fn slime_on_a_chassis_side() {
+        let c = Chassis {
+            kind: ChassisKind::Linear,
+            axis: Axis::Y,
+            sticky: 0,
+            range: 8,
+        };
+        assert_eq!(c.use_item(Dir::Up, true, |_| None), Some(1));
+        assert_eq!(c.use_item(Dir::North, true, |_| None), None);
+        // Slime on a sticky side covers the others; one towards a chassis
+        // of its kind stays bare.
+        let top = Chassis { sticky: 1, ..c };
+        assert_eq!(top.use_item(Dir::Up, true, |_| None), Some(3));
+        assert_eq!(
+            top.use_item(Dir::Up, true, |d| (d == Dir::Down).then_some(c)),
+            Some(1)
+        );
+        // An empty hand while sneaking takes it off.
+        assert_eq!(top.use_item(Dir::Up, false, |_| None), Some(0));
+        assert_eq!(top.update_shape(Dir::Up, Some(&c)), 0);
+        let radial = Chassis {
+            kind: ChassisKind::Radial,
+            axis: Axis::X,
+            sticky: 0,
+            range: 2,
+        };
+        assert_eq!(radial.use_item(Dir::Up, true, |_| None), Some(1));
+        assert_eq!(radial.use_item(Dir::East, true, |_| None), None);
+    }
+
+    #[test]
+    fn a_linear_chassis_takes_its_sticky_side() {
+        let mut w = rig(1, false);
+        let c = Chassis {
+            kind: ChassisKind::Linear,
+            axis: Axis::Y,
+            sticky: 1,
+            range: 2,
+        };
+        w.0.insert([1, 0, 0], B::Chassis(c));
+        for y in 1..=3 {
+            w.0.insert([1, y, 0], B::Stone);
+        }
+        w.0.insert([1, -1, 0], B::Stone);
+        let m = moved(
+            &PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(m.contains(&[1, 1, 0]) && m.contains(&[1, 2, 0]));
+        assert!(!m.contains(&[1, 3, 0]) && !m.contains(&[1, -1, 0]));
+        // Its neighbour of the same kind and axis joins it.
+        w.0.insert([1, 0, 1], B::Chassis(Chassis { sticky: 0, ..c }));
+        w.0.insert([1, 0, 2], B::Chassis(Chassis { axis: Axis::X, ..c }));
+        let m = moved(
+            &PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(m.contains(&[1, 0, 1]) && !m.contains(&[1, 0, 2]));
+    }
+
+    #[test]
+    fn a_radial_chassis_takes_a_disc() {
+        let mut w = rig(1, false);
+        let c = Chassis {
+            kind: ChassisKind::Radial,
+            axis: Axis::X,
+            sticky: 1,
+            range: 2,
+        };
+        w.0.insert([1, 0, 0], B::Chassis(c));
+        for p in [[1, 1, 0], [1, 2, 0], [1, 1, 1], [1, 3, 0], [1, -1, 0]] {
+            w.0.insert(p, B::Stone);
+        }
+        let m = moved(
+            &PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(m.contains(&[1, 1, 0]) && m.contains(&[1, 2, 0]) && m.contains(&[1, 1, 1]));
+        assert!(!m.contains(&[1, 3, 0]) && !m.contains(&[1, -1, 0]));
+    }
+
+    #[test]
+    fn super_glue_holds_its_blocks() {
+        let mut w = rig(1, false);
+        w.0.insert([1, 0, 0], B::Stone);
+        w.0.insert([1, 1, 0], B::Stone);
+        w.0.insert([1, 2, 0], B::Stone);
+        w.1.push(([1, 0, 0], [1, 1, 0]));
+        let c = PistonContraption::assemble(&w, [0, 0, 0], Dir::East, false)
+            .unwrap()
+            .unwrap();
+        let m = moved(&c);
+        assert!(m.contains(&[1, 1, 0]) && !m.contains(&[1, 2, 0]));
+        assert_eq!(c.glue, vec![0]);
+    }
+
+    #[test]
+    fn glue_joins_the_blocks_in_its_span() {
+        let mut w = World::default();
+        for p in [[0, 0, 0], [1, 0, 0], [2, 0, 0], [0, 1, 0]] {
+            w.0.insert(p, B::Stone);
+        }
+        let g = glue_group(&w, [0, 0, 0], [1, 0, 0]).unwrap();
+        assert_eq!(g.len(), 2);
+        // Slime beside it joins whatever the span says.
+        w.0.insert([0, 0, 1], B::Slime);
+        assert!(
+            glue_group(&w, [0, 0, 0], [1, 0, 0])
+                .unwrap()
+                .contains(&[0, 0, 1])
+        );
+        // A lone block holds nothing.
+        assert!(glue_group(&w, [9, 9, 9], [9, 9, 9]).is_none());
     }
 }

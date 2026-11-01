@@ -24,7 +24,7 @@ const CHANNEL: &str = "create:kinetics";
 const VALUES: &str = "create:values";
 /// `BlockEntityConfigurationPacket`'s reach.
 const VALUE_RANGE: f64 = 20.0;
-const WRENCH: &str = "create:wrench";
+pub(super) const WRENCH: &str = "create:wrench";
 /// Ticks between full updates, so a player who just came sees everything.
 const SNAPSHOT_EVERY: u64 = 100;
 /// Ticks between saves of the kinetics beside the world.
@@ -448,7 +448,9 @@ fn right_click_hand(
     face: [i32; 3],
     canceled: &mut bool,
 ) {
-    if super::create_arms::right_click(game, pos, face) {
+    if super::create_contraptions::right_click(game, pos, face)
+        || super::create_arms::right_click(game, pos, face)
+    {
         *canceled = true;
         return;
     }
@@ -639,6 +641,10 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
 /// `native_net_from_client`: a player's scroll value
 /// (`ValueSettingsPacket`), applied at their level's tick.
 pub(super) fn from_client(game: &mut Game<'_>, player: u128, channel: &str, data: &[u8]) {
+    if channel == super::create_contraptions::CHASSIS {
+        super::create_contraptions::from_client(game, player, data);
+        return;
+    }
     if channel != VALUES {
         return;
     }
@@ -711,6 +717,10 @@ fn can_interact(game: &Game<'_>) -> bool {
 /// `native_wheel`: the wheel over a creative motor's value box steps its
 /// speed (Create 0.5's scrolling; Create 6 opens a value board here).
 pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
+    if super::create_contraptions::wheel(game, steps) {
+        *claimed = true;
+        return;
+    }
     if steps == 0.0 || !can_interact(game) {
         return;
     }

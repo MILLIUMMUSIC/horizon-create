@@ -519,6 +519,7 @@ def fit_logistics(content, names):
 
     fit_arms(content, names)
     fit_pistons(content, names)
+    fit_chassis(content, names)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -530,6 +531,7 @@ def fit_logistics(content, names):
         **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
         **{name: f"create:{piston}" for name, (piston, _, _) in piston_blocks().items() if name != piston},
         "hz_mechanical_piston_head_sticky": "create:mechanical_piston_head",
+        **{name: f"create:{base}" for name, (base, _) in chassis_blocks().items() if name != base},
     })
 
 
@@ -695,6 +697,65 @@ def fit_pistons(content, names):
     # keeps it.
     write_json(loot_tables / "mechanical_piston_head.json", {"type": "minecraft:block", "pools": []})
     write_json(loot_tables / "hz_mechanical_piston_head_sticky.json", {"type": "minecraft:block", "pools": []})
+
+
+# Chassis (`AbstractChassisBlock`, a RotatedPillarBlock): a log's template
+# keeps `axis`; each set of sticky sides is a block of its own,
+# `create:hz_<kind>_<sides>` (contraption.rs's `chassis_block`), dropping the
+# plain one. The bits follow `ChassisKind::props`.
+CHASSIS_SIDES = {
+    "linear_chassis": ["top", "bottom"],
+    "secondary_linear_chassis": ["top", "bottom"],
+    "radial_chassis": ["north", "east", "south", "west"],
+}
+
+
+def chassis_blocks():
+    """Every chassis block: name -> (base, {property: "true"/"false"})."""
+    out = {}
+    for base, sides in CHASSIS_SIDES.items():
+        for bits in range(1 << len(sides)):
+            on = [side for i, side in enumerate(sides) if bits & (1 << i)]
+            name = base if not on else f"hz_{base}_{'_'.join(on)}"
+            out[name] = (base, {f"sticky_{side}": str(side in on).lower() for side in sides})
+    return out
+
+
+def fit_chassis(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    originals = {b: read_json(states / f"{b}.json") for b in CHASSIS_SIDES if (states / f"{b}.json").exists()}
+    for name, (base, fixed) in chassis_blocks().items():
+        decl = read_json(blocks / f"{base}.json") if (blocks / f"{base}.json").exists() else {}
+        decl = dict(decl)
+        decl["template"] = "minecraft:oak_log"
+        decl.pop("default_state", None)
+        decl.pop("shapes", None)
+        if name != base:
+            decl["item"] = False
+            names[f"block.create.{name}"] = names.get(f"block.create.{base}", base)
+            write_json(loot_tables / f"{name}.json", loot(name, [f"create:{base}"]))
+        write_json(blocks / f"{name}.json", decl)
+        original = originals.get(base)
+        if original is None:
+            continue
+        if "variants" in original:
+            variants = {}
+            for key, model in original["variants"].items():
+                props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+                if all(props.get(k) == v for k, v in fixed.items()) and "axis" in props:
+                    variants[f"axis={props['axis']}"] = model
+            write_json(states / f"{name}.json", {"variants": variants})
+        else:
+            parts = []
+            for part in original.get("multipart", []):
+                when = dict(part.get("when", {}))
+                if any(k in fixed and str(v) != fixed[k] for k, v in when.items()):
+                    continue
+                when = {k: v for k, v in when.items() if k not in fixed}
+                parts.append({**part, "when": when} if when else {"apply": part["apply"]})
+            write_json(states / f"{name}.json", {"multipart": parts})
 
 
 def share_block_tags(content, bases):
