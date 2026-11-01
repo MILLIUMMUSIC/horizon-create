@@ -13,8 +13,8 @@ mod:
 - blocks get the templates and shapes Create gives them (a thin shaft, a
   cogwheel's disc, a crank on any face);
 - belts are a block per part on a grindstone's template (its `face` holds
-  the slope), drawn by the native mod; chutes and andesite funnels get the
-  templates the native mod expects (see `fit_logistics`);
+  the slope), drawn by the native mod; chutes, funnels and belt tunnels get
+  the templates the native mod expects (see `fit_logistics`);
 - the water wheel's OBJ model (`models/block/water_wheel/`), which the
   native mod reads at runtime, is taken from the jar when the carried
   content lacks it.
@@ -232,16 +232,35 @@ BELT_SHAPES = {
     "ceiling": [box(0, 0, 0, 16, 8, 16)],
 }
 
-# The andesite funnel: a lightning rod's template (six facings), a block for
-# each `extracting`; the item places the extracting one. AllShapes.FUNNEL_*,
+# Funnels: a lightning rod's template (six facings), a block for each
+# `extracting`; the item places the extracting one. AllShapes.FUNNEL_*,
 # within the block.
-FUNNELS = {"andesite_funnel": "true", "hz_andesite_funnel_collecting": "false"}
+FUNNEL_KINDS = {
+    "andesite_funnel": {"andesite_funnel": "true", "hz_andesite_funnel_collecting": "false"},
+    "brass_funnel": {"brass_funnel": "true", "hz_brass_funnel_collecting": "false"},
+}
 FUNNEL_WALL_NORTH = [box(2, 2, 14, 14, 14, 16), box(1, 8, 12, 15, 15, 14), box(0.1, 13, 7, 15.9, 15, 11),
                      box(0.1, 9, 8, 15.9, 13, 12), box(0.1, 5, 9, 15.9, 9, 13)]
 FUNNEL_SHAPES = {
     "up": [box(2, 0, 2, 14, 8, 14), box(1, 1, 1, 15, 8, 15), box(0, 4, 0, 16, 10, 16)],
     "down": [box(2, 8, 2, 14, 16, 14), box(1, 8, 1, 15, 15, 15), box(0, 6, 0, 16, 12, 16)],
 }
+
+# Belt tunnels: Create's `horizontal_axis` and `shape` are a chain's
+# template (its `axis`) and a block per shape; the item places the straight
+# one and the native mod turns it to the axis and shape its belt and
+# neighbours give it. BeltTunnelShapes (a block with the tunnel's openings
+# notched out at both ends, its part below the block left out) along `axis`
+# only: shapes can't follow the block per shape.
+TUNNEL_SHAPES = ["straight", "window", "closed", "t_left", "t_right", "cross"]
+TUNNEL_ALONG_Z = [box(0, 0, 0, 2, 16, 16), box(14, 0, 0, 16, 16, 16), box(2, 10, 0, 14, 16, 16),
+                  box(2, 0, 2, 14, 10, 14)]
+
+
+def tunnel_blocks(kind):
+    return {(f"{kind}_tunnel" if shape == "straight" else f"hz_{kind}_tunnel_{shape}"): shape
+            for shape in TUNNEL_SHAPES}
+
 
 # The deployer: a lightning rod's template (six facings, no use of its own), a
 # block per `axis_along_first` (no template has it); the item places the
@@ -439,32 +458,64 @@ def fit_logistics(content, names):
         if name != "belt":
             names[f"block.create.{name}"] = names.get("block.create.belt", "Mechanical Belt")
 
-    original = read_json(states / "andesite_funnel.json") if (states / "andesite_funnel.json").exists() else None
-    base = read_json(blocks / "andesite_funnel.json") if (blocks / "andesite_funnel.json").exists() else {}
     turns = {"north": 0, "east": 1, "south": 2, "west": 3}
     shapes = dict(FUNNEL_SHAPES)
     for f, q in turns.items():
         shapes[f] = [turn_y(b, q) for b in FUNNEL_WALL_NORTH]
-    for name, extracting in FUNNELS.items():
-        decl = dict(base)
-        decl["template"] = "minecraft:lightning_rod"
-        decl.pop("default_state", None)
-        decl["shapes"] = {"property": "facing", "values": shapes}
-        decl.setdefault("properties", {})["light"] = 0
-        if name != "andesite_funnel":
-            decl["item"] = False
-            names[f"block.create.{name}"] = names.get("block.create.andesite_funnel", "Andesite Funnel")
-            write_json(loot_tables / f"{name}.json", loot(name, ["create:andesite_funnel"]))
-        write_json(blocks / f"{name}.json", decl)
-        if original is None:
-            continue
-        variants = {}
-        for key, model in original.get("variants", {}).items():
-            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
-            if props.get("extracting") == extracting and props.get("powered", "false") == "false" \
-                    and props.get("waterlogged", "false") == "false" and "facing" in props:
-                variants[f"facing={props['facing']}"] = model
-        write_json(states / f"{name}.json", {"variants": variants})
+    for item, funnels in FUNNEL_KINDS.items():
+        original = read_json(states / f"{item}.json") if (states / f"{item}.json").exists() else None
+        base = read_json(blocks / f"{item}.json") if (blocks / f"{item}.json").exists() else {}
+        for name, extracting in funnels.items():
+            decl = dict(base)
+            decl["template"] = "minecraft:lightning_rod"
+            decl.pop("default_state", None)
+            decl["shapes"] = {"property": "facing", "values": shapes}
+            decl.setdefault("properties", {})["light"] = 0
+            if name != item:
+                decl["item"] = False
+                names[f"block.create.{name}"] = names.get(f"block.create.{item}", item.replace("_", " ").title())
+            if name != "andesite_funnel":
+                write_json(loot_tables / f"{name}.json", loot(name, [f"create:{item}"]))
+            write_json(blocks / f"{name}.json", decl)
+            if original is None:
+                continue
+            variants = {}
+            for key, model in original.get("variants", {}).items():
+                props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+                if props.get("extracting") == extracting and props.get("powered", "false") == "false" \
+                        and props.get("waterlogged", "false") == "false" and "facing" in props:
+                    variants[f"facing={props['facing']}"] = model
+            write_json(states / f"{name}.json", {"variants": variants})
+
+    tunnel_shapes = {"z": TUNNEL_ALONG_Z}
+    tunnel_shapes["x"] = [[z0, y0, x0, z1, y1, x1] for x0, y0, z0, x1, y1, z1 in TUNNEL_ALONG_Z]
+    tunnel_shapes["y"] = tunnel_shapes["x"]
+    for kind in ("andesite", "brass"):
+        item = f"{kind}_tunnel"
+        original = read_json(states / f"{item}.json") if (states / f"{item}.json").exists() else None
+        base = read_json(blocks / f"{item}.json") if (blocks / f"{item}.json").exists() else {}
+        for name, shape in tunnel_blocks(kind).items():
+            decl = dict(base)
+            decl["template"] = "minecraft:iron_chain"
+            decl.pop("default_state", None)
+            decl["shapes"] = {"property": "axis", "values": tunnel_shapes}
+            decl.setdefault("properties", {})["light"] = 0
+            if name != item:
+                decl["item"] = False
+                names[f"block.create.{name}"] = names.get(f"block.create.{item}", item.replace("_", " ").title())
+            write_json(blocks / f"{name}.json", decl)
+            write_json(loot_tables / f"{name}.json", loot(name, [f"create:{item}"]))
+            if original is None:
+                continue
+            variants = {}
+            for key, model in original.get("variants", {}).items():
+                props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+                if props.get("shape") == shape and props.get("axis") in ("x", "z"):
+                    variants[f"axis={props['axis']}"] = model
+            # A chain placed upright, until the native mod turns it.
+            if "axis=x" in variants:
+                variants["axis=y"] = variants["axis=x"]
+            write_json(states / f"{name}.json", {"variants": variants})
 
     fit_arms(content, names)
 
@@ -472,7 +523,9 @@ def fit_logistics(content, names):
     # whether the template's required tool drops them at all.
     share_block_tags(content, {
         **{name: "create:belt" for name in BELT_PARTS if name != "belt"},
-        **{name: "create:andesite_funnel" for name in FUNNELS if name != "andesite_funnel"},
+        **{name: f"create:{item}" for item, funnels in FUNNEL_KINDS.items() for name in funnels if name != item},
+        **{name: f"create:{kind}_tunnel" for kind in ("andesite", "brass")
+           for name in tunnel_blocks(kind) if name != f"{kind}_tunnel"},
         **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
     })
 

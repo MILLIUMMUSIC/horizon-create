@@ -369,6 +369,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_machines::fan_tick(game, dimension, &fans);
     super::create_logistics::belts_tick(game, dimension, &belts, full_update);
     super::create_logistics::funnels_tick(game, dimension);
+    super::create_logistics::tunnels_tick(game, dimension);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
@@ -485,7 +486,7 @@ fn right_click_hand(
     // Buckets on tanks and basins first: the basin's own click takes any.
     if super::create_fluid_glue::right_click(game, pos)
         || super::create_machines::right_click(game, pos, face)
-        || super::create_logistics::right_click(game, pos)
+        || super::create_logistics::right_click(game, pos, face)
     {
         *canceled = true;
         return;
@@ -582,7 +583,11 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     if matches!(kind, Some(Kind::Belt(_))) {
         return true;
     }
-    if !sneaking && (super::create_logistics::wrench_funnel(game, pos) || super::create_arms::wrench(game, pos, face)) {
+    if !sneaking
+        && (super::create_logistics::wrench_funnel(game, pos)
+            || super::create_logistics::wrench_tunnel(game, pos)
+            || super::create_arms::wrench(game, pos, face))
+    {
         return true;
     }
     let machine = name == super::create_machines::DEPOT

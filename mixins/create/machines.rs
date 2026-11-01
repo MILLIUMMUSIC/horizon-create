@@ -796,7 +796,12 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                 && game.world.loaded(p[0], p[2])
                 && registry
                     .state(game.world.block(p[0], p[1], p[2]))
-                    .is_none_or(|s| s.name != DEPOT && s.name != BASIN && s.name != super::create_logistics::CHUTE)
+                    .is_none_or(|s| {
+                        s.name != DEPOT
+                            && s.name != BASIN
+                            && s.name != super::create_logistics::CHUTE
+                            && !super::create_funnel::is_funnel(&s.name)
+                    })
         })
         .map(|(_, p)| *p)
         .collect();
@@ -915,6 +920,16 @@ pub(super) fn draw_depots(
             .is_some_and(|s| s.name == super::create_logistics::CHUTE);
         if chute {
             super::create_logistics::draw_chute(game, camera, *pos, slots, out);
+            continue;
+        }
+        let funnel = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1], pos[2]))
+            .is_some_and(|s| super::create_funnel::is_funnel(&s.name));
+        if funnel {
+            super::create_logistics::draw_funnel_filter(game, camera, *pos, slots, out);
             continue;
         }
         let centre = glam::DVec3::new(

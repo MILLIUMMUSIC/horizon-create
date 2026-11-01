@@ -105,7 +105,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      funnel (`getShapeForPosition`): pulling items off the belt into the inventory behind
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
      wrench switches it. Not yet: redstone (paused when powered), the belt funnel's own model and flap, clicking an
-     item into it, brass funnels and filters.
+     item into it. Brass funnels: part 3.
    Fluids (**compiled and unit-tested only, not yet run in the game**):
    - Fluid pipes (`fluids.rs`: `FluidTransportBehaviour`, `PipeConnection` with its three layers, `FlowSource`,
      `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`; `fluid_glue.rs`): straight pipes only, placed like a chain
@@ -172,7 +172,46 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      the client between updates. Not yet: other item uses and blocks' own uses, entities in front (feeding, shearing,
      attacking), fist bumps, the filter slot, redstone locking, sandpaper polishing and sequenced assembly, the
      crafting remainder of a damaged tool, hoppers into it (no block entity), its goggle lines, sounds and particles.
-   Part 3 and later: tunnels, brass funnels.
+   Part 3, brass funnel and belt tunnels (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md
+   lists the in-game checks):
+   - Brass funnel (`funnel.rs`, `logistics.rs`): the andesite funnel's blocks and modes (extracting and collecting
+     blocks on a lightning rod's template, the belt funnel it becomes on a belt) with its filter
+     (`FilteringBehaviour`, one item): a right click on its filter side (the front of a horizontal funnel, any
+     side of a vertical one: Horizon's click has no hit position for the value box) sets the held item, an empty
+     hand clears it; items aren't used up. The filter decides what it extracts, collects, takes off a belt (others
+     pass, or wait at a funnel facing them, as `BeltFunnelInteractionHandler`), takes from a belt's end and what an
+     arm deposits into it. It extracts its filter's amount, a full stack by default whether or not an item is set
+     (`getAmountToExtract`), gathered from every slot holding that item (`ItemHelper.extract`, `UPTO`); funnels and
+     chutes now gather the same way. The filter's item is drawn in each filter slot as `FilteringRenderer` does
+     (`FunnelFilterSlotPositioning` for the funnel block), synced on `create:depots`. Filters are saved with the
+     funnels in `create_logistics_*.txt`. Not yet: the amount's value box (exact amounts, `upTo`), filter items
+     (lists, attributes, packages), matching components, the belt funnel's slot positions, the filter's tooltip.
+   - Andesite tunnel (`tunnel.rs`, `belt.rs`, `logistics.rs`): a block per `shape` on a chain's template (its
+     `axis` holds the horizontal axis). It turns to its belt's axis and the shape its neighbours give it
+     (`getTunnelState`: T and cross where a belt across it or a depot, chute or collecting funnel takes items at
+     its sides; a window between tunnels, which the wrench closes and opens); it breaks off when the belt below
+     goes. Its sides and flaps (`updateTunnelConnections`) are worked out each tick. A stack entering a junction
+     along the belt puts one item onto each side with a flap that takes it, and waits while one doesn't
+     (`flapTunnelsAndCheckIfStuck`). Not yet: the flaps drawn and moving (`BeltTunnelRenderer`, `TunnelFlapPacket`),
+     the belt's casing under it (belts have no casing here), placing it only on belts (`BeltTunnelItem`; one placed
+     elsewhere breaks at once), the item handler (`cap`: funnels and hoppers reaching the belt through it), display
+     links.
+   - Brass tunnel (`tunnel.rs`, `logistics.rs`): the andesite tunnel's blocks, holding the stack that enters it when it
+     distributes (`hasDistributionBehaviour`: a flap to the side or a connected brass tunnel) and keeping the
+     next item waiting until it is empty (`stuckAtTunnel`). Connected tunnels side by side over parallel belts share
+     their outputs (`gatherValidOutputs`, its own sides first); `distribute` in **Split** (the default) and
+     **Round robin**, after `brassTunnelTimer` (10 ticks) or 2 for a new item; outputs are belts, depots, chutes and
+     collecting funnels at the sides, or the belt's end (thrown off). An adjacent brass funnel's filter decides
+     what a side takes and goes first (`testFlapFilter`, `flapFilterEmpty`). The wrench switches Split and Round
+     robin (standing in for the value box, as Horizon can't open the value settings board; an action bar line
+     says the mode) for the whole connected group, and a tunnel placed beside others gives them its mode
+     (`updateTunnelConnections`); an empty hand takes the group's stacks (`grabAllStacksOfGroup`); a broken one
+     drops its stack. Mode and stack are saved in `create_logistics_*.txt`. Not yet: Forced split, Forced round
+     robin, Prefer nearest, Randomize and Synchronize; sided filters on the tunnel itself
+     (`SidedFilteringBehaviour`); the brass tunnel's connected textures (`BrassTunnelCTBehaviour`); its window
+     toggle (the wrench switches the mode instead); the goggle tooltip; its item handler (`BrassTunnelItemHandler`:
+     funnels and hoppers inserting into it); the distribution's stack drawn (`BrassTunnelRenderer`).
+   Later: smart chutes, the remaining belt features above.
 5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions) — need
    entities with block collision, their own rendering and network sync. The biggest engine gap; expect
    upstream Horizon work (hook points for custom entities and their rendering).
@@ -213,7 +252,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   follow `face` alone (no `facing`): sloped belts are a lower half block. Funnels have the same problem
   (`extracting`, `powered`): a block per `extracting` on a lightning rod's template, and belt funnels have no
   block (a horizontal funnel over a belt acts as one, with the funnel's model).
-- Mod block entities only on templates that have one: belts and funnels have none, so their items and timers live
+- Tunnels have the same problem (`horizontal_axis`, `shape`): a block per shape on a chain's template, the shape and
+  axis set by the native mod a tick after placement or a neighbour's change (no `getStateForPlacement` or
+  `updateShape` for mod blocks), and collision shapes by axis only.
+- Mod block entities only on templates that have one: belts, funnels and tunnels have none, so their items and timers live
   beside the world in the native mod (only an item's id, count and damage are saved), and hoppers can't put
   items onto belts.
 - No native hook to take items out of a container (`native_insert_item` puts them in, and can't simulate):
@@ -236,8 +278,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   reach Create's fluids. Fluids do this now: pipes reach every fluid holder only
   through `create_fluids::FluidAccess` (`has_handler`, `handler_tanks`, `fill`, `drain`, `drain_any` at a block
   face), which `fluid_glue::Access` answers for tanks and basins; a capability hook would answer it instead.
-- horizon-port-pack leaves out the blocks no template fits (the andesite funnel, fluid pipe and tank, item vault,
-  mechanical arm, deployer...) and drops their recipes with them (`recipes_unregistered` in its carry report):
+- horizon-port-pack leaves out the blocks no template fits (the andesite and brass funnels and tunnels, fluid pipe
+  and tank, item vault, mechanical arm, deployer...) and drops their recipes with them (`recipes_unregistered` in its carry report):
   `prepare_content.py` declares those blocks itself and, given `--jar`, carries the crafting recipes of the ones it
   declares from the jar (`take_left_out_recipes`, ingredients upgraded to 26.3's strings). Recipes of blocks not
   ported yet stay out.

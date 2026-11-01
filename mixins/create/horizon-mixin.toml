@@ -28,6 +28,12 @@ name = "create_funnel"
 source = "funnel.rs"
 
 [[module]]
+id = "tunnel"
+file = "crates/horizon-client/src/game.rs"
+name = "create_tunnel"
+source = "tunnel.rs"
+
+[[module]]
 id = "fan"
 file = "crates/horizon-client/src/game.rs"
 name = "create_fan"
