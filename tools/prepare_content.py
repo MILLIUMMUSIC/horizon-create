@@ -96,6 +96,8 @@ DIRECTIONAL = {
     "water_wheel": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
     # The casing stays in the chunk mesh; the propeller is a partial.
     "encased_fan": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
+    # AllShapes.PUMP; its cog is a partial.
+    "mechanical_pump": {"template": "minecraft:lightning_rod", "shape": box(2, 0, 2, 14, 16, 14)},
 }
 
 # Machines with item slots: mod block entities need a template that has a
@@ -150,6 +152,8 @@ PARTIALS = {
     "cogwheel_shaftless": "create:block/cogwheel_shaftless",
     "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
     "mechanical_mixer_head": "create:block/mechanical_mixer/head",
+    # PumpRenderer's cog.
+    "mechanical_pump_cog": "create:block/mechanical_pump/cog",
     # BeltRenderer's partials.
     "belt_pulley": "create:block/belt_pulley",
     "belt_start": "create:block/belt/start",
@@ -322,6 +326,7 @@ def fit(content):
         names[f"block.create.{block}"] = name
 
     fit_logistics(content, names)
+    fit_fluids(content)
 
     if names:
         write_json(lang, names)
@@ -403,6 +408,62 @@ def fit_logistics(content, names):
         **{name: "create:belt" for name in BELT_PARTS if name != "belt"},
         **{name: "create:andesite_funnel" for name in FUNNELS if name != "andesite_funnel"},
     })
+
+
+# Fluid pipes: Create's `fluid_pipe` (six `north`...`down` booleans, set by
+# its neighbours) is straight here, on a chain's template: `axis` from the
+# clicked face, open at both ends. FluidPipeBlock's core and arms
+# (`PipeBlock` with an apothem of 4/16).
+PIPE_SHAPE = box(4, 0, 4, 12, 16, 12)
+SIDES = {"x": ("west", "east"), "y": ("down", "up"), "z": ("north", "south")}
+
+
+def matches(when, props):
+    """A multipart `when` (with `OR`/`AND` and `a|b` values) against `props`."""
+    if "OR" in when:
+        return any(matches(w, props) for w in when["OR"])
+    if "AND" in when:
+        return all(matches(w, props) for w in when["AND"])
+    return all(props.get(k) in str(v).split("|") for k, v in when.items())
+
+
+def straight_pipe_states(original):
+    """The carried six-way pipe blockstate, for straight pipes by `axis`."""
+    parts = []
+    for axis in AXES:
+        props = {d: "false" for d in FACINGS}
+        props.update({d: "true" for d in SIDES[axis]})
+        props["waterlogged"] = "false"
+        for part in original.get("multipart", []):
+            if "when" not in part or matches(part["when"], props):
+                parts.append({"when": {"axis": axis}, "apply": part["apply"]})
+    return {"multipart": parts}
+
+
+def fit_fluids(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    pipe = blocks / "fluid_pipe.json"
+    decl = read_json(pipe) if pipe.exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl.pop("default_state", None)
+    decl["shapes"] = {"property": "axis", "values": {a: [along(a, PIPE_SHAPE)] for a in AXES}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(pipe, decl)
+    if (states / "fluid_pipe.json").exists():
+        write_json(states / "fluid_pipe.json", straight_pipe_states(read_json(states / "fluid_pipe.json")))
+    # The fluid tank: a single block on glass's template (a full block that
+    # hides nothing next to it, cutout), with no block entity: its fluid
+    # lives in the native mod. Single tanks only: always the one-block
+    # window model (FluidTankBlock's `top`, `bottom`, `shape`).
+    tank = blocks / "fluid_tank.json"
+    decl = read_json(tank) if tank.exists() else {}
+    decl["template"] = "minecraft:glass"
+    decl.pop("default_state", None)
+    decl.pop("shapes", None)
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(tank, decl)
+    write_json(states / "fluid_tank.json", {"variants": {"": {"model": "create:block/fluid_tank/block_single_window"}}})
 
 
 def share_block_tags(content, bases):

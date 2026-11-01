@@ -17,9 +17,10 @@ use super::create_fan::{
 use super::create_kinetics::{Axis, Dir, Kind, Pos};
 use super::create_processing::{
     BASIN_SLOTS, BasinRecipe, MixStep, PRESS_CYCLE, PressMode, PressStep, Recipe,
-    apply_processing_on, basin_insert_slot, basin_take, ingredient_json, millstone_speed,
+    apply_processing_on, basin_insert_slot, basin_take, basin_take_fluids, ingredient_json, millstone_speed,
     multiplied_output, parse_basin_recipe, parse_recipe, roll_results, water_wheel_flow_score,
 };
+use super::create_fluids::BasinTanks;
 use horizon_client::containers::{ModBlockEntity, ModContainer};
 use horizon_client::crafting::Ingredient;
 use horizon_client::items::ItemStack;
@@ -959,9 +960,13 @@ fn basin_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
         basin_insert(game, &mut entity.items[..BASIN_SLOTS], stack)
     });
     let view = depot_view(&entity.items);
-    let empty = entity.items.iter().all(Option::is_none);
+    // Its tanks count too (`BasinBlockEntity`'s fluid `contentsChanged`).
+    let fluids_changed = super::create_fluid_glue::basin_fluids_changed(entity);
+    let tanks = super::create_fluid_glue::basin_tanks(entity);
+    super::create_fluid_glue::note_basin(game.dim.id(), pos, &tanks);
+    let empty = entity.items.iter().all(Option::is_none) && tanks.is_empty();
     let mut backup = get_int(&entity.nbt, "Backup") - 1;
-    let changed = {
+    let changed = fluids_changed | {
         let mut guard = machines();
         let m = guard.get_or_insert_with(Machines::default);
         let key = (game.dim.id().to_owned(), pos);
@@ -1011,7 +1016,7 @@ fn basin_insert(game: &Game<'_>, slots: &mut [Option<ItemStack>], mut stack: Ite
     (stack.count > 0).then_some(stack)
 }
 
-/// The supported `create:mixing` recipes (items only, no heat), most
+/// The supported `create:mixing` recipes (items, water and lava; no heat), most
 /// ingredients first (`getMatchingRecipes`' sort).
 fn basin_recipes(game: &Game<'_>) -> std::sync::Arc<BasinRecipes> {
     if let Some(r) = machines().as_ref().and_then(|m| m.basin_recipes.clone()) {
@@ -1053,10 +1058,15 @@ fn basin_recipes(game: &Game<'_>) -> std::sync::Arc<BasinRecipes> {
 fn basin_apply(
     game: &Game<'_>,
     items: &mut [Option<ItemStack>],
+    tanks: &mut BasinTanks,
     recipe: &(BasinRecipe, Vec<Option<Ingredient>>),
     test: bool,
 ) -> bool {
     let (r, ingredients) = recipe;
+    // The fluid pass, simulated (`FluidIngredients`).
+    if !basin_take_fluids(&mut tanks.stacks(), &r.fluid_ingredients, true) {
+        return false;
+    }
     let counts: Vec<u32> = items.iter().map(|s| s.as_ref().map_or(0, |s| s.count)).collect();
     let Some(taken) = basin_take(ingredients.len(), &counts, |i, slot| {
         items[slot]
@@ -1073,8 +1083,18 @@ fn basin_apply(
             return false;
         }
     }
+    // acceptFluidOutputsIntoBasin, simulated: each result fills whole.
+    if r.fluid_results.iter().any(|f| tanks.force_fill_output(f, true) != f.amount) {
+        return false;
+    }
     if test {
         return true;
+    }
+    let mut stacks = tanks.stacks();
+    basin_take_fluids(&mut stacks, &r.fluid_ingredients, false);
+    tanks.set_stacks(&stacks);
+    for f in &r.fluid_results {
+        tanks.force_fill_output(f, false);
     }
     for (slot, n) in taken.into_iter().enumerate() {
         if n == 0 {
@@ -1094,7 +1114,7 @@ fn basin_apply(
 }
 
 /// The basin's slots two below the mixer at `pos`, if there is one.
-fn basin_below(game: &mut Game<'_>, pos: Pos) -> Option<(Pos, Vec<Option<ItemStack>>)> {
+fn basin_below(game: &mut Game<'_>, pos: Pos) -> Option<(Pos, Vec<Option<ItemStack>>, BasinTanks)> {
     let at = [pos[0], pos[1] - 2, pos[2]];
     let is_basin = game
         .pack
@@ -1105,9 +1125,11 @@ fn basin_below(game: &mut Game<'_>, pos: Pos) -> Option<(Pos, Vec<Option<ItemSta
     if !is_basin {
         return None;
     }
-    let mut items = game.native_with_mod_block_entity(at, |be| be.items.clone())?;
+    let (mut items, tanks) = game.native_with_mod_block_entity(at, |be| {
+        (be.items.clone(), super::create_fluid_glue::basin_tanks(be))
+    })?;
     items.resize(BASIN_ALL_SLOTS, None);
-    Some((at, items))
+    Some((at, items, tanks))
 }
 
 /// What a mixer's tick asks of the basin below, once the kinetics' lock is
@@ -1116,14 +1138,14 @@ pub(super) fn mixer_world_step(game: &mut Game<'_>, pos: Pos, step: MixStep) {
     let key = (game.dim.id().to_owned(), pos);
     match step {
         MixStep::CheckBasin => {
-            let Some((_, mut items)) = basin_below(game, pos) else {
+            let Some((_, mut items, mut tanks)) = basin_below(game, pos) else {
                 return;
             };
-            if items.iter().all(Option::is_none) {
+            if items.iter().all(Option::is_none) && tanks.is_empty() {
                 return;
             }
             let recipes = basin_recipes(game);
-            let Some((r, _)) = recipes.iter().find(|r| basin_apply(game, &mut items, r, true)) else {
+            let Some((r, _)) = recipes.iter().find(|r| basin_apply(game, &mut items, &mut tanks, r, true)) else {
                 return;
             };
             let duration = r.processing_time;
@@ -1145,15 +1167,18 @@ pub(super) fn mixer_world_step(game: &mut Game<'_>, pos: Pos, step: MixStep) {
             let Some(recipe) = recipes.iter().find(|(r, _)| r.id == id) else {
                 return;
             };
-            let Some((at, mut items)) = basin_below(game, pos) else {
+            let Some((at, mut items, mut tanks)) = basin_below(game, pos) else {
                 return;
             };
-            if !basin_apply(game, &mut items, recipe, false) {
+            if !basin_apply(game, &mut items, &mut tanks, recipe, false) {
                 return;
             }
             // Continue mixing while the basin still holds another batch.
-            let again = basin_apply(game, &mut items.clone(), recipe, true);
-            game.native_with_mod_block_entity(at, |be| be.items = items);
+            let again = basin_apply(game, &mut items.clone(), &mut tanks.clone(), recipe, true);
+            game.native_with_mod_block_entity(at, |be| {
+                be.items = items;
+                super::create_fluid_glue::set_basin_tanks(be, &tanks);
+            });
             if again {
                 super::create_glue::with_kinetics(game, |k, _| {
                     if let Some(m) = k.mixing_mut(pos) {

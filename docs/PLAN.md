@@ -106,7 +106,38 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
      wrench switches it. Not yet: redstone (paused when powered), the belt funnel's own model and flap, clicking an
      item into it, brass funnels and filters.
-   Part 2 and later: tunnels, mechanical arm, deployer, item vaults, brass funnels, fluid pipes and tanks.
+   Fluids (**compiled and unit-tested only, not yet run in the game**):
+   - Fluid pipes (`fluids.rs`: `FluidTransportBehaviour`, `PipeConnection` with its three layers, `FlowSource`,
+     `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`; `fluid_glue.rs`): straight pipes only, placed like a chain
+     along the clicked face's axis (engine gap below), open at both ends. Flows start where there is pressure, take
+     `1/32 + pressure/128` of a block a tick to fill a pipe, flip when the pressure does, and two fluids meeting break
+     the pipe (water and lava leave cobblestone). A network from each endpoint feeding a pipe walks the flows to the
+     endpoints they reach and moves `pressure / 2` mB a tick, split between them as Create does
+     (`accumulatedFill`). Open ends draw a source block a bucket at a time (keeping the rest in their 1000 mB
+     buffer), drain full water and lava cauldrons and full beehives (their honey is only a name here: tanks and basins
+     hold it, nothing pours it), and pour: a source block once a bucket has gathered, waterlogging what takes water, obsidian, cobblestone or
+     stone against the other fluid, nothing in the nether for water. Pipes are saved beside the world; their flows
+     and pressure come back from the pumps.
+   - Mechanical pump (`PumpBlockEntity`): a small cog about its facing with no shaft, 4 su; pushes out of its front
+     and pulls at its back whatever its speed's sign (Create 6 decides by `FACING` alone; the wrench turns it
+     round). `distributePressureTo` and `searchForEndpointRecursively` as in Create: its speed as pressure on every
+     face on a way to an endpoint within 16 blocks (`mechanicalPumpRange`), split between parallel branches;
+     redistributed when its speed changes, a pipe near it changes, or a block in front of a straight pipe's open
+     end does. Its cog partial turns with it.
+   - Fluid tank: single tanks (8 buckets), on glass's template; their contents live in the native mod and are saved
+     beside the world; buckets fill and empty them (and basins); the fluid drawn as `FluidTankRenderer` does, as
+     high as it is full. Not yet: tanks joining into multiblocks (`ConnectivityHandler`), the boiler, windows by
+     the wrench, the creative tank, comparators.
+   - Basin fluids: two input and two output tanks of 1000 mB (`SmartFluidTankBehaviour`, inputs keeping their
+     fluids apart, outputs taking nothing from outside), filled by pipes and buckets; `create:mixing` recipes with
+     water and lava as ingredients or results run (dough, cardboard pulp; the heated ones still wait for the blaze
+     burner), each fluid ingredient from one tank as `BasinRecipe.apply` does; the fluids drawn side by side as
+     `BasinRenderer` does.
+   - Not yet: fluids without a block in Horizon (Create's honey, chocolate, tea, builder's tea, milk, potions) and
+     their pipe effects (`OpenPipeEffectHandler`), corners, junctions and encased, glass and smart pipes, valves,
+     pipe rims and connection pieces (`PipeAttachmentModel`), particles and sounds, the item drain, the spout, the
+     hose pulley, portable fluid interfaces, goggles' tank contents.
+   Part 2 and later: tunnels, mechanical arm, deployer, item vaults, brass funnels.
 5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions) — need
    entities with block collision, their own rendering and network sync. The biggest engine gap; expect
    upstream Horizon work (hook points for custom entities and their rendering).
@@ -165,7 +196,21 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   `block_capability(pos, kind, side, out)` hook, not built as of `aa27eca`. Plan: keep each machine's inventory
   and tank access behind one small trait in the port, so moving to that hook (or contributing it upstream) touches
   one place; until then, a shared registry module with the proposal's signature is the fallback if another
-  ported mod (Mekanism, AE2) must reach Create's fluids.
+  ported mod (Mekanism, AE2) must reach Create's fluids. Fluids do this now: pipes reach every fluid holder only
+  through `create_fluids::FluidAccess` (`has_handler`, `handler_tanks`, `fill`, `drain`, `drain_any` at a block
+  face), which `fluid_glue::Access` answers for tanks and basins; a capability hook would answer it instead.
+- No template has a fluid pipe's six connection booleans without needing support or hiding its neighbours (the
+  chorus plant breaks unsupported, mushroom blocks occlude, glow lichen and sculk veins need a face): pipes are
+  straight on a chain's template (`axis`). Corners and junctions need a template with the six booleans (or
+  `getStateForPlacement` and `updateShape` for mod blocks), and pipe rims need a model a mod can build per state
+  (`PipeAttachmentModel` wraps the baked model).
+- Fluids exist in Horizon only as water and lava blocks: there is no fluid registry a mod can add to, so Create's
+  fluids (honey, chocolate, tea, milk via NeoForge, potions) are at most names in a tank (honey drained from a
+  hive), can't be poured, have no textures to draw by, and the recipes that use or make them are skipped. Fluid
+  tags (`c:milk`) have nothing to name either.
+- The fluid tank's template (glass) has no block entity: its contents live in the native mod beside the world
+  (lost if the native mod is removed), hoppers and comparators see nothing. Drawn fluids are opaque (the native
+  draw hook takes vertices on one layer) and water takes the plains' colour, not the biome's.
 - Loot tables a native port writes itself must be in 26.3's format (`"condition": {"type": ...}` per pool), as
   `horizon-port-pack` upgrades carried ones; 1.21.1's `conditions` list drops nothing. And a template's required
   tool applies to every block made from it: extra blocks (belt parts, the collecting funnel) need their base

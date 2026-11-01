@@ -1,5 +1,51 @@
 # Validation
 
+## Milestone 4, fluids
+
+Ported in a cloud session on Linux (x86_64), Rust 1.99.1, Python 3.12, against the pinned Horizon (`aa27eca`) and
+horizon-mixins (`3f99a5c`). **Compiled and unit-tested only: nothing of it has been run in the game yet.**
+
+| Check | How | Result |
+|---|---|---|
+| Rule modules (`kinetics.rs`, `processing.rs`, `fan.rs`, `obj.rs`, `belt.rs`, `chute.rs`, `funnel.rs`, `fluids.rs`) | `cargo fmt --all --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` | 89 tests pass, no warnings |
+| The bundle applies and the game compiles | `tools/horizon.py check --no-audio` (Linux; the container has no ALSA, so the audio crates are left out) | Pass, no warnings |
+| `prepare_content.py`'s straight-pipe blockstate | Run by hand on Create 6.0.10's generated `fluid_pipe.json` (from the source tag, not committed) | Each axis gets the two body parts of a straight pipe |
+| Content mod from Create 6.0.10's jar, `build`, the game | Not done (no jar or Minecraft resources in the cloud) | — |
+
+What the unit tests cover: NeoForge's `FluidTank` fill and drain; straight pipes and pumps open along their axis;
+open ends draining a source and pouring by the bucket (`removeFluidFromSpace`, `provideFluidToSpace`, the
+obsidian/cobblestone/stone collisions, water evaporating in the nether, Create's honey from a full hive); a pump
+between a water source and a tank putting pressure on both sides (`distributePressureTo`, values per face), then
+moving water into the tank at half its speed a tick (16 mB a tick at 32 RPM) once the flows are complete; a stopped
+pump moving nothing; a pump turned round emptying the tank into the world, as a source block once the open end holds
+a bucket; removing a pipe wiping the pressure; saving pipes and tanks; the tank's fluid box (`FluidTankRenderer`);
+the pump as a cog about its facing (no shaft, 4 su, wrench turns it round, saved); the basin's tanks (inputs kept
+apart, outputs drained first, `CombinedTankWrapper`'s loss of a second fluid), its fluid boxes (`BasinRenderer`)
+and recipes with fluid ingredients (one tank per ingredient, `SizedFluidIngredient`), and which mixing recipes are
+supported (dough and cardboard pulp yes; tea, chocolate and honey no: no milk or Create fluids here).
+
+Not checked yet (all in the game, for the Mac pass):
+
+- `prepare_content.py --jar` makes the fluid pipe (straight, chain template, its model per axis), the pump (lightning
+  rod template, its cog partial), the tank (glass template, the single window model) with their loot and tags; the
+  pipe and pump break with a pickaxe and drop themselves.
+- Placing pipes along the clicked axis; the pump's cog turns when a cogwheel beside it turns (and not from a shaft at
+  its back); goggles show the pump's 4 su per RPM.
+- A pump (any speed) between an open pipe end in water and a tank: the tank fills (watch it go up, about 16 mB a
+  tick at 32 RPM, 8000 mB to full) and the water source is drained (and refilled by an infinite pool).
+- The pump wrenched round: the tank empties out of the open end, a water source appears there after 1000 mB.
+- Lava the same way; water and lava meeting in a pipe breaking it into cobblestone; pouring water onto lava making
+  obsidian; water poured in the nether vanishing.
+- Pipes longer than 16 blocks from the pump (range), two branches splitting the flow, a pump pushing into another
+  pump.
+- Breaking a pipe mid-flow stops it; placing a block in front of an open end; closing and reopening the world keeps
+  tanks' contents and the pipes keep working (pressure comes back from the pumps).
+- Buckets on a tank and on a basin (fill, take back; creative keeps the bucket); the tank's fluid drawn at its level,
+  water tinted, lava untinted; the basin's fluids drawn side by side.
+- A mixer over a basin with wheat flour and 1000 mB of water piped or poured in making dough; cardboard pulp.
+- Cauldrons and beehives drained by an open end.
+- A LAN guest seeing tanks and basins fill (the `create:fluids` channel).
+
 ## Combined pass over earlier milestones (macOS, offscreen)
 
 Checked in one world after milestone 4 part 1 was merged, with the same build:

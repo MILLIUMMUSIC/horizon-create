@@ -9,7 +9,9 @@ and textures come from **your own Create jar** as a content mod.
 Status: **milestones 1, 2 and 3 (part 1): kinetics, their visuals, and the first machines**, checked in the game.
 **Milestone 3 part 2** (encased fan, mixer and basin, the creative motor's value box, the wrench, the water wheel's
 OBJ model) is checked in the game in part (see VALIDATION.md for what was seen). **Milestone 4 part 1** (mechanical belt, chute,
-andesite funnel) is ported, unit-tested and compiles into the game, but **has not been run in the game yet**. See
+andesite funnel) is ported, unit-tested and compiles into the game, but **has not been run in the game yet**.
+**Milestone 4, fluids** (straight fluid pipes, mechanical pump, single fluid tanks, basin fluids) is ported,
+unit-tested and compiles into the game, and **has not been run in the game yet either**. See
 [docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next, and [VALIDATION.md](VALIDATION.md) for what was
 checked how.
 
@@ -31,6 +33,7 @@ checked how.
 | `WaterWheelRenderer` with NeoForge's OBJ loader (not yet run in the game) | `mixins/create/obj.rs` (OBJ/MTL parsing, tested) and `glue.rs` (the wheel in spruce, turned with `rotateToFaceVertical`) |
 | `BeltBlock`, `BeltBlockEntity`, `BeltInventory`, `TransportedItemStack`, `BeltHelper`, `BeltConnectorItem`, `BeltRenderer` (not yet run in the game) | `mixins/create/belt.rs` (chain, movement, items, connector, tested), `logistics.rs` (items in the world, saving, drawing), `glue.rs` (the belt's partials with the scrolling texture) |
 | `ChuteBlockEntity` (falling items only), `FunnelBlockEntity`/`BeltFunnelInteractionHandler` for the andesite funnel (not yet run in the game) | `mixins/create/chute.rs`, `funnel.rs` (rules, tested), `logistics.rs` |
+| `FluidTransportBehaviour`, `PipeConnection`, `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`, `PumpBlockEntity`, `FluidTankBlockEntity` (single tanks), `FluidTankRenderer`, the basin's tanks, fluid `create:mixing` recipes (not yet run in the game) | `mixins/create/fluids.rs` (rules, tested; fluid holders behind the `FluidAccess` trait), `fluid_glue.rs` (pipes, pumps and tanks in the world, buckets, drawing), `processing.rs` (fluid ingredients) |
 
 Hand crank: right click to turn it (10 ticks per click, as in Create). Creative motor: look at the value box on one
 of its sides and turn the mouse wheel (Create 6 opens a value board there, which Horizon can't show yet); right click
@@ -38,6 +41,9 @@ still steps its speed 16 → 32 → 64 → 128 → 256 → −256 …. Wrench: r
 picks them up. The mixer needs at least 30 RPM (a creative motor's default 16 is too slow). Belt connector: right
 click a shaft, then another one in line with it (same axis, horizontal or one up per block); an empty hand takes
 items off a belt. Andesite funnel: placed normally it extracts, placed sneaking (or wrenched) it collects.
+Fluid pipes are straight, along the clicked face's axis like a chain. A mechanical pump is driven by a cogwheel beside
+it (it has no shaft) and pushes out of its front, whatever way it turns (the wrench turns it round); an open pipe end
+in water draws it, one in the air pours it. Buckets fill and empty fluid tanks and basins.
 
 ## Layout
 
@@ -50,6 +56,8 @@ mixins/create/
   obj.rs               OBJ/MTL model parsing (the water wheel's), no Horizon types
   belt.rs              the mechanical belt: chain, movement, items, belt funnels, connector, no Horizon types
   chute.rs, funnel.rs  the chute's falling item and the andesite funnel's modes, no Horizon types
+  fluids.rs            fluid pipes, networks, pumps' pressure, open ends, tanks, no Horizon types
+  fluid_glue.rs        Horizon's side of fluids: pipes, pumps and tanks in the world, buckets, drawing
   logistics.rs         Horizon's side of belts, chutes and funnels: items in the world, saving, drawing
   machines.rs          Horizon's side of the machines: depot, millstone and basin block entities, press, mixer
                        and fan work, water wheel flow

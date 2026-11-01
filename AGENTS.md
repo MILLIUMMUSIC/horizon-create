@@ -58,7 +58,14 @@ Adding a block:
 
 Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 `create:depots` (D1: items held by depots, basins, millstones),
-`create:values` (client → server value box changes, checked by the server).
+`create:values` (client → server value box changes, checked by the server),
+`create:fluids` (F1: tanks' and basins' fluids).
+
+Fluids: `fluids.rs` (rules) reaches every fluid holder through the
+`FluidAccess` trait; `fluid_glue.rs` answers it (tanks kept in the native
+mod, basins' tanks in their block entity's data). Pipes and pumps tick from
+`glue::level_tick` with the pumps' speeds; block changes reach it through
+`glue::block_changed`.
 
 Recipes: `prepare_content.py` flattens subfolders (`pressing/x` →
 `pressing.x`, Horizon reads only the top folder); `machines.rs` reads

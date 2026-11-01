@@ -3,6 +3,7 @@
 // millstone's speed and the water wheel's flow score. Injected as
 // `crate::game::create_processing`; no Horizon types, tested with `cargo test`.
 
+use super::create_fluids::{FluidStack, LAVA, WATER, has_block_state};
 use serde_json::Value;
 
 /// `PressingBehaviour.CYCLE`: ticks of one press, down and up.
@@ -518,15 +519,49 @@ pub struct BasinRecipe {
     /// `processing_time` (0: none given).
     pub processing_time: i32,
     pub heat: Heat,
-    /// Fluid ingredients or results: fluids aren't ported yet.
-    pub fluids: bool,
+    /// `getFluidIngredients`: `SizedFluidIngredient`s.
+    pub fluid_ingredients: Vec<FluidIngredient>,
+    /// `getFluidResults`.
+    pub fluid_results: Vec<FluidStack>,
+    /// Fluid results or ingredients there is no fluid for here (milk, a
+    /// fluid tag other than water's and lava's), or an item ingredient of a
+    /// type not read (`neoforge:block_tag`).
+    pub unsupported: bool,
+}
+
+/// A `SizedFluidIngredient`: any of these fluids, this much.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FluidIngredient {
+    pub fluids: Vec<String>,
+    pub amount: i32,
+}
+
+impl FluidIngredient {
+    /// `SizedFluidIngredient.test`: the fluid, at least this much.
+    pub fn test(&self, stack: &FluidStack) -> bool {
+        !stack.is_empty() && stack.amount >= self.amount && self.fluids.contains(&stack.fluid)
+    }
+}
+
+/// The fluids a fluid tag holds here: vanilla's two tags (Create's milk,
+/// `c:milk`, has no fluid in Horizon).
+fn fluid_tag(tag: &str) -> Option<Vec<String>> {
+    match tag {
+        "minecraft:water" | "c:water" => Some(vec![WATER.to_owned()]),
+        "minecraft:lava" | "c:lava" => Some(vec![LAVA.to_owned()]),
+        _ => None,
+    }
 }
 
 impl BasinRecipe {
-    /// What the basin can do without fluids and blaze burners.
+    /// What the basin can do without blaze burners: items and the fluids
+    /// Horizon has.
     pub fn supported(&self) -> bool {
-        !self.fluids && self.heat.met_without_burner() && !self.ingredients.is_empty()
+        !self.unsupported
+            && self.heat.met_without_burner()
+            && (!self.ingredients.is_empty() || !self.fluid_ingredients.is_empty())
     }
+
     /// As a single-output recipe, for `roll_results`.
     pub fn as_recipe(&self) -> Recipe {
         Recipe {
@@ -540,16 +575,31 @@ impl BasinRecipe {
 
 /// A `create:mixing` (or compacting) recipe file.
 pub fn parse_basin_recipe(id: &str, json: &Value) -> Option<BasinRecipe> {
-    let mut fluids = false;
+    let mut unsupported = false;
     let mut ingredients = Vec::new();
+    let mut fluid_ingredients = Vec::new();
+    let mut fluid_results = Vec::new();
     for i in json.get("ingredients")?.as_array()? {
-        let fluid = i.get("fluid").is_some()
-            || i.get("amount").is_some()
-            || i.get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| t != "neoforge:compound");
-        if fluid {
-            fluids = true;
+        let kind = i.get("type").and_then(Value::as_str);
+        if i.get("fluid").is_some() || i.get("amount").is_some() {
+            // neoforge:single (`fluid`) or neoforge:tag (`tag`), sized.
+            let amount = i.get("amount").and_then(Value::as_i64).unwrap_or(1000) as i32;
+            let fluids = match (
+                i.get("fluid").and_then(Value::as_str),
+                i.get("tag").and_then(Value::as_str),
+            ) {
+                (Some(f), _) if has_block_state(f) => Some(vec![f.to_owned()]),
+                (_, Some(tag)) => fluid_tag(tag),
+                _ => None,
+            };
+            match fluids {
+                Some(fluids) => fluid_ingredients.push(FluidIngredient { fluids, amount }),
+                None => unsupported = true,
+            }
+            continue;
+        }
+        if kind.is_some_and(|t| t != "neoforge:compound") {
+            unsupported = true;
             continue;
         }
         let choices = ingredient_choices(i);
@@ -561,8 +611,17 @@ pub fn parse_basin_recipe(id: &str, json: &Value) -> Option<BasinRecipe> {
     let mut results = Vec::new();
     for r in json.get("results")?.as_array()? {
         // A fluid result has an amount.
-        if r.get("amount").is_some() {
-            fluids = true;
+        if let Some(amount) = r.get("amount").and_then(Value::as_i64) {
+            let fluid = r
+                .get("id")
+                .or_else(|| r.get("fluid"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if has_block_state(fluid) {
+                fluid_results.push(FluidStack::new(fluid, amount as i32));
+            } else {
+                unsupported = true;
+            }
             continue;
         }
         results.push(Output {
@@ -586,8 +645,49 @@ pub fn parse_basin_recipe(id: &str, json: &Value) -> Option<BasinRecipe> {
             .and_then(Value::as_i64)
             .unwrap_or(0) as i32,
         heat,
-        fluids,
+        fluid_ingredients,
+        fluid_results,
+        unsupported,
     })
+}
+
+/// `BasinRecipe.apply`'s fluid pass over the basin's tanks (as its fluid
+/// capability lists them: outputs, then inputs): for each ingredient, its
+/// amount from the first tank that has all of it still. With `simulate`,
+/// only whether every ingredient is there; otherwise the tanks shrink.
+pub fn basin_take_fluids(
+    tanks: &mut [FluidStack],
+    ingredients: &[FluidIngredient],
+    simulate: bool,
+) -> bool {
+    let mut extracted = vec![0; tanks.len()];
+    'ingredients: for ingredient in ingredients {
+        let mut required = ingredient.amount;
+        for (t, stack) in tanks.iter_mut().enumerate() {
+            if simulate && stack.amount <= extracted[t] {
+                continue;
+            }
+            // SizedFluidIngredient.test: the fluid and at least the amount.
+            if !ingredient.test(stack) {
+                continue;
+            }
+            let drained = required.min(stack.amount);
+            if !simulate {
+                stack.amount -= drained;
+                if stack.amount <= 0 {
+                    *stack = FluidStack::empty();
+                }
+            }
+            required -= drained;
+            if required != 0 {
+                continue;
+            }
+            extracted[t] += drained;
+            continue 'ingredients;
+        }
+        return false;
+    }
+    true
 }
 
 /// `BasinRecipe.apply`'s item pass (simulated): one item for each of
@@ -840,13 +940,77 @@ mod tests {
                 "results": [{"id": "create:dough"}]}),
         )
         .unwrap();
-        assert!(dough.fluids && !dough.supported());
+        assert!(dough.supported());
+        assert_eq!(
+            dough.fluid_ingredients,
+            vec![FluidIngredient {
+                fluids: vec![WATER.to_owned()],
+                amount: 1000
+            }]
+        );
         let honey = parse_basin_recipe(
             "h",
             &json!({"ingredients": [{"item": "minecraft:honey_block"}], "results": [{"amount": 1000, "id": "create:honey"}]}),
         )
         .unwrap();
-        assert!(honey.fluids);
+        // Create's honey has no fluid here.
+        assert!(honey.unsupported && !honey.supported());
+        let tea = parse_basin_recipe(
+            "t",
+            &json!({"ingredients": [{"tag": "minecraft:leaves"},
+                {"type": "neoforge:tag", "amount": 250, "tag": "c:milk"}],
+                "results": [{"amount": 500, "id": "create:tea"}]}),
+        )
+        .unwrap();
+        assert!(tea.unsupported);
+        let lava = parse_basin_recipe(
+            "l",
+            &json!({"heat_requirement": "superheated", "ingredients": [{"tag": "c:cobblestones"}],
+                "results": [{"amount": 50, "id": "minecraft:lava"}]}),
+        )
+        .unwrap();
+        assert_eq!(lava.fluid_results, vec![FluidStack::new(LAVA, 50)]);
+        assert!(!lava.supported());
+        let mud = parse_basin_recipe(
+            "m",
+            &json!({"ingredients": [{"type": "neoforge:block_tag", "tag": "minecraft:convertable_to_mud"},
+                {"type": "neoforge:single", "amount": 250, "fluid": "minecraft:water"}],
+                "results": [{"id": "minecraft:mud"}]}),
+        )
+        .unwrap();
+        assert!(!mud.supported());
+    }
+
+    #[test]
+    fn the_basin_takes_each_fluid_from_one_tank() {
+        let water = |n| FluidStack::new(WATER, n);
+        let need = |n| {
+            vec![FluidIngredient {
+                fluids: vec![WATER.to_owned()],
+                amount: n,
+            }]
+        };
+        // Outputs first, then inputs: 600 + 600 in two input tanks can't
+        // make 1000 (each ingredient comes from one tank).
+        let mut tanks = vec![
+            FluidStack::empty(),
+            FluidStack::empty(),
+            water(600),
+            water(600),
+        ];
+        assert!(!basin_take_fluids(&mut tanks, &need(1000), true));
+        let mut tanks = vec![
+            FluidStack::empty(),
+            FluidStack::empty(),
+            water(1000),
+            FluidStack::empty(),
+        ];
+        assert!(basin_take_fluids(&mut tanks, &need(250), true));
+        assert!(basin_take_fluids(&mut tanks, &need(250), false));
+        assert_eq!(tanks[2], water(750));
+        assert!(basin_take_fluids(&mut tanks, &need(750), false));
+        assert!(tanks[2].is_empty());
+        assert!(!basin_take_fluids(&mut tanks, &need(1), true));
     }
 
     #[test]
