@@ -668,10 +668,12 @@ pub(super) fn from_server(data: &[u8]) {
 }
 
 /// A fluid's still texture (`FluidType.getStillTexture`) and tint.
+/// The atlas keeps vanilla's sprites without their namespace
+/// (`block/water_still`) and mods' with it.
 fn fluid_sprite(fluid: &str) -> (String, u32) {
     match fluid {
-        "minecraft:water" => ("minecraft:block/water_still".to_owned(), WATER_TINT),
-        "minecraft:lava" => ("minecraft:block/lava_still".to_owned(), 0xFFFFFF),
+        "minecraft:water" => ("block/water_still".to_owned(), WATER_TINT),
+        "minecraft:lava" => ("block/lava_still".to_owned(), 0xFFFFFF),
         f => {
             let (ns, name) = f.split_once(':').unwrap_or(("minecraft", f));
             (format!("{ns}:fluid/{name}_still"), 0xFFFFFF)
@@ -722,6 +724,10 @@ fn draw_fluid_box(
 ) {
     let (sprite, tint) = fluid_sprite(fluid);
     let Some(s) = game.gui.atlas.sprites.get(&sprite) else {
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            log::warn!("Create: no sprite {sprite} to draw {fluid} by");
+        }
         return;
     };
     let (u0, v0, du, dv) = (s.u0, s.v0, s.u1 - s.u0, s.v1 - s.v0);
@@ -743,9 +749,11 @@ fn draw_fluid_box(
     }
 }
 
+/// `tint` (0xRRGGBB) times `shade`, as the vertex's RGBA8 (red in the low
+/// byte).
 fn shaded(tint: u32, shade: u32) -> u32 {
-    let ch = |shift: u32| ((tint >> shift & 0xFF) * shade / 255) << shift;
-    ch(16) | ch(8) | ch(0)
+    let ch = |shift: u32| (tint >> shift & 0xFF) * shade / 255;
+    ch(16) | ch(8) << 8 | ch(0) << 16
 }
 
 /// The six faces of `[x0, y0, z0, x1, y1, z1]`, each four corners `[x, y,

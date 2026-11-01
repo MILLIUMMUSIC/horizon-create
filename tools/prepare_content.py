@@ -314,7 +314,9 @@ def fit(content):
         write_json(blocks / f"{name}.json", decl)
 
     for name, spec in CONTAINERS.items():
-        decl = read_json(blocks / f"{name}.json")
+        # horizon-port-pack leaves out blocks no template fits (the arm's
+        # `ceiling`): declare those here.
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
         decl["template"] = spec["template"]
         decl.pop("default_state", None)
         decl.pop("shapes", None)
