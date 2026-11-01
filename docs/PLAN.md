@@ -282,7 +282,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       clockwise), sequenced gearshift angles, the clockwork bearing, structures on bearings inside other
       contraptions (`StabilizedContraption`), riders on horizontal bearings, colliding with turning blocks, kinetic
       and block-entity-rendered blocks drawn while turning, rails' and stairs' shapes and bells turned, the
-      assembly error on goggles, `DirectionalKineticBlock`'s placement (the clicked face decides here).
+      assembly error on goggles.
    3. Gantry carriage and shaft, rope and elevator pulley.
       Rope pulley (**done, checked in the game in part**): `contraption.rs` has `PulleyContraption` (the search
       from the block below the rope, the rope and pulley anchoring) and `PulleyBlockEntity`'s motion as a
@@ -309,7 +309,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       back on top of it when it is put back. Not yet: floor names and the contact's screen, contraption controls
       choosing floors, door controls, the pulley's belt and coil drawn, the click that disassembles it, columns
       saved (gathered again on load), redstone contacts touching each other (`hasValidContact`) and on moving
-      structures, placing contacts by the looking direction, mirrored elevator pulleys, actors on the cabin.
+      structures, mirrored elevator pulleys, actors on the cabin.
       Gantry shaft and carriage (**done, checked in the game in part**): `contraption.rs` has the shaft's parts
       (`updateShape`), `canAssembleOn`, `getPinionMovementSpeed`, `GantryContraption` (from the carriage, the
       shaft behind anchoring) and `GantryContraptionEntity`'s tick (`checkPinionShaft`: no shaft or no speed
@@ -333,7 +333,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       drill's head is a partial drawn turning in the world and still on moving structures. The harvester and plough
       stand on a grindstone's template (`facing`, `face` kept at wall). Not yet: hurting and throwing entities (engine gap), the cobblestone generator
       optimisation, the drill's and harvester's parts turning on moving structures, actors on gantries and
-      pulleys checked in the game, `DirectionalKineticBlock`'s placement for the drill (the clicked face decides here), placing a
+      pulleys checked in the game, placing a
       harvester on a wall while looking steeply up or down (it faces the player).
       Part 4b, the mechanical saw (**done, checked in the game in part**): `saw.rs` has `TreeCutter.findTree`
       (logs and roots, `validateCut`, leaves by distance, attachments, vertical plants from the top, chorus) and

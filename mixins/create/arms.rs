@@ -1174,6 +1174,7 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
         && name != super::create_actors::SAW
         && name != super::create_actors::SAW_ALONG
         && name != super::create_actors::PSI
+        && !DIRECTIONAL_PLACED.contains(&name.as_str())
     {
         return;
     }
@@ -1233,6 +1234,86 @@ fn set_block(game: &mut Game<'_>, pos: Pos, name: &str, props: &[(&str, &str)]) 
     };
     let dimension = game.dim.id().to_owned();
     game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL)
+}
+
+/// Blocks placed as `DirectionalKineticBlock` (or their own variant) and the
+/// redstone contact, all on a lightning rod's template: it faces the clicked
+/// face, from which the rule's facing is worked out.
+const DIRECTIONAL_PLACED: [&str; 8] = [
+    "create:mechanical_drill",
+    "create:mechanical_bearing",
+    "create:windmill_bearing",
+    "create:creative_motor",
+    "create:hand_crank",
+    "create:encased_fan",
+    "create:redstone_contact",
+    "create:portable_storage_interface",
+];
+
+/// `DirectionalKineticBlock.getPreferredFacing`: the one side (or axis) a
+/// neighbour's shaft comes from.
+fn preferred_facing(game: &Game<'_>, pos: Pos) -> Option<Dir> {
+    let mut preferred: Option<Dir> = None;
+    for side in Dir::ALL {
+        let n = add(pos, side.normal());
+        let Some(name) = block_name(game, n) else {
+            continue;
+        };
+        let state = game.pack.assets.registry.state(game.world.block(n[0], n[1], n[2]));
+        let kind = state.and_then(|s| Kind::from_block(&name, |k| s.properties.get(k).map(String::as_str)));
+        if !kind.is_some_and(|k| k.has_shaft_towards(side.opposite())) {
+            continue;
+        }
+        if preferred.is_some_and(|p| p.axis() != side.axis()) {
+            return None;
+        }
+        preferred = Some(side);
+    }
+    preferred
+}
+
+/// The facing each of `DIRECTIONAL_PLACED` takes (`getStateForPlacement`),
+/// `clicked` the face clicked.
+fn directional_facing(game: &Game<'_>, pos: Pos, name: &str, clicked: Dir, p: &Placed) -> Dir {
+    let looking = nearest_looking(p.yaw, p.pitch);
+    let preferred = preferred_facing(game, pos);
+    let default = || if p.sneaking { looking } else { looking.opposite() };
+    match name {
+        "create:creative_motor" => match preferred {
+            Some(f) if !p.sneaking => f,
+            _ => default(),
+        },
+        "create:hand_crank" => match preferred {
+            Some(f) if !p.sneaking => f.opposite(),
+            _ => clicked,
+        },
+        "create:encased_fan" => {
+            let chute = |d: Dir| block_name(game, add(pos, d.normal())).as_deref() == Some(super::create_logistics::CHUTE);
+            if chute(clicked.opposite()) {
+                return clicked.opposite();
+            }
+            if chute(clicked) {
+                return clicked;
+            }
+            let f = preferred.unwrap_or(looking);
+            if p.sneaking { f } else { f.opposite() }
+        }
+        // RedstoneContactBlock: facing away from the player, or onto the
+        // clicked block when sneaking.
+        "create:redstone_contact" => {
+            if p.sneaking {
+                clicked.opposite()
+            } else {
+                looking.opposite()
+            }
+        }
+        // PortableStorageInterfaceBlock.
+        "create:portable_storage_interface" => default(),
+        _ => match preferred {
+            Some(f) if !p.sneaking => f.opposite(),
+            _ => default(),
+        },
+    }
 }
 
 fn finish_placed(game: &mut Game<'_>, p: Placed) {
@@ -1406,14 +1487,14 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
             };
             set_block(game, pos, ROPE_PULLEY, &[("axis", axis.name())]);
         }
-        // PortableStorageInterfaceBlock.getStateForPlacement: facing the
-        // player (away when sneaking).
-        super::create_actors::PSI => {
-            let mut facing = nearest_looking(p.yaw, p.pitch).opposite();
-            if p.sneaking {
-                facing = facing.opposite();
+        n if DIRECTIONAL_PLACED.contains(&n) => {
+            let Some(clicked) = prop(game, pos, "facing").and_then(|f| Dir::parse(&f)) else {
+                return;
+            };
+            let facing = directional_facing(game, pos, n, clicked, &p);
+            if facing != clicked {
+                set_block(game, pos, n, &[("facing", facing.name())]);
             }
-            set_block(game, pos, super::create_actors::PSI, &[("facing", facing.name())]);
         }
         n if n == super::create_actors::HARVESTER || n == super::create_actors::PLOUGH => {
             // AttachedActorBlock.getStateForPlacement: on a floor or a

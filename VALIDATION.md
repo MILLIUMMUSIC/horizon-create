@@ -1,5 +1,16 @@
 # Validation
 
+## Directional placement (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`. Drills, bearings, creative motors, hand cranks, encased fans,
+redstone contacts and portable storage interfaces are placed by their own `getStateForPlacement`
+(`DirectionalKineticBlock`: a neighbour's shaft decides, else the way the player looks; the clicked face is
+read from the lightning rod template's facing).
+
+Seen working: a drill placed by hand beside a shaft faces away from it; one placed on its own faces the player.
+
+Not checked yet: the other blocks, sneaking, a fan beside a chute.
+
 ## Redstone locks (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`. 165 unit tests pass, clippy has no warnings. A neighbour's signal
