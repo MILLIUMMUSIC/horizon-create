@@ -102,6 +102,9 @@ DIRECTIONAL = {
     # the structure (a partial) and its shaft half with the kinetics.
     "mechanical_bearing": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
     "windmill_bearing": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
+    # DrillBlock: AllShapes.CASING_12PX; the casing stays in the chunk mesh,
+    # its head is a partial turning with the kinetics.
+    "mechanical_drill": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 12, 16)},
     # SailBlock (a WrenchableDirectionalBlock): AllShapes.SAIL.
     **{name: {"template": "minecraft:lightning_rod", "shape": box(0, 5, 0, 16, 10, 16)}
        for name in ["sail_frame"] + [f"{c}_sail" for c in [
@@ -219,6 +222,8 @@ PARTIALS = {
     "rope_coil": "create:block/rope_pulley/rope_coil",
     "rope_half": "create:block/rope_pulley/rope_half",
     "rope_half_magnet": "create:block/rope_pulley/rope_half_magnet",
+    # DrillRenderer's head.
+    "drill_head": "create:block/mechanical_drill/head",
     # GantryCarriageRenderer's wheels.
     "gantry_carriage_wheels": "create:block/gantry_carriage/wheels",
     # BearingRenderer's tops.
@@ -540,6 +545,7 @@ def fit_logistics(content, names):
     fit_chassis(content, names)
     fit_rope(content)
     fit_gantry(content, names)
+    fit_actors(content)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -861,6 +867,38 @@ def fit_gantry(content, names):
         if "gantry_carriage" in originals:
             write_json(states / f"{name}.json", {"variants": variants(
                 originals["gantry_carriage"], lambda p, along=along: p.get("axis_along_first") == along)})
+
+
+# AttachedActorBlocks (harvester, plough): a horizontal `facing` on a
+# grindstone's template, placed as a wall grindstone (the native mod turns
+# one placed on a floor or ceiling); AllShapes.HARVESTER_BASE, modelled here
+# on the floor. The harvester's blade, a partial in Create, is drawn with its
+# block: it turns only on a moving contraption.
+ACTORS = {
+    "mechanical_harvester": ["create:block/mechanical_harvester/block", "create:block/mechanical_harvester/blade"],
+    "mechanical_plough": ["create:block/mechanical_plough"],
+}
+HARVESTER_BASE = box(0, 0, 2, 16, 3, 14)
+HORIZONTAL_TURNS = {"north": 0, "east": 90, "south": 180, "west": 270}
+
+
+def fit_actors(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    for name, models in ACTORS.items():
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:grindstone"
+        decl["default_state"] = {"face": "wall"}
+        decl["shapes"] = {
+            "property": "facing",
+            "values": {f: [facing_box(f, HARVESTER_BASE)] for f in HORIZONTAL_TURNS},
+        }
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+        write_json(states / f"{name}.json", {"multipart": [
+            {"when": {"facing": f}, "apply": {"model": m, "y": turn} if turn else {"model": m}}
+            for f, turn in HORIZONTAL_TURNS.items() for m in models
+        ]})
 
 
 def share_block_tags(content, bases):

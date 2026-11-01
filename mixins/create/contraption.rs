@@ -1128,11 +1128,13 @@ impl Actuator {
     /// `tick` on the server. `colliding` answers whether the contraption is
     /// in the way of the world with its colliders at a grid place moving a
     /// direction (`collideBlocks`); `anchor` and `orientation` place it.
+    /// A `stalled` structure (an actor breaking a block) stays where it is.
     pub fn tick(
         &mut self,
         rpm: f32,
         facing: Dir,
         anchor: Pos,
+        stalled: bool,
         colliding: impl Fn(Pos, Dir) -> bool,
     ) -> ActuatorStep {
         if self.waiting {
@@ -1154,7 +1156,7 @@ impl Actuator {
                 ActuatorStep::Idle
             };
         }
-        if !self.running {
+        if !self.running || stalled {
             return ActuatorStep::Idle;
         }
         let speed = self.movement_speed(rpm, facing);
@@ -1357,6 +1359,7 @@ impl Pulley {
     pub fn tick(
         &mut self,
         rpm: f32,
+        stalled: bool,
         stops_rope: impl Fn(i32) -> bool,
         colliding: impl Fn(Pos, Dir) -> bool,
         anchor_at: impl Fn(f32) -> Option<[f32; 3]>,
@@ -1378,7 +1381,7 @@ impl Pulley {
                 PulleyStep::Idle
             };
         }
-        if !self.running {
+        if !self.running || stalled {
             return PulleyStep::Idle;
         }
         let speed = Self::movement_speed(rpm);
@@ -1575,6 +1578,7 @@ pub fn gantry_tick(
     at: [f64; 3],
     facing: Dir,
     ticks: u32,
+    stalled: bool,
     shaft: impl Fn(Pos) -> Option<ShaftUnder>,
     colliding: impl Fn(Pos, Dir) -> bool,
 ) -> GantryStep {
@@ -1616,7 +1620,7 @@ pub fn gantry_tick(
     if colliding(grid, dir) {
         return GantryStep::Disassemble(rounded);
     }
-    if ticks <= 2 {
+    if ticks <= 2 || stalled {
         return GantryStep::Moved([0.0; 3]);
     }
     GantryStep::Moved(motion)
@@ -1949,6 +1953,7 @@ impl Bearing {
         &mut self,
         rpm: f32,
         windmill: bool,
+        stalled: bool,
         assemble: impl FnOnce() -> bool,
     ) -> BearingStep {
         let mut assembled = false;
@@ -1971,7 +1976,7 @@ impl Bearing {
                 }
             }
         }
-        if !self.running {
+        if !self.running || stalled && !assembled {
             return BearingStep::Idle;
         }
         self.angle = (self.angle + convert_to_angular(rpm)) % 360.0;
@@ -2259,7 +2264,7 @@ mod tests {
         a.speed(rpm);
         assert!(a.movement_speed(rpm, Dir::East) == 0.0); // no range yet
         assert_eq!(
-            a.tick(rpm, Dir::East, c.anchor, |_, _| false),
+            a.tick(rpm, Dir::East, c.anchor, false, |_, _| false),
             ActuatorStep::Assemble
         );
         assert_eq!(Actuator::movement_direction(rpm, Dir::East), Dir::East);
@@ -2267,7 +2272,7 @@ mod tests {
         assert_eq!(a.movement_speed(rpm, Dir::East), 0.125);
         let mut steps = 0;
         loop {
-            match a.tick(rpm, Dir::East, c.anchor, |g, d| {
+            match a.tick(rpm, Dir::East, c.anchor, false, |g, d| {
                 c.colliding_with_world(&w, g, d)
             }) {
                 ActuatorStep::Moved => steps += 1,
@@ -2285,7 +2290,7 @@ mod tests {
         let mut b = Actuator::default();
         b.speed(-rpm);
         assert_eq!(
-            b.tick(-rpm, Dir::East, c.anchor, |_, _| false),
+            b.tick(-rpm, Dir::East, c.anchor, false, |_, _| false),
             ActuatorStep::Assemble
         );
         assert!(!b.start(&c, -rpm, Dir::East, |_, _| false));
@@ -2310,13 +2315,13 @@ mod tests {
             .unwrap();
         let mut a = Actuator::default();
         a.speed(-64.0);
-        a.tick(-64.0, Dir::East, c.anchor, |_, _| false);
+        a.tick(-64.0, Dir::East, c.anchor, false, |_, _| false);
         assert!(a.start(&c, -64.0, Dir::East, |g, d| {
             c.colliding_with_world(&w, g, d)
         }));
         let end = loop {
             if let ActuatorStep::Disassemble { grid_offset } =
-                a.tick(-64.0, Dir::East, c.anchor, |g, d| {
+                a.tick(-64.0, Dir::East, c.anchor, false, |g, d| {
                     c.colliding_with_world(&w, g, d)
                 })
             {
@@ -2327,14 +2332,14 @@ mod tests {
         // Stopping the network places it where it is.
         let mut a = Actuator::default();
         a.speed(-64.0);
-        a.tick(-64.0, Dir::East, c.anchor, |_, _| false);
+        a.tick(-64.0, Dir::East, c.anchor, false, |_, _| false);
         a.start(&c, -64.0, Dir::East, |_, _| false);
         for _ in 0..3 {
-            a.tick(-64.0, Dir::East, c.anchor, |_, _| false);
+            a.tick(-64.0, Dir::East, c.anchor, false, |_, _| false);
         }
         a.speed(0.0);
         assert_eq!(
-            a.tick(0.0, Dir::East, c.anchor, |_, _| false),
+            a.tick(0.0, Dir::East, c.anchor, false, |_, _| false),
             ActuatorStep::Disassemble { grid_offset: 0 }
         );
     }
@@ -2525,15 +2530,15 @@ mod tests {
     fn the_bearing_turns_and_puts_back_on_a_quarter() {
         let mut b = Bearing::default();
         b.speed(32.0, false);
-        assert_eq!(b.tick(32.0, false, || true), BearingStep::Assembled);
+        assert_eq!(b.tick(32.0, false, false, || true), BearingStep::Assembled);
         assert!((b.angle - 9.6).abs() < 1e-4);
         for _ in 0..9 {
-            b.tick(32.0, false, || true);
+            b.tick(32.0, false, false, || true);
         }
         b.speed(0.0, false);
         assert_eq!(b.angle, 96.0);
         assert_eq!(
-            b.tick(0.0, false, || true),
+            b.tick(0.0, false, false, || true),
             BearingStep::Disassemble { angle: 96.0 }
         );
         assert_eq!(rounded_angle(96.0), 90);
@@ -2542,9 +2547,31 @@ mod tests {
         b.stopped();
         // A stopped bearing doesn't assemble; a windmill does.
         b.assemble_next_tick = true;
-        assert_eq!(b.tick(0.0, false, || true), BearingStep::Idle);
+        assert_eq!(b.tick(0.0, false, false, || true), BearingStep::Idle);
         b.assemble_next_tick = true;
-        assert_eq!(b.tick(0.0, true, || true), BearingStep::Assembled);
+        assert_eq!(b.tick(0.0, true, false, || true), BearingStep::Assembled);
+    }
+
+    #[test]
+    fn a_stalled_structure_stays_put() {
+        // Actors breaking a block stall the bearing and the gantry.
+        let mut b = Bearing::default();
+        b.speed(32.0, false);
+        b.tick(32.0, false, false, || true);
+        let angle = b.angle;
+        assert_eq!(b.tick(32.0, false, true, || true), BearingStep::Idle);
+        assert_eq!(b.angle, angle);
+        let shaft = |_: Pos| {
+            Some(ShaftUnder {
+                facing: Dir::East,
+                part: GantryPart::Middle,
+                rpm: 64.0,
+            })
+        };
+        assert_eq!(
+            gantry_tick([0.0; 3], Dir::Up, 9, true, shaft, |_, _| false),
+            GantryStep::Moved([0.0; 3])
+        );
     }
 
     #[test]
@@ -2666,7 +2693,7 @@ mod tests {
         };
         p.speed(64.0);
         assert_eq!(
-            p.tick(64.0, |_| false, |_, _| false, |_| None),
+            p.tick(64.0, false, |_| false, |_, _| false, |_| None),
             PulleyStep::Assemble
         );
         // Nothing hangs there yet: a bare rope runs.
@@ -2674,7 +2701,7 @@ mod tests {
         let mut steps = 0;
         let stop = loop {
             steps += 1;
-            match p.tick(64.0, |d| d >= 5, |_, _| false, |_| None) {
+            match p.tick(64.0, false, |d| d >= 5, |_, _| false, |_| None) {
                 PulleyStep::Moved => continue,
                 s => break s,
             }
@@ -2739,7 +2766,7 @@ mod tests {
         let mut ticks = 0;
         let end = loop {
             ticks += 1;
-            match gantry_tick(at, Dir::Up, ticks, shaft, |_, _| false) {
+            match gantry_tick(at, Dir::Up, ticks, false, shaft, |_, _| false) {
                 GantryStep::Moved(m) => at = [at[0] + m[0], at[1] + m[1], at[2] + m[2]],
                 GantryStep::Disassemble(p) => break p,
             }
@@ -2747,7 +2774,7 @@ mod tests {
         };
         assert_eq!(end, [3, 1, 0]);
         // A wall in the way stops it on the grid.
-        let end = gantry_tick([1.9, 1.0, 0.0], Dir::Up, 9, shaft, |g, _| g[0] >= 3);
+        let end = gantry_tick([1.9, 1.0, 0.0], Dir::Up, 9, false, shaft, |g, _| g[0] >= 3);
         assert_eq!(end, GantryStep::Disassemble([2, 1, 0]));
     }
 }

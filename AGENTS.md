@@ -79,6 +79,9 @@ Chassis ranges and super glue live in `contraptions.rs`'s state (no block
 entity or entity), saved in the same file and moved with the structure.
 Bearings tick there too (`bearings_tick`); a windmill's generated speed is
 the kinetics' `flow_score`.
+Actors (drill, harvester, plough): rules in `actors.rs`, Horizon's side in
+`actor_glue.rs` (`tick_actors` runs before each structure moves and tells
+it whether it is stalled; standing drills tick from `glue::level_tick`).
 
 Fluids: `fluids.rs` (rules) reaches every fluid holder through the
 `FluidAccess` trait; `fluid_glue.rs` answers it (tanks kept in the native

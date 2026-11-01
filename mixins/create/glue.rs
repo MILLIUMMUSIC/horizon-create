@@ -199,6 +199,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut removed_belts: Vec<(Pos, BeltState)> = Vec::new();
     let mut changed_here: Vec<Pos> = Vec::new();
     let mut pumps: Vec<(Pos, Dir, f32)> = Vec::new();
+    let mut drills: Vec<(Pos, Dir, f32)> = Vec::new();
     let save_now;
     {
         let mut guard = server();
@@ -326,6 +327,12 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             {
                 pumps.push((p, f, kinetics.speed_of(&level, p)));
             }
+            // Standing drills, for their breaking.
+            if let Some(Kind::Drill(f)) = kinetics.get(p).map(|e| e.kind)
+                && level.is_loaded(p)
+            {
+                drills.push((p, f, kinetics.speed_of(&level, p)));
+            }
         }
         let code = dim_code(dimension);
         let updates = kinetics.take_dirty(&level);
@@ -372,6 +379,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_logistics::tunnels_tick(game, dimension);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
+    super::create_actor_glue::drills_tick(game, dimension, &drills);
     super::create_contraptions::level_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
     if messages.is_empty() && depots.is_empty() {
@@ -836,7 +844,7 @@ fn unit(axis: Axis) -> glam::Vec3 {
 
 /// `CachedBuffers.rotateToFace`: a partial model, made facing south, turned
 /// to face `facing` (`AngleHelper.horizontalAngle`, then `verticalAngle`).
-fn rotate_to_face(facing: Dir) -> glam::Mat4 {
+pub(super) fn rotate_to_face(facing: Dir) -> glam::Mat4 {
     glam::Mat4::from_rotation_y(facing.horizontal_angle().to_radians())
         * glam::Mat4::from_rotation_x(facing.vertical_angle().to_radians())
 }
@@ -942,6 +950,10 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             want.push(("create:hz_part_shaft_half", None, rotate_to_face(back), f.axis(), standard, 0.0));
             let spin = fan_angle(view.speed, time);
             want.push(("create:hz_part_encased_fan_inner", None, rotate_to_face(back), f.axis(), spin, 0.0));
+        }
+        Kind::Drill(f) => {
+            // DrillRenderer: its head, turned to face its way.
+            want.push(("create:hz_part_drill_head", None, rotate_to_face(f), f.axis(), standard, 0.0));
         }
         Kind::MechanicalPump(f) => {
             // PumpRenderer: its cog, turned to face its way.

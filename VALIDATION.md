@@ -1,5 +1,26 @@
 # Validation
 
+## Milestone 5, part 4a: drill, harvester and plough (macOS, offscreen)
+
+Built on the Mac with `tools/horizon.py build`, the content mod from Create 6.0.10's jar. 156 unit tests pass (11 new
+in `actors.rs`, 1 in `contraption.rs`), clippy has no warnings.
+
+Seen working, with creative motors at 16 RPM:
+
+- A standing drill facing a stone breaks it (about 5 s) and drops cobblestone; its head is drawn turning.
+- A mechanical piston pushing a drill east into a stone and a column of two gravel: the piston stops in front of
+  the stone until it breaks, then breaks the top gravel first and the lower one after, and runs to its end; the
+  drops lie where the drill was; the moving drill is drawn with its head.
+- A piston pushing a harvester over ripe wheat, half-grown wheat and ripe carrots: the ripe ones are cut back to
+  age 0 and their drops fall, the half-grown wheat is left.
+- A piston pushing a plough over grass blocks with short grass on the first: the grass plant breaks (seeds drop),
+  the free grass blocks turn into farmland (later dirt under the stopped piston and plough, as vanilla does).
+- A mechanical bearing (slime arm, drill at its end facing the way it turns) breaks both stones in its path; a drill
+  facing away from its motion leaves them, as in Create.
+
+Not checked yet: actors on rope pulleys and gantries, placing a harvester or plough by hand, the cracks' stages
+seen on blocks, saving mid-break, crafting them.
+
 ## Milestone 5, part 3: gantries (macOS, offscreen)
 
 Built on the Mac with `tools/horizon.py build`. 144 unit tests pass (2 new in `contraption.rs`), clippy has no

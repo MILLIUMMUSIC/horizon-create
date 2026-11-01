@@ -13,6 +13,7 @@ use super::create_contraption::{
     PistonPart, PistonState, STICKY_HEAD, StructureWorld, Sticky, attached_chassis, chassis_block, chassis_of,
     glue_group, in_span, piston_block, piston_of,
 };
+use super::create_actor_glue::{Mover, stop_actors, tick_actors};
 use super::create_kinetics::{Dir, Kind, Pos};
 use horizon_world::registry::BlockStateId;
 use std::collections::HashMap;
@@ -1120,10 +1121,25 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 r.contraption.anchor
             });
         let before = piston.actuator.offset;
+        // The structure's actors, before it moves (`tickActors`).
+        let stalled = match &piston.running {
+            Some(r) if piston.actuator.running => {
+                let c = &r.contraption;
+                let n = facing.normal().map(f64::from);
+                let off = f64::from(before);
+                let blocks = || c.blocks.iter().map(|b| (b.local, b.state)).collect();
+                let place = |l: Pos, v: [f64; 3]| {
+                    let w = c.world_pos(l, 0);
+                    [0, 1, 2].map(|k| f64::from(w[k]) + 0.5 + v[k] + n[k] * off)
+                };
+                tick_actors(game, Mover::Piston(pos), &blocks, &place, &|v| v, None)
+            }
+            _ => false,
+        };
         let step = {
             let scan = scan(game);
             let running = piston.running.as_ref();
-            piston.actuator.tick(rpm, facing, anchor, |g, d| {
+            piston.actuator.tick(rpm, facing, anchor, stalled, |g, d| {
                 running.is_some_and(|r| r.contraption.colliding_with_world(&scan, g, d))
             })
         };
@@ -1154,6 +1170,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 }
             }
             ActuatorStep::Disassemble { grid_offset } => {
+                stop_actors(game, Mover::Piston(pos));
                 if let Some(r) = piston.running.take() {
                     disassemble(game, pos, r, grid_offset);
                     changed.push(pos);
@@ -1170,6 +1187,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         .map(|(p, _)| *p)
         .collect();
     for p in gone {
+        stop_actors(game, Mover::Piston(p));
         if let Some(mut piston) = taken.remove(&p)
             && let Some(r) = piston.running.take()
         {
@@ -1224,6 +1242,7 @@ pub(super) fn world_phase(closing: bool) {
         save(s);
     }
     *guard = None;
+    super::create_actor_glue::reset();
     *client() = None;
     CLIENT_GLUE.lock().unwrap_or_else(|e| e.into_inner()).clear();
     *CLIENT_BEARINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -1260,7 +1279,8 @@ fn encode(game: &Game<'_>, s: &mut State, dimension: &str) -> Vec<u8> {
         }
         push_f(&mut out, p.actuator.offset);
         let rpm = p.actuator.last_rpm;
-        push_f(&mut out, p.actuator.movement_speed(rpm, c.orientation));
+        let still = super::create_actor_glue::stalled(dimension, Mover::Piston(**pos));
+        push_f(&mut out, if still { 0.0 } else { p.actuator.movement_speed(rpm, c.orientation) });
         push_i(&mut out, p.actuator.extension_length);
         let full = s.changed.contains(&(dimension.to_owned(), **pos)) || s.ticks % 100 == 0;
         if full {
@@ -1300,7 +1320,8 @@ fn encode(game: &Game<'_>, s: &mut State, dimension: &str) -> Vec<u8> {
         }
         out.push(c.facing as u8);
         push_f(&mut out, b.bearing.angle);
-        push_f(&mut out, super::create_contraption::convert_to_angular(b.bearing.last_rpm));
+        let still = super::create_actor_glue::stalled(dimension, Mover::Bearing(**pos));
+        push_f(&mut out, if still { 0.0 } else { super::create_contraption::convert_to_angular(b.bearing.last_rpm) });
         let full = s.changed.contains(&(dimension.to_owned(), **pos)) || s.ticks % 100 == 0;
         if full {
             out.extend_from_slice(&(c.blocks.len() as u32).to_le_bytes());
@@ -1329,7 +1350,8 @@ fn encode(game: &Game<'_>, s: &mut State, dimension: &str) -> Vec<u8> {
             push_i(&mut out, v);
         }
         push_f(&mut out, e.pulley.offset);
-        push_f(&mut out, Pulley::movement_speed(e.pulley.last_rpm));
+        let still = super::create_actor_glue::stalled(dimension, Mover::Pulley(**pos));
+        push_f(&mut out, if still { 0.0 } else { Pulley::movement_speed(e.pulley.last_rpm) });
         push_i(&mut out, e.pulley.range);
         let (anchor, initial, blocks) = e
             .hanging
@@ -1698,6 +1720,32 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
 /// `ContraptionRenderer`: every moving block where its contraption is now,
 /// the offset running on between the server's updates
 /// (`getInterpolatedOffset`).
+/// A moving block's model, and what Create draws beside it
+/// (`renderInContraption`): the drill's head, still.
+fn draw_block(
+    game: &Game<'_>,
+    state: BlockStateId,
+    seed: i64,
+    m: glam::Mat4,
+    packed: u32,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    game.block_model_vertices(state, seed, m, packed, false, out);
+    let registry = game.pack.assets.registry;
+    let Some(s) = registry.state(state) else {
+        return;
+    };
+    if s.name == super::create_actors::DRILL
+        && let Some(f) = s.properties.get("facing").and_then(|f| Dir::parse(f))
+        && let Some(head) = registry.default_state("create:hz_part_drill_head")
+    {
+        let c = glam::Vec3::splat(0.5);
+        let orient =
+            glam::Mat4::from_translation(c) * super::create_glue::rotate_to_face(f) * glam::Mat4::from_translation(-c);
+        game.block_model_vertices(head, seed, m * orient, packed, false, out);
+    }
+}
+
 pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
     draw_glue(game, camera, out);
     draw_bearings(game, camera, out);
@@ -1725,7 +1773,7 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
                 cell[0], cell[1], cell[2],
             ));
             let m = glam::Mat4::from_translation((corner - camera).as_vec3());
-            game.block_model_vertices(*state, seed, m, packed, false, out);
+            draw_block(game, *state, seed, m, packed, out);
         }
     }
 }
@@ -2260,6 +2308,7 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
         let mut b = entry.bearing;
         if clicked.contains(&pos) && b.clicked() {
             // Put back at once: a windmill as it was built.
+            stop_actors(game, Mover::Bearing(pos));
             if let Some(t) = entry.turning.take() {
                 disassemble_bearing(game, t, if windmill { 0.0 } else { b.angle });
                 changed.push(pos);
@@ -2272,7 +2321,30 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
         b.speed(rpm, windmill);
         let before = b.angle;
         let mut turning = entry.turning.take();
-        let step = b.tick(rpm, windmill, || {
+        let stalled = match &turning {
+            Some(t) if b.running => {
+                let c = &t.contraption;
+                let axis = facing.axis();
+                let anchor = c.anchor;
+                let blocks = || c.blocks.iter().map(|m| (m.local, m.state)).collect();
+                let place = |l: Pos, v: [f64; 3]| {
+                    let local = [0, 1, 2].map(|k| l[k] as f32 + v[k] as f32);
+                    let w = super::create_kinetics::rotate_vec(local, before, axis);
+                    [0, 1, 2].map(|k| f64::from(anchor[k]) + 0.5 + f64::from(w[k]))
+                };
+                let unrotate = |v: [f64; 3]| {
+                    super::create_kinetics::rotate_vec(v.map(|c| c as f32), -before, axis).map(f64::from)
+                };
+                let delta = if super::create_actor_glue::stalled(dimension, Mover::Bearing(pos)) {
+                    0.0
+                } else {
+                    super::create_contraption::convert_to_angular(rpm)
+                };
+                tick_actors(game, Mover::Bearing(pos), &blocks, &place, &unrotate, Some((facing, delta)))
+            }
+            _ => false,
+        };
+        let step = b.tick(rpm, windmill, stalled, || {
             turning = assemble_bearing(game, pos, facing, windmill);
             turning.is_some()
         });
@@ -2295,6 +2367,7 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
                 }
             }
             BearingStep::Disassemble { angle } => {
+                stop_actors(game, Mover::Bearing(pos));
                 if let Some(t) = turning.take() {
                     disassemble_bearing(game, t, angle);
                     changed.push(pos);
@@ -2316,6 +2389,7 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
         .copied()
         .collect();
     for p in gone {
+        stop_actors(game, Mover::Bearing(p));
         if let Some(mut entry) = taken.remove(&p)
             && let Some(t) = entry.turning.take()
         {
@@ -2408,7 +2482,7 @@ fn draw_bearings(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_cli
             let cell = [0, 1, 2].map(|k| local[k] + anchor[k]);
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = turn * glam::Mat4::from_translation(glam::Vec3::new(local[0] as f32, local[1] as f32, local[2] as f32) - 0.5);
-            game.block_model_vertices(*state, seed, m, packed, false, out);
+            draw_block(game, *state, seed, m, packed, out);
         }
     }
 }
@@ -2600,11 +2674,28 @@ fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
         entry.pulley.range = Pulley::range_at(pos[1], min_y);
         entry.pulley.speed(rpm);
         let before = entry.pulley.offset;
+        let stalled = match &entry.hanging {
+            Some(h) if entry.pulley.running => {
+                let c = &h.contraption;
+                let y = f64::from(c.anchor[1]) + f64::from(c.initial_offset) - f64::from(before);
+                let blocks = || c.blocks.iter().map(|m| (m.local, m.state)).collect();
+                let place = |l: Pos, v: [f64; 3]| {
+                    [
+                        f64::from(l[0] + c.anchor[0]) + 0.5 + v[0],
+                        f64::from(l[1]) + y + 0.5 + v[1],
+                        f64::from(l[2] + c.anchor[2]) + 0.5 + v[2],
+                    ]
+                };
+                tick_actors(game, Mover::Pulley(pos), &blocks, &place, &|v| v, None)
+            }
+            _ => false,
+        };
         let step = {
             let scan = scan(game);
             let hanging = entry.hanging.as_ref();
             entry.pulley.tick(
                 rpm,
+                stalled,
                 |depth| {
                     let f = scan.facts(below(pos, depth));
                     f.necessary && !f.brittle
@@ -2644,6 +2735,7 @@ fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
                 }
             }
             PulleyStep::Disassemble { grid_offset, reassemble } => {
+                stop_actors(game, Mover::Pulley(pos));
                 let hanging = entry.hanging.take();
                 disassemble_pulley(game, pos, hanging, grid_offset, true);
                 entry.pulley.stopped(grid_offset, reassemble);
@@ -2659,6 +2751,7 @@ fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
         .copied()
         .collect();
     for p in gone {
+        stop_actors(game, Mover::Pulley(p));
         if let Some(entry) = taken.remove(&p)
             && entry.pulley.running
         {
@@ -2728,7 +2821,7 @@ fn draw_pulleys(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_clie
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = glam::Mat4::from_translation((corner - camera).as_vec3());
-            game.block_model_vertices(*state, seed, m, packed, false, out);
+            draw_block(game, *state, seed, m, packed, out);
         }
     }
 }
@@ -2955,6 +3048,13 @@ fn gantries_tick(game: &mut Game<'_>, dimension: &str) {
     let mut still = Vec::new();
     for mut g in moving {
         g.ticks += 1;
+        let stalled = {
+            let c = &g.contraption;
+            let at = g.at;
+            let blocks = || c.blocks.iter().map(|m| (m.local, m.state)).collect();
+            let place = |l: Pos, v: [f64; 3]| [0, 1, 2].map(|k| f64::from(l[k]) + at[k] + 0.5 + v[k]);
+            tick_actors(game, Mover::Gantry(g.id), &blocks, &place, &|v| v, None)
+        };
         let step = {
             let scan = scan(game);
             let blocks = &g.contraption.blocks;
@@ -2962,6 +3062,7 @@ fn gantries_tick(game: &mut Game<'_>, dimension: &str) {
                 g.at,
                 g.contraption.facing,
                 g.ticks,
+                stalled,
                 |p| {
                     let (facing, part) = shaft_at(game, p)?;
                     Some(ShaftUnder {
@@ -2987,7 +3088,10 @@ fn gantries_tick(game: &mut Game<'_>, dimension: &str) {
                 g.motion = m;
                 still.push(g);
             }
-            GantryStep::Disassemble(grid) => disassemble_gantry(game, g, grid),
+            GantryStep::Disassemble(grid) => {
+                stop_actors(game, Mover::Gantry(g.id));
+                disassemble_gantry(game, g, grid);
+            }
         }
     }
     let mut guard = state();
@@ -3037,7 +3141,7 @@ fn draw_gantries(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_cli
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(cell[0], cell[1], cell[2]));
             let m = glam::Mat4::from_translation((corner - camera).as_vec3());
-            game.block_model_vertices(*state, seed, m, packed, false, out);
+            draw_block(game, *state, seed, m, packed, out);
         }
     }
 }

@@ -64,6 +64,18 @@ name = "create_contraption"
 source = "contraption.rs"
 
 [[module]]
+id = "actors"
+file = "crates/horizon-client/src/game.rs"
+name = "create_actors"
+source = "actors.rs"
+
+[[module]]
+id = "actor_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_actor_glue"
+source = "actor_glue.rs"
+
+[[module]]
 id = "deployer"
 file = "crates/horizon-client/src/game.rs"
 name = "create_deployer"

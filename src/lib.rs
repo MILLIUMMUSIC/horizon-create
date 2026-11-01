@@ -2,6 +2,8 @@
 // injected side by side under `crate::game` (horizon-mixin.toml), so each
 // reaches the other as `super::create_*` in both places.
 
+#[path = "../mixins/create/actors.rs"]
+pub mod create_actors;
 #[path = "../mixins/create/arm.rs"]
 pub mod create_arm;
 #[path = "../mixins/create/belt.rs"]

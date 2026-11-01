@@ -307,6 +307,21 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       pinion: the template's `powered` is the lightning's), sequenced gearshift distances, gantries on
       contraptions, the wheels' exact turn, the carriage breaking when its shaft goes.
    4. Actors on contraptions (drill, saw, harvester, plough, deployer, portable storage interfaces).
+      Part 4a (**done, checked in the game in part**): `actors.rs` has `tickActors`' trigger
+      (`shouldActorTrigger`, the bearing centre's 20-tick timer), `BlockBreakingMovementBehaviour` (breaking with
+      progress, the structure stalled until the block breaks, falling blocks broken from the top and settling for 10
+      ticks, `getBlockBreakingSpeed`), `DrillMovementBehaviour`, `HarvesterMovementBehaviour` (crops, berries, cane,
+      leaves with shears, one seed kept back, replanting), `PloughMovementBehaviour` (its `canBreak`, the hoe's
+      tilling), and the standing drill's `BlockBreakingKineticBlockEntity` (`Kind::Drill`, 4 su). The pistons,
+      bearings, rope pulleys and gantries take a `stalled` flag. `actor_glue.rs` ticks each moving structure's
+      actors before it moves, breaks blocks with their drops, harvests and tills, and ticks standing drills; the
+      drill's head is a partial drawn turning in the world and still on moving structures. The harvester and plough
+      stand on a grindstone's template (`facing`, `face` kept at wall). Not yet: items put into the structure's
+      storage (they drop at the actor), hurting and throwing entities (engine gap), the cobblestone generator
+      optimisation, the drill's and harvester's parts turning on moving structures, actors on gantries and
+      pulleys checked in the game, the saw (with `TreeCutter`), the deployer and portable storage interfaces on
+      contraptions, `DirectionalKineticBlock`'s placement for the drill (the clicked face decides here), placing a
+      harvester on a wall while looking steeply up or down (it faces the player).
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.
 7. **Everything else**: Ponder scenes, schematics and the schematicannon, decoration sets, Create's

@@ -1148,6 +1148,8 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
         && name != ROPE_PULLEY
         && name != super::create_contraption::gantry_shaft_block(super::create_contraption::GantryPart::Single)
         && name != GANTRY_CARRIAGE
+        && name != super::create_actors::HARVESTER
+        && name != super::create_actors::PLOUGH
     {
         return;
     }
@@ -1365,6 +1367,14 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
                 _ => horizontal_facing(p.yaw).clockwise(Axis::Y).axis(),
             };
             set_block(game, pos, ROPE_PULLEY, &[("axis", axis.name())]);
+        }
+        n if n == super::create_actors::HARVESTER || n == super::create_actors::PLOUGH => {
+            // AttachedActorBlock.getStateForPlacement: on a floor or a
+            // ceiling it faces the player (a grindstone faces away).
+            if prop(game, pos, "face").as_deref() != Some("wall") {
+                let facing = horizontal_facing(p.yaw).opposite();
+                set_block(game, pos, n, &[("face", "wall"), ("facing", facing.name())]);
+            }
         }
         _ => super::create_contraptions::placed_chassis(game, pos, p.sneaking, nearest_looking(p.yaw, p.pitch)),
     }
