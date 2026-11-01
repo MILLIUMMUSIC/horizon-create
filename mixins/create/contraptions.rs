@@ -3459,8 +3459,7 @@ fn elevators_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) 
             if !game.world.loaded(at[0], at[2]) || contact_at(game, at).is_none() {
                 continue;
             }
-            let bp = horizon_core::position::BlockPos::new(at[0], at[1], at[2]);
-            let signal = game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, bp));
+            let signal = super::create_glue::signal(game, at);
             let rising = {
                 let mut guard = state();
                 let s = guard.get_or_insert_with(State::default);

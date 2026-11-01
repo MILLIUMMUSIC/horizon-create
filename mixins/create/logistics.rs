@@ -1283,7 +1283,10 @@ pub(super) fn funnels_tick(game: &mut Game<'_>, dimension: &str) {
             super::create_machines::note_view(game, pos, view);
         }
         let below = [pos[0], pos[1] - 1, pos[2]];
-        let m = mode(f, belt_under(game, pos));
+        // A powered funnel pauses (`POWERED`, kept here: the template's own
+        // `powered` would give off a signal).
+        let powered = super::create_glue::signal(game, pos);
+        let m = super::create_funnel::mode_powered(f, belt_under(game, pos), powered);
         if m == Mode::Collect {
             collect(game, pos, f, filter);
         }

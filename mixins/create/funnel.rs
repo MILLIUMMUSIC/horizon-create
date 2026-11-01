@@ -94,7 +94,7 @@ impl FunnelState {
         let n = self.facing.opposite().normal();
         [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]]
     }
-    /// `canInsertIntoFunnel` (not powered: there is no redstone here yet).
+    /// `canInsertIntoFunnel` (when not powered: see `mode_powered`).
     pub fn collects(self) -> bool {
         !self.extracting
     }
@@ -115,8 +115,7 @@ impl FunnelState {
 /// `FunnelBlockEntity.Mode`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// Powered: there is no redstone here yet.
-    #[allow(dead_code)]
+    /// Powered.
     Paused,
     Collect,
     PushingToBelt,
@@ -179,6 +178,16 @@ pub fn mode(state: FunnelState, belt: Option<BeltBelow>) -> Mode {
         Mode::Extract
     } else {
         Mode::Collect
+    }
+}
+
+/// `determineCurrentMode` with the block's `POWERED`: a powered funnel
+/// pauses.
+pub fn mode_powered(state: FunnelState, belt: Option<BeltBelow>, powered: bool) -> Mode {
+    if powered {
+        Mode::Paused
+    } else {
+        mode(state, belt)
     }
 }
 
@@ -357,6 +366,8 @@ mod tests {
         assert_eq!(mode(f.wrenched(), Some(across)), Mode::TakingFromBelt);
         // A funnel facing up isn't a belt funnel.
         assert_eq!(mode(funnel(Dir::Up, false), Some(across)), Mode::Collect);
+        assert_eq!(mode_powered(f, Some(across), true), Mode::Paused);
+        assert_eq!(mode_powered(f, None, false), Mode::Extract);
         assert!(funnel(Dir::Up, false).takes_from_belt_end());
     }
 

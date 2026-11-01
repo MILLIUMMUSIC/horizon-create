@@ -575,10 +575,15 @@ fn visit(
             let dim = game.dim.id().to_owned();
             let mut guard = state();
             let s = guard.get_or_insert_with(State::default);
-            let psi = s.psis.entry((dim, at)).or_default();
-            if psi.powered {
+            let powered = s.psis.get(&(dim.clone(), at)).is_some_and(|p| p.powered);
+            drop(guard);
+            // getStationaryInterfaceAt: a powered one isn't found.
+            if powered || super::create_glue::signal(game, at) {
                 return;
             }
+            let mut guard = state();
+            let s = guard.get_or_insert_with(State::default);
+            let psi = s.psis.entry((dim, at)).or_default();
             let position = slot.ctx.position.unwrap_or_default();
             let diff: f64 = (0..3).map(|k| (f64::from(at[k]) + 0.5 - position[k]) * f64::from(n[k])).sum();
             psi.start_transferring_to(mover, (diff.abs() + 1.85 - 1.0) as f32);
@@ -763,11 +768,22 @@ pub(super) fn stop_actors(game: &mut Game<'_>, mover: Mover) {
 
 /// `PortableStorageInterfaceBlockEntity.tick` for the dimension's
 /// interfaces at work (after the structures moved).
-pub(super) fn psis_tick(game: &Game<'_>, dimension: &str) {
+pub(super) fn psis_tick(game: &mut Game<'_>, dimension: &str) {
+    let here: Vec<Pos> = state()
+        .as_ref()
+        .map(|s| s.psis.keys().filter(|(d, _)| d == dimension).map(|(_, p)| *p).collect())
+        .unwrap_or_default();
+    // neighbourChanged: a signal stops it.
+    let powered: Vec<(Pos, bool)> = here.into_iter().map(|p| (p, super::create_glue::signal(game, p))).collect();
     let mut guard = state();
     let Some(s) = guard.as_mut() else {
         return;
     };
+    for (p, on) in powered {
+        if let Some(psi) = s.psis.get_mut(&(dimension.to_owned(), p)) {
+            psi.powered = on;
+        }
+    }
     s.psis.retain(|(d, p), psi| {
         if d != dimension {
             return true;

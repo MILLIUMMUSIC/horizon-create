@@ -331,8 +331,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       bearings, rope pulleys and gantries take a `stalled` flag. `actor_glue.rs` ticks each moving structure's
       actors before it moves, breaks blocks with their drops, harvests and tills, and ticks standing drills; the
       drill's head is a partial drawn turning in the world and still on moving structures. The harvester and plough
-      stand on a grindstone's template (`facing`, `face` kept at wall). Not yet: items put into the structure's
-      storage (they drop at the actor), hurting and throwing entities (engine gap), the cobblestone generator
+      stand on a grindstone's template (`facing`, `face` kept at wall). Not yet: hurting and throwing entities (engine gap), the cobblestone generator
       optimisation, the drill's and harvester's parts turning on moving structures, actors on gantries and
       pulleys checked in the game, `DirectionalKineticBlock`'s placement for the drill (the clicked face decides here), placing a
       harvester on a wall while looking steeply up or down (it faces the player).

@@ -89,6 +89,12 @@ fn level_dimension_id(d: horizon_world::level::Dimension) -> &'static str {
 }
 
 /// Our rotating block at `pos` in the level in place, if loaded.
+/// `Level.hasNeighborSignal`: whether a neighbour gives `pos` a signal.
+pub(super) fn signal(game: &mut Game<'_>, pos: Pos) -> bool {
+    let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+    game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at))
+}
+
 pub(super) fn kind_at(game: &Game<'_>, pos: Pos) -> Option<Kind> {
     let [x, y, z] = pos;
     let world = &game.world;

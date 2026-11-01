@@ -1078,6 +1078,9 @@ fn arm_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     let mut arm = known.unwrap_or_else(|| read_arm(&entity.nbt, pos, game));
     arm.held = entity.items[0].clone();
     let speed = speed_at(game, pos);
+    // ArmBlock.neighborChanged: a signal locks it.
+    let powered = super::create_glue::signal(game, pos);
+    arm.redstone_update(powered, pos, false, &mut ArmAt { game });
     arm.tick(speed, pos, false, &mut ArmAt { game });
     // The pick-up sound (`collectItem`) isn't played: Horizon's
     // `native_play_sound` belongs to the level's hooks (`GameLevel`), not to
@@ -2048,6 +2051,12 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         let Some(mut d) = with_state(|s| s.deployers.remove(&(dim.clone(), pos))) else {
             continue;
         };
+        // DeployerBlock.neighborChanged: a signal locks it.
+        let locked = super::create_glue::signal(game, pos);
+        if d.redstone_locked != locked {
+            d.redstone_locked = locked;
+            d.dirty = true;
+        }
         d.tick(
             speed,
             &mut Front {

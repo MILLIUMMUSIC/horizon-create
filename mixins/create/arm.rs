@@ -681,9 +681,7 @@ impl<S: ArmStack> Arm<S> {
         Some(held)
     }
 
-    /// `redstoneUpdate` with the block's neighbour signal (Horizon has no
-    /// signal query for a native mod yet: docs/PLAN.md).
-    #[allow(dead_code)]
+    /// `redstoneUpdate` with the block's neighbour signal.
     pub fn redstone_update(
         &mut self,
         powered: bool,
