@@ -1110,15 +1110,23 @@ pub(super) fn use_item_on(game: &mut Game<'_>, stack: &ItemStack, pos: Pos) -> b
         list[i].cycle_mode();
         list[i].mode
     });
+    // The block's own name (a belt's or funnel's parts by their base block).
     let name = block_name(game, pos).unwrap_or_default();
-    let shown = game.items().get(&name).map_or(name.clone(), |_| {
-        name.trim_start_matches("create:").replace('_', " ")
-    });
-    let line = match mode {
-        PointMode::Take => format!("Extract from {shown}"),
-        PointMode::Deposit => format!("Deposit to {shown}"),
+    let base = if super::create_logistics::is_belt(&name) {
+        "create:belt"
+    } else {
+        super::create_logistics::item_of(&name)
     };
-    game.native_action_bar(player.uuid, horizon_client::text::Text::literal(line));
+    let (ns, path) = base.split_once(':').unwrap_or(("minecraft", base));
+    let shown = horizon_client::text::Text::translate(&format!("block.{ns}.{path}"), &[]);
+    let line = match mode {
+        PointMode::Take => "Extract from ",
+        PointMode::Deposit => "Deposit to ",
+    };
+    game.native_action_bar(
+        player.uuid,
+        horizon_client::text::Text::literal(line).append(shown),
+    );
     true
 }
 

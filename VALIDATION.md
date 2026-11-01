@@ -1,5 +1,40 @@
 # Validation
 
+## Combined pass over milestone 4 (macOS, offscreen)
+
+After part 3 was merged, one world, the same build. 123 unit tests pass, clippy has no warnings.
+
+Fixed here: **the arm's selection line named belt parts by their hidden block** ("Extract from
+create:hz_belt_middle"): it now shows the block's translated name, a belt's, funnel's or tunnel's parts by their
+base block ("Extract from Belt").
+
+Seen working:
+
+- Fluids: the pump wrenched round empties the tank out of its open end, leaving a water source; a lava source
+  pumped into an empty tank, the lava drawn in its window untinted; a water bucket into a basin (drawn in it) and
+  wheat flour thrown in make dough under a mixer at 32 RPM, the water used up. (At 16 RPM nothing happens, as in
+  Create: the mixer needs `SpeedLevel.MEDIUM`, 30 RPM.)
+- Deployer facing west with an iron pickaxe: the wrench on its front switches it to punching, it breaks the stone in
+  front, keeps the cobblestone in its overflow and wears the pickaxe; switched back to using with oak planks, it
+  waits while its overflow holds anything (as Create), an andesite funnel on its side takes the cobblestone out,
+  then it places the planks in front. (The funnel also takes its held item once that's left, as Create's
+  `DeployerItemHandler` gives it.)
+- Arm: a belt segment as input and a basin as output: the arm takes iron off the moving belt into the basin.
+- Vault: breaking the block holding the iron drops it; the two blocks left stay one vault (a hopper over one, a
+  funnel on the other take it out).
+- Brass funnel as a belt funnel over the belt, filtered to gold: gold pulled off the belt into the chest behind it,
+  iron goes on; its filter saved over a reload.
+- Breaking a belt segment under a brass tunnel: the whole belt goes (its connector drops), the tunnel breaks off and
+  drops, the funnel on it stays.
+- Regressions: a press over a depot still presses iron into sheets; funnels on chests and deployers, belts and
+  depots as above.
+
+Still not checked from milestone 4: lava and water meeting in a pipe, pipes over 16 blocks, branches, a pump into a
+pump, cauldrons and hives; the arm with millstones, chutes, deployers and funnels as points, round robin between
+outputs, saving mid-move; the deployer on a belt, an axe on copper, comparing its pole closely; a 2×2×2 vault and the
+wrench on a vault; andesite tunnels' windows and shapes changing as neighbours come and go; connected brass tunnels
+over parallel belts and an empty hand taking their stacks; a second player for all of it.
+
 ## Milestone 4, part 3: checked on the Mac (macOS, offscreen)
 
 Built with `tools/horizon.py build` against the pinned Horizon and horizon-mixins, the content mod from Create
