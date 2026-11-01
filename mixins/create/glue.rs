@@ -210,6 +210,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut pumps: Vec<(Pos, Dir, f32)> = Vec::new();
     let mut drills: Vec<(Pos, Dir, f32, bool)> = Vec::new();
     let mut large_wheels: Vec<(Pos, Axis)> = Vec::new();
+    let mut amounts: Vec<(Pos, i32)> = Vec::new();
     let save_now;
     {
         let mut guard = server();
@@ -262,8 +263,13 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             game,
             destroyed: Vec::new(),
         };
-        // The creative motors' scroll values (`ScrollValueBehaviour.setValue`).
+        // The creative motors' scroll values (`ScrollValueBehaviour.setValue`),
+        // and brass funnels' amounts (their filter's count).
         for (pos, value) in values {
+            if super::create_logistics::is_brass_funnel(game, pos) {
+                amounts.push((pos, value));
+                continue;
+            }
             if matches!(kind_at(game, pos), Some(Kind::CreativeMotor(_))) {
                 if kinetics.get(pos).is_none() {
                     kinetics.on_placed(pos, kind_at(game, pos).expect("a motor"));
@@ -381,6 +387,9 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         super::create_fluid_glue::save_all();
     }
     super::create_logistics::belts_removed(game, &removed_belts);
+    for (pos, value) in amounts {
+        super::create_logistics::set_funnel_amount(game, pos, value);
+    }
     super::create_logistics::changed(game, dimension, &changed_here);
     super::create_contraptions::contacts_changed(game, &changed_here);
     // Outside the lock: these change blocks and items, which come back to us.
@@ -756,6 +765,21 @@ fn looked_at_value_box(game: &Game<'_>) -> Option<(Pos, i32)> {
         .then_some((hit.pos, i32::from(view.aux)))
 }
 
+/// A brass funnel's filter slot under the crosshair and its amount
+/// (`FilteringBehaviour.count`): the wheel steps it.
+fn looked_at_funnel_amount(game: &Game<'_>) -> Option<(Pos, i32)> {
+    let hit = game.pick()?;
+    if !super::create_logistics::is_brass_funnel(game, hit.pos)
+        || !super::create_logistics::funnel_filter_side(game, hit.pos, Dir::nearest(hit.face))
+    {
+        return None;
+    }
+    let count = super::create_machines::client_slots(hit.pos)
+        .and_then(|s| s.first().map(|(_, c)| *c))
+        .unwrap_or(64);
+    Some((hit.pos, count as i32))
+}
+
 /// `ValueSettingsInputHandler.canInteract` on this client.
 fn can_interact(game: &Game<'_>) -> bool {
     let mode = game.mode_id();
@@ -772,13 +796,21 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
     if steps == 0.0 || !can_interact(game) {
         return;
     }
-    let Some((pos, current)) = looked_at_value_box(game) else {
+    let Some((pos, current, funnel)) = looked_at_value_box(game)
+        .map(|(p, c)| (p, c, false))
+        .or_else(|| looked_at_funnel_amount(game).map(|(p, c)| (p, c, true)))
+    else {
         return;
     };
     *claimed = true;
     let mut value = current;
     for _ in 0..(steps.abs().round() as usize).max(1) {
-        value = motor_scroll_step(value, steps > 0.0);
+        value = if funnel {
+            // FilteringBehaviour's count: 1 to 64.
+            (value + if steps > 0.0 { 1 } else { -1 }).clamp(1, 64)
+        } else {
+            motor_scroll_step(value, steps > 0.0)
+        };
     }
     if value == current {
         return;
@@ -788,6 +820,10 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         return;
     }
     // Shown at once; the server's update follows.
+    if funnel {
+        super::create_machines::client_set_count(pos, value as u32);
+        return;
+    }
     let mut guard = client();
     if let Some(v) = guard.as_mut().and_then(|c| c.view.blocks.get_mut(&pos)) {
         v.aux = value as i16;

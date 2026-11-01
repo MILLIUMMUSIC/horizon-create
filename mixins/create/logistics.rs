@@ -18,7 +18,7 @@ use super::create_belt::{
 use super::create_chute::{Chute, ChuteWorld, item_motion};
 use super::create_funnel::{
     BeltBelow, EXTRACTION_TIMER, Filter, FunnelState, Mode, amount_to_extract, as_belt_funnel,
-    collects_entity_at, extracted_item, filter_slot, mode, overflow_area, tick_cooldown,
+    collects_entity_at, extracted_item, filter_slot, overflow_area, tick_cooldown,
 };
 use super::create_tunnel::{
     BrassTunnel, SelectionMode, TunnelLevel, TunnelState, TunnelWorld, adjacent, can_survive,
@@ -286,6 +286,10 @@ fn has_inventory(game: &Game<'_>, pos: Pos) -> bool {
     if belt_at(game, pos).is_some_and(BeltState::can_transport_objects) || super::create_arms::has_inventory(game, pos) {
         return true;
     }
+    // A tunnel's item handler: the belt below it (`cap`).
+    if tunnel_at(game, pos).is_some() {
+        return belt_at(game, [pos[0], pos[1] - 1, pos[2]]).is_some_and(BeltState::can_transport_objects);
+    }
     match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
         Some(B::Mod(m)) => m.id != CHUTE,
         Some(B::Chest(_) | B::Furnace(_) | B::Brewing(_) | B::Crafter(_)) => true,
@@ -303,7 +307,32 @@ fn insert_into(game: &mut Game<'_>, pos: Pos, face: Dir, stack: ItemStack) -> Op
     if belt_at(game, pos).is_some() {
         return insert_on_belt_segment(game, pos, stack);
     }
+    if let Some(t) = tunnel_at(game, pos) {
+        return insert_into_tunnel_block(game, pos, t, stack);
+    }
     game.native_insert_item(pos, core_dir(face), stack)
+}
+
+/// A tunnel's item handler: the belt below an andesite tunnel (or a brass one
+/// that doesn't distribute), else `BrassTunnelItemHandler.insertItem`: the
+/// whole stack to distribute when it can take one.
+fn insert_into_tunnel_block(game: &mut Game<'_>, pos: Pos, t: TunnelState, stack: ItemStack) -> Option<ItemStack> {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    if !t.brass || !super::create_tunnel::has_distribution(&World { game }, pos) {
+        if belt_at(game, below).is_none() {
+            return Some(stack);
+        }
+        return insert_on_belt_segment(game, below, stack);
+    }
+    let dim = game.dim.id().to_owned();
+    with_state(|s| {
+        let t = s.tunnels.entry((dim, pos)).or_default();
+        if !t.brass.can_take() {
+            return Some(stack);
+        }
+        t.brass.set_stack(Some(stack), None);
+        None
+    })
 }
 
 /// `ItemHandlerBeltSegment.insertItem` on the belt segment at `pos`.
@@ -331,6 +360,10 @@ fn extract_from(game: &mut Game<'_>, pos: Pos, max: u32, test: &dyn Fn(&ItemStac
     use horizon_client::containers::BlockEntity as B;
     if let Some(taken) = super::create_arms::extract_from(game, pos, max, test) {
         return taken;
+    }
+    // Through a tunnel: from the belt below it.
+    if tunnel_at(game, pos).is_some() {
+        return extract_from(game, [pos[0], pos[1] - 1, pos[2]], max, test);
     }
     // ItemHandlerBeltSegment.extractItem: the item over the segment.
     if belt_at(game, pos).is_some() {
@@ -965,7 +998,7 @@ pub(super) fn draw_chute(
 /// the segment (`BeltBlock.useItemOn`), a shaft on a middle segment makes a
 /// pulley. True for every belt: the template's own menu never opens.
 pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
-    if right_click_filter(game, pos, face) || right_click_tunnel(game, pos) {
+    if right_click_filter(game, pos, face) || right_click_tunnel(game, pos) || right_click_funnel(game, pos, face) {
         return true;
     }
     let Some(state) = belt_at(game, pos) else {
@@ -1279,7 +1312,7 @@ pub(super) fn funnels_tick(game: &mut Game<'_>, dimension: &str) {
         let filter = f.brass.then_some(&data.filter);
         if f.brass {
             // FilteringRenderer: clients draw the filter's item.
-            let view = data.filter.item.iter().map(|i| (i.clone(), 1)).collect();
+            let view = vec![(data.filter.item.clone().unwrap_or_default(), data.filter.count)];
             super::create_machines::note_view(game, pos, view);
         }
         let below = [pos[0], pos[1] - 1, pos[2]];
@@ -1417,6 +1450,53 @@ fn collect(game: &mut Game<'_>, pos: Pos, f: FunnelState, filter: Option<&Filter
 /// (Horizon's click has no hit position to test the value box with: the
 /// whole face counts): the held item becomes the filter, an empty hand
 /// clears it. Items aren't used up (only Create's filter items are).
+/// Whether `pos` holds a brass funnel.
+pub(super) fn is_brass_funnel(game: &Game<'_>, pos: Pos) -> bool {
+    funnel_at(game, pos).is_some_and(|f| f.brass)
+}
+
+/// Whether `face` of the brass funnel at `pos` holds its filter slot.
+pub(super) fn funnel_filter_side(game: &Game<'_>, pos: Pos, face: Dir) -> bool {
+    funnel_at(game, pos).is_some_and(|f| f.filter_sides().contains(&face))
+}
+
+/// The brass funnel at `pos` extracts up to `value` (1 to 64) at a time.
+pub(super) fn set_funnel_amount(game: &Game<'_>, pos: Pos, value: i32) {
+    if !is_brass_funnel(game, pos) || !(1..=64).contains(&value) {
+        return;
+    }
+    let dim = game.dim.id().to_owned();
+    with_state(|s| s.funnels.entry((dim, pos)).or_default().filter.count = value as u32);
+}
+
+/// `FunnelBlock.useItemOn`: the held item clicked into a collecting funnel's
+/// opening goes into the inventory behind (what doesn't fit stays in hand).
+/// A brass funnel's opening is its filter slot here (no hit position).
+fn right_click_funnel(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
+    let Some(f) = funnel_at(game, pos) else {
+        return false;
+    };
+    if f.brass || !f.collects() || Dir::nearest(face) != f.facing {
+        return false;
+    }
+    let Some(stack) = game.held().cloned() else {
+        return false;
+    };
+    if &*stack.item == "create:wrench" || &*stack.item == super::create_arms::ARM {
+        return false;
+    }
+    if super::create_glue::signal(game, pos) {
+        return false;
+    }
+    let behind = f.behind(pos);
+    if !has_inventory(game, behind) {
+        return true;
+    }
+    let left = insert_into(game, behind, f.facing, stack);
+    *game.held_mut() = left;
+    true
+}
+
 fn right_click_filter(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
     let Some(f) = funnel_at(game, pos).filter(|f| f.brass) else {
         return false;
@@ -1941,9 +2021,12 @@ fn load(game: &Game<'_>, dimension: &str) {
                 inv.items.push(t);
             }
             // A brass funnel's filter: its amount and item.
-            Some("funnel") if f.len() == 4 || f.len() == 6 => {
+            Some("funnel") if (4..=6).contains(&f.len()) => {
                 if let Some(p) = pos(&f) {
                     let mut filter = Filter::default();
+                    if f.len() == 5 {
+                        filter.count = f[4].parse().unwrap_or(64);
+                    }
                     if f.len() == 6 {
                         filter.count = f[4].parse().unwrap_or(64);
                         filter.set(Some(f[5]));
@@ -2027,7 +2110,7 @@ pub(super) fn save_all() {
                     Some(item) => {
                         out.push_str(&format!("funnel {} {} {} {} {item}\n", p[0], p[1], p[2], f.filter.count))
                     }
-                    None => out.push_str(&format!("funnel {} {} {}\n", p[0], p[1], p[2])),
+                    None => out.push_str(&format!("funnel {} {} {} {}\n", p[0], p[1], p[2], f.filter.count)),
                 }
             }
             let mut tunnels: Vec<(&Pos, &TunnelData)> =

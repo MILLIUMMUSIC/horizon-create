@@ -103,8 +103,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt
      funnel (`getShapeForPosition`): pulling items off the belt into the inventory behind
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
-     wrench switches it. Not yet: the belt funnel's own model and flap, clicking an
-     item into it. Brass funnels: part 3.
+     wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. Not yet: the belt funnel's own model and flap. Brass funnels: part 3.
    Fluids (**compiled and unit-tested only, not yet run in the game**):
    - Fluid pipes (`fluids.rs`: `FluidTransportBehaviour`, `PipeConnection` with its three layers, `FlowSource`,
      `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`; `fluid_glue.rs`): straight pipes only, placed like a chain
@@ -183,7 +182,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      (`getAmountToExtract`), gathered from every slot holding that item (`ItemHelper.extract`, `UPTO`); funnels and
      chutes now gather the same way. The filter's item is drawn in each filter slot as `FilteringRenderer` does
      (`FunnelFilterSlotPositioning` for the funnel block), synced on `create:depots`. Filters are saved with the
-     funnels in `create_logistics_*.txt`. Not yet: the amount's value box (exact amounts, `upTo`), filter items
+     funnels in `create_logistics_*.txt`. The mouse wheel over its filter slot steps the amount it extracts (1 to 64, `FilteringBehaviour.count`, `upTo`), saved with it. Not yet: exact amounts, filter items
      (lists, attributes, packages), matching components, the belt funnel's slot positions, the filter's tooltip.
    - Andesite tunnel (`tunnel.rs`, `belt.rs`, `logistics.rs`): a block per `shape` on a chain's template (its
      `axis` holds the horizontal axis). It turns to its belt's axis and the shape its neighbours give it
@@ -193,22 +192,19 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      along the belt puts one item onto each side with a flap that takes it, and waits while one doesn't
      (`flapTunnelsAndCheckIfStuck`). Not yet: the flaps drawn and moving (`BeltTunnelRenderer`, `TunnelFlapPacket`),
      the belt's casing under it (belts have no casing here), placing it only on belts (`BeltTunnelItem`; one placed
-     elsewhere breaks at once), the item handler (`cap`: funnels and hoppers reaching the belt through it), display
-     links.
+     elsewhere breaks at once), display links (its item handler, `cap`, reaches the belt below it: funnels, chutes and arms insert and extract through it).
    - Brass tunnel (`tunnel.rs`, `logistics.rs`): the andesite tunnel's blocks, holding the stack that enters it when it
      distributes (`hasDistributionBehaviour`: a flap to the side or a connected brass tunnel) and keeping the
      next item waiting until it is empty (`stuckAtTunnel`). Connected tunnels side by side over parallel belts share
      their outputs (`gatherValidOutputs`, its own sides first); `distribute` in **Split** (the default) and
      **Round robin**, after `brassTunnelTimer` (10 ticks) or 2 for a new item; outputs are belts, depots, chutes and
      collecting funnels at the sides, or the belt's end (thrown off). An adjacent brass funnel's filter decides
-     what a side takes and goes first (`testFlapFilter`, `flapFilterEmpty`). The wrench switches Split and Round
-     robin (standing in for the value box, as Horizon can't open the value settings board; an action bar line
+     what a side takes and goes first (`testFlapFilter`, `flapFilterEmpty`). The wrench steps through the seven selection modes (standing in for the value box, as Horizon can't open the value settings board; an action bar line
      says the mode) for the whole connected group, and a tunnel placed beside others gives them its mode
      (`updateTunnelConnections`); an empty hand takes the group's stacks (`grabAllStacksOfGroup`); a broken one
      drops its stack. Mode and stack are saved in `create_logistics_*.txt`. Not yet: sided filters on the tunnel itself
      (`SidedFilteringBehaviour`); the brass tunnel's connected textures (`BrassTunnelCTBehaviour`); its window
-     toggle (the wrench switches the mode instead); the goggle tooltip; its item handler (`BrassTunnelItemHandler`:
-     funnels and hoppers inserting into it); the distribution's stack drawn (`BrassTunnelRenderer`).
+     toggle (the wrench switches the mode instead); the goggle tooltip;  the distribution's stack drawn (`BrassTunnelRenderer`).
    Later: smart chutes, the remaining belt features above.
 5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions). In Create a
    contraption is an entity (`AbstractContraptionEntity`) holding the moved blocks (`Contraption`), drawn by its

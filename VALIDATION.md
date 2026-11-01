@@ -1,5 +1,14 @@
 # Validation
 
+## Funnel clicks and amounts, tunnels' item handler (macOS, offscreen)
+
+Seen working: cobblestone clicked into a collecting andesite funnel on a chest goes into the chest (the whole
+stack in hand); the mouse wheel over a vertical brass funnel's side steps its amount down to 1, and it then pulls
+one item at a time out of the chest below.
+
+Not checked yet: a funnel or arm inserting through an andesite tunnel onto its belt, a brass tunnel taking a
+stack to distribute from a funnel, the amount after reloading.
+
 ## Large water wheel (macOS, offscreen)
 
 Seen working: a large water wheel set about Z gets its eight structure blocks (the sides facing it, the corners
