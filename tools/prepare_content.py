@@ -556,6 +556,7 @@ def fit_logistics(content, names):
     fit_saws(content, names)
     fit_psi(content)
     fit_contacts(content, names)
+    fit_large_wheel(content, names)
 
     # The extra blocks share their base block's tags: `mineable/*` decides
     # whether the template's required tool drops them at all.
@@ -567,6 +568,7 @@ def fit_logistics(content, names):
         **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
         "hz_mechanical_saw_along": "create:mechanical_saw",
         "elevator_contact": "create:redstone_contact",
+        "water_wheel_structure": "create:large_water_wheel",
         **{name: f"create:{piston}" for name, (piston, _, _) in piston_blocks().items() if name != piston},
         "hz_mechanical_piston_head_sticky": "create:mechanical_piston_head",
         **{name: f"create:{base}" for name, (base, _) in chassis_blocks().items() if name != base},
@@ -1015,6 +1017,38 @@ def fit_contacts(content, names):
             if props.get("calling") == "false" and props.get("powered") == "false":
                 variants[f"facing={props['facing']},powered={props['powering']}"] = model
         write_json(path, {"variants": variants})
+
+
+# The large water wheel (RotatedPillarKineticBlock): a chain's template for
+# its `axis` (`extension` isn't kept), a full block, drawn by the native mod
+# from its OBJ model; the eight invisible WaterWheelStructuralBlocks around it
+# on a lightning rod's template for their `facing`.
+def fit_large_wheel(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    models = content / "assets" / "create" / "models" / "block"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    full = box(0, 0, 0, 16, 16, 16)
+    decl = read_json(blocks / "large_water_wheel.json") if (blocks / "large_water_wheel.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl.pop("default_state", None)
+    decl["shapes"] = {"property": "axis", "values": {a: [full] for a in AXES}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "large_water_wheel.json", decl)
+    write_json(models / "hz_blank_large_water_wheel.json", {"textures": {"particle": "block/spruce_planks"}})
+    write_json(states / "large_water_wheel.json", {
+        "variants": {f"axis={a}": {"model": "create:block/hz_blank_large_water_wheel"} for a in AXES}
+    })
+    names.setdefault("block.create.large_water_wheel", "Large Water Wheel")
+    write_json(loot_tables / "large_water_wheel.json", loot("large_water_wheel", ["create:large_water_wheel"]))
+    decl = read_json(blocks / "water_wheel_structure.json") if (blocks / "water_wheel_structure.json").exists() else {}
+    decl["template"] = "minecraft:lightning_rod"
+    decl["item"] = False
+    decl.pop("default_state", None)
+    decl["shapes"] = {"property": "facing", "values": {f: [full] for f in FACINGS}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "water_wheel_structure.json", decl)
+    write_json(states / "water_wheel_structure.json", {"multipart": [{"apply": {"model": "minecraft:block/air"}}]})
 
 
 def share_block_tags(content, bases):

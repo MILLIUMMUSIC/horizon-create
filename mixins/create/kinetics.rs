@@ -10,7 +10,7 @@
 
 use super::create_belt::{BeltState, Part, Slope};
 use super::create_processing::{
-    MixStep, Mixing, PressMode, PressStep, Pressing, water_wheel_speed,
+    MixStep, Mixing, PressMode, PressStep, Pressing, water_wheel_speed, water_wheel_speed_sized,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -267,6 +267,7 @@ impl Kind {
             }
             Kind::GantryShaft(f) | Kind::GantryCarriage(f, _) => Some(("facing", f.name())),
             Kind::ElevatorPulley(f) => Some(("facing", f.name())),
+            Kind::LargeWaterWheel(a) => Some(("axis", a.name())),
             Kind::Millstone | Kind::MechanicalMixer | Kind::Belt(_) | Kind::MechanicalArm => None,
         }
     }
@@ -386,6 +387,9 @@ pub enum Kind {
     Millstone,
     /// `WaterWheelBlock`: the way it faces (its axis).
     WaterWheel(Dir),
+    /// `LargeWaterWheelBlock`: its axis (the 3 by 3 around it are
+    /// `WaterWheelStructuralBlock`s, contraption-free).
+    LargeWaterWheel(Axis),
     /// `EncasedFanBlock`: the way its air blows out (its shaft is behind).
     EncasedFan(Dir),
     /// `PumpBlock`: the way it pushes (`FACING`); a small cog about that
@@ -447,6 +451,7 @@ impl Kind {
             "create:mechanical_press" => facing().map(Kind::MechanicalPress),
             "create:millstone" => Some(Kind::Millstone),
             "create:water_wheel" => facing().map(Kind::WaterWheel),
+            "create:large_water_wheel" => axis().map(Kind::LargeWaterWheel),
             "create:encased_fan" => facing().map(Kind::EncasedFan),
             "create:mechanical_pump" => facing().map(Kind::MechanicalPump),
             "create:mechanical_mixer" => Some(Kind::MechanicalMixer),
@@ -482,6 +487,7 @@ impl Kind {
             Kind::MechanicalPress(_) => "create:mechanical_press",
             Kind::Millstone => "create:millstone",
             Kind::WaterWheel(_) => "create:water_wheel",
+            Kind::LargeWaterWheel(_) => "create:large_water_wheel",
             Kind::EncasedFan(_) => "create:encased_fan",
             Kind::MechanicalPump(_) => "create:mechanical_pump",
             Kind::MechanicalMixer => "create:mechanical_mixer",
@@ -535,6 +541,7 @@ impl Kind {
             | Kind::GantryCarriage(f, along)
             | Kind::Saw(f, along) => super::create_deployer::rotation_axis(f, along),
             Kind::ElevatorPulley(f) => f.clockwise(Axis::Y).axis(),
+            Kind::LargeWaterWheel(a) => a,
             Kind::GantryShaft(f) => f.axis(),
         }
     }
@@ -562,6 +569,7 @@ impl Kind {
             | Kind::Saw(f, along) => face.axis() == super::create_deployer::rotation_axis(f, along),
             Kind::GantryShaft(f) => face.axis() == f.axis(),
             Kind::ElevatorPulley(f) => face.axis() == f.clockwise(Axis::Y).axis(),
+            Kind::LargeWaterWheel(a) => face.axis() == a,
         }
     }
     /// `ICogWheel.isSmallCog`: the mixer is an `ICogWheel` too.
@@ -603,6 +611,7 @@ impl Kind {
             Kind::CreativeMotor(_) => 16384.0,
             Kind::HandCrank(_) => 8.0,
             Kind::WaterWheel(_) => 32.0,
+            Kind::LargeWaterWheel(_) => 128.0,
             Kind::WindmillBearing(_) => 512.0,
             _ => 0.0,
         }
@@ -614,6 +623,7 @@ impl Kind {
             Kind::CreativeMotor(_)
                 | Kind::HandCrank(_)
                 | Kind::WaterWheel(_)
+                | Kind::LargeWaterWheel(_)
                 | Kind::WindmillBearing(_)
         )
     }
@@ -659,6 +669,32 @@ pub struct Kinetic {
     pub mixing: Mixing,
     /// `WaterWheelBlockEntity.material`: its index in `WHEEL_WOODS`.
     pub material: u8,
+}
+
+/// `LargeWaterWheelBlock.tick`: the `WaterWheelStructuralBlock`s around a
+/// large wheel at `pos` about `axis`, each with the facing it needs (the
+/// sides face the wheel, the corners the side next to them).
+pub fn large_wheel_structure(pos: Pos, axis: Axis) -> Vec<(Pos, Dir)> {
+    let mut out = Vec::new();
+    for side in Dir::ALL {
+        if side.axis() == axis {
+            continue;
+        }
+        for secondary in [false, true] {
+            let target = if secondary {
+                side.clockwise(axis)
+            } else {
+                side
+            };
+            let base = if secondary {
+                add(pos, side.normal())
+            } else {
+                pos
+            };
+            out.push((add(base, target.normal()), target.opposite()));
+        }
+    }
+    out
 }
 
 /// The woods a water wheel can be made of (`AllBlockTags.WATER_WHEEL_PLANKS`
@@ -745,6 +781,7 @@ impl Kinetic {
                 convert(sign * CRANK_SPEED, f)
             }
             Kind::WaterWheel(_) => water_wheel_speed(self.flow_score),
+            Kind::LargeWaterWheel(_) => water_wheel_speed_sized(self.flow_score, 2),
             Kind::WindmillBearing(_) => self.flow_score as f32,
             _ => 0.0,
         }
@@ -835,7 +872,7 @@ impl Kinetics {
                 // The scroll value box shows the motor's setting.
                 Kind::CreativeMotor(_) => e.motor_speed as i16,
                 // The wheel's wood.
-                Kind::WaterWheel(_) => i16::from(e.material),
+                Kind::WaterWheel(_) | Kind::LargeWaterWheel(_) => i16::from(e.material),
                 _ => -1,
             },
             press_belt: e.pressing.mode == PressMode::Belt,
@@ -1752,11 +1789,13 @@ impl Kinetics {
             .collect()
     }
     /// Every water wheel, for their flow check.
-    pub fn water_wheels(&self) -> Vec<(Pos, Dir)> {
+    /// The water wheels: their place, axis and whether large.
+    pub fn water_wheels(&self) -> Vec<(Pos, Axis, bool)> {
         self.positions()
             .into_iter()
             .filter_map(|p| match self.entities[&p].kind {
-                Kind::WaterWheel(f) => Some((p, f)),
+                Kind::WaterWheel(f) => Some((p, f.axis(), false)),
+                Kind::LargeWaterWheel(a) => Some((p, a, true)),
                 _ => None,
             })
             .collect()
@@ -1916,7 +1955,8 @@ fn kind_key(k: Kind) -> String {
         | Kind::Cogwheel(a)
         | Kind::LargeCogwheel(a)
         | Kind::Gearbox(a)
-        | Kind::RopePulley(a) => a.name(),
+        | Kind::RopePulley(a)
+        | Kind::LargeWaterWheel(a) => a.name(),
         Kind::CreativeMotor(f)
         | Kind::HandCrank(f)
         | Kind::MechanicalPress(f)
@@ -2061,6 +2101,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::Drill(d) => (21, dir(d)),
         Kind::Saw(d, along) => (22, dir(d) | u8::from(along) << 3),
         Kind::ElevatorPulley(d) => (23, dir(d)),
+        Kind::LargeWaterWheel(a) => (24, axis(a)),
     }
 }
 
@@ -2105,6 +2146,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         ),
         21 => Kind::Drill(dir?),
         23 => Kind::ElevatorPulley(dir?),
+        24 => Kind::LargeWaterWheel(axis?),
         22 => Kind::Saw(
             Dir::ALL.get(usize::from(state & 7)).copied()?,
             state & 8 != 0,
@@ -2859,6 +2901,7 @@ mod tests {
             Kind::Saw(Dir::East, true),
             Kind::Saw(Dir::Up, false),
             Kind::ElevatorPulley(Dir::East),
+            Kind::LargeWaterWheel(Axis::Z),
         ] {
             assert_eq!(parse_kind_key(&kind_key(k)), Some(k));
             let (tag, state) = kind_code(k);
@@ -3024,5 +3067,22 @@ mod tests {
         assert!(!k.set_wheel_material([0, 0, 0], 2));
         let loaded = Kinetics::load(&k.save());
         assert_eq!(loaded.entities[&[0, 0, 0]].material, 2);
+    }
+
+    #[test]
+    fn large_wheel_structure_ring() {
+        let ring = large_wheel_structure([0, 0, 0], Axis::Z);
+        assert_eq!(ring.len(), 8);
+        // The sides face the wheel.
+        assert!(ring.contains(&([1, 0, 0], Dir::West)));
+        assert!(ring.contains(&([0, -1, 0], Dir::Up)));
+        // Every corner of the 3 by 3 is there, none along the axis.
+        for x in -1..=1 {
+            for y in -1..=1 {
+                if (x, y) != (0, 0) {
+                    assert!(ring.iter().any(|(p, _)| *p == [x, y, 0]), "{x} {y}");
+                }
+            }
+        }
     }
 }

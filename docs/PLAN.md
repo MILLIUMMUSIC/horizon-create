@@ -70,7 +70,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      `water_wheel.obj` and `.mtl` from the game's resources (the content mod made from the player's jar) at
      runtime, client side, and draws it turned with `rotateToFaceVertical` and spun with the network, in spruce
      (the default material: oak planks and log swapped for spruce's). The block's own model (its frame) stays in
-     the chunk mesh. Planks (vanilla woods) clicked on a wheel make it of their wood. Not yet: the large water wheel.
+     the chunk mesh. Planks (vanilla woods) clicked on a wheel make it of their wood. The large water wheel (`LargeWaterWheelBlock`, 128 su, 4 RPM from the flow around it at two blocks) keeps its eight invisible structure blocks (`WaterWheelStructuralBlock`, passing clicks on); broken or blocked, it breaks. Not yet: its `extension` model (a longer axle beside another), the structure placed only when there's room (`LargeWaterWheelBlockItem`: here a blocked wheel breaks and drops).
 4. **Logistics**. Part 1 (**compiled and unit-tested only, not yet run in the game**):
    - Mechanical belt (`belt.rs`: `BeltBlock`, `BeltBlockEntity`, `BeltInventory`, `TransportedItemStack`,
      `BeltHelper`, `ItemHandlerBeltSegment`, `BeltConnectorItem`; `logistics.rs`): the belt connector joins two

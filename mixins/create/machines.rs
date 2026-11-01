@@ -684,15 +684,15 @@ impl horizon_world::fluid_flow::FluidFlowWorld for Flows<'_, '_> {
 /// `determineAndApplyFlowScore` for the small wheel at `pos` facing `f`:
 /// each neighbour off its axis, the fluid's flow there (`getFlow`), and a
 /// bubble column's push.
-pub(super) fn water_wheel_flow(game: &Game<'_>, pos: Pos, f: Dir) -> i32 {
-    let axis = f.axis() as usize;
+pub(super) fn water_wheel_flow(game: &Game<'_>, pos: Pos, axis: Axis, large: bool) -> i32 {
+    let a = match axis {
+        Axis::X => 0,
+        Axis::Y => 1,
+        Axis::Z => 2,
+    };
     let mut flows = Vec::new();
     let mut world = Flows { game };
-    for d in Dir::ALL {
-        if d.axis() == f.axis() {
-            continue;
-        }
-        let n = d.normal();
+    for n in super::create_processing::wheel_offsets(a, large) {
         let p = horizon_core::position::BlockPos::new(pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]);
         if !game.world.loaded(p.x, p.z) {
             continue;
@@ -711,11 +711,82 @@ pub(super) fn water_wheel_flow(game: &Game<'_>, pos: Pos, f: Dir) -> i32 {
         }
         flows.push((n, flow));
     }
-    let score = water_wheel_flow_score(axis, &flows);
-    if std::env::var_os("CREATE_DEBUG").is_some() {
-        eprintln!("create: water wheel {pos:?} facing {f:?} flows {flows:?} score {score}");
+    water_wheel_flow_score(a, &flows)
+}
+
+const STRUCTURE: &str = "create:water_wheel_structure";
+
+/// `WaterWheelStructuralBlock.getMaster`: the large wheel a structure block
+/// at `pos` belongs to (following its facing through other structure).
+pub(super) fn structure_master(game: &Game<'_>, pos: Pos) -> Option<Pos> {
+    let mut at = pos;
+    for _ in 0..3 {
+        let state = game.pack.assets.registry.state(game.world.block(at[0], at[1], at[2]))?;
+        if state.name != STRUCTURE {
+            return (at != pos).then_some(at);
+        }
+        let f = Dir::parse(state.properties.get("facing")?)?;
+        at = [0, 1, 2].map(|k| at[k] + f.normal()[k]);
     }
-    score
+    None
+}
+
+/// Large wheels' structures: kept whole (`LargeWaterWheelBlock.tick`), a
+/// wheel whose structure was broken or is blocked is broken (with its drop),
+/// and a wheel gone takes its structure with it.
+static LARGE_WHEELS: std::sync::Mutex<Vec<((String, Pos), Axis, bool)>> = std::sync::Mutex::new(Vec::new());
+
+pub(super) fn large_wheels_tick(game: &mut Game<'_>, dimension: &str, wheels: &[(Pos, Axis)]) {
+    let known: Vec<((String, Pos), Axis, bool)> = {
+        let mut g = LARGE_WHEELS.lock().unwrap_or_else(|e| e.into_inner());
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *g).into_iter().partition(|((d, _), ..)| d == dimension);
+        *g = rest;
+        mine
+    };
+    let air = game.res.facts().air;
+    // Wheels gone: their structure goes too.
+    for ((_, p), axis, _) in &known {
+        if wheels.iter().any(|(w, _)| w == p) || !game.world.loaded(p[0], p[2]) {
+            continue;
+        }
+        for (at, facing) in super::create_kinetics::large_wheel_structure(*p, *axis) {
+            let id = game.world.block(at[0], at[1], at[2]);
+            let here = game.pack.assets.registry.state(id);
+            if here.is_some_and(|s| s.name == STRUCTURE && s.properties.get("facing").map(String::as_str) == Some(facing.name())) {
+                game.native_set_block(dimension, at, air, super::native_hooks::flags::UPDATE_ALL);
+            }
+        }
+    }
+    let mut now = Vec::new();
+    for &(p, axis) in wheels {
+        let whole = known.iter().any(|((_, k), _, w)| *k == p && *w);
+        let mut broken = false;
+        for (at, facing) in super::create_kinetics::large_wheel_structure(p, axis) {
+            let id = game.world.block(at[0], at[1], at[2]);
+            let here = game.pack.assets.registry.state(id);
+            if here.is_some_and(|s| s.name == STRUCTURE && s.properties.get("facing").map(String::as_str) == Some(facing.name())) {
+                continue;
+            }
+            let replaceable = game.res.facts().get(id).replaceable || game.world.is_air(id);
+            // onRemove of a structure block, or no room for it.
+            if whole || !replaceable {
+                broken = true;
+                break;
+            }
+            if let Some(base) = game.pack.assets.registry.default_state(STRUCTURE)
+                && let Some(s) = game.with_props(base, &[("facing", facing.name())])
+            {
+                game.native_set_block(dimension, at, s, super::native_hooks::flags::UPDATE_ALL);
+            }
+        }
+        if broken {
+            let _ = game.destroy_block_dropping(p);
+            now.push(((dimension.to_owned(), p), axis, false));
+            continue;
+        }
+        now.push(((dimension.to_owned(), p), axis, true));
+    }
+    LARGE_WHEELS.lock().unwrap_or_else(|e| e.into_inner()).extend(now);
 }
 
 // ---- Players ------------------------------------------------------------------

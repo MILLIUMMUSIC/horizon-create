@@ -1,5 +1,14 @@
 # Validation
 
+## Large water wheel (macOS, offscreen)
+
+Seen working: a large water wheel set about Z gets its eight structure blocks (the sides facing it, the corners
+facing the side beside them) and is drawn from its OBJ model with a shaft through it; cherry planks clicked on a
+structure block make the whole wheel cherry; a structure block taken away breaks the wheel, which drops itself and
+takes the rest of its structure. 171 unit tests pass (3 new).
+
+Not checked yet: water turning it (the flow two blocks out), placing it by hand, a blocked placement, saving.
+
 ## Nozzle, crafting remainders (macOS, offscreen)
 
 Seen working: a nozzle on an encased fan facing up (16 RPM) pushes a pig beside it away, out to the edge of its

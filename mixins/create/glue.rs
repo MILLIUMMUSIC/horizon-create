@@ -59,6 +59,8 @@ struct Client {
     parts: HashMap<(&'static str, &'static str), Option<BlockStateId>>,
     /// The small water wheel's OBJ model, read once (none: it isn't there).
     wheel: Option<Option<Vec<super::create_obj::Quad>>>,
+    /// The large water wheel's.
+    large_wheel: Option<Option<Vec<super::create_obj::Quad>>>,
 }
 
 static SERVER: Mutex<Option<Server>> = Mutex::new(None);
@@ -207,6 +209,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut changed_here: Vec<Pos> = Vec::new();
     let mut pumps: Vec<(Pos, Dir, f32)> = Vec::new();
     let mut drills: Vec<(Pos, Dir, f32, bool)> = Vec::new();
+    let mut large_wheels: Vec<(Pos, Axis)> = Vec::new();
     let save_now;
     {
         let mut guard = server();
@@ -296,9 +299,9 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         kinetics.tick(&mut level);
         // WaterWheelBlockEntity.lazyTick: the flow, every 60 ticks.
         if ticks % 60 == 0 {
-            for (p, f) in kinetics.water_wheels() {
+            for (p, axis, large) in kinetics.water_wheels() {
                 if level.is_loaded(p) {
-                    let score = super::create_machines::water_wheel_flow(game, p, f);
+                    let score = super::create_machines::water_wheel_flow(game, p, axis, large);
                     kinetics.set_flow_score(&mut level, p, score);
                 }
             }
@@ -333,6 +336,12 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 && level.is_loaded(p)
             {
                 pumps.push((p, f, kinetics.speed_of(&level, p)));
+            }
+            // Large water wheels, for their structure.
+            if let Some(Kind::LargeWaterWheel(a)) = kinetics.get(p).map(|e| e.kind)
+                && level.is_loaded(p)
+            {
+                large_wheels.push((p, a));
             }
             // Standing drills and saws, for their breaking.
             let breaker = match kinetics.get(p).map(|e| e.kind) {
@@ -393,6 +402,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
     super::create_actor_glue::breakers_tick(game, dimension, &drills);
+    super::create_machines::large_wheels_tick(game, dimension, &large_wheels);
     super::create_contraptions::level_tick(game, dimension);
     super::create_actor_glue::psis_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
@@ -508,10 +518,13 @@ fn right_click_hand(
             return;
         }
     }
-    // WaterWheelBlock.useItemOn: planks make the wheel of their wood.
-    if matches!(kind_at(game, pos), Some(Kind::WaterWheel(_)))
+    // WaterWheelBlock.useItemOn: planks make the wheel of their wood (a
+    // large wheel's structure passes the click on to it).
+    let wheel_at = super::create_machines::structure_master(game, pos).unwrap_or(pos);
+    if matches!(kind_at(game, wheel_at), Some(Kind::WaterWheel(_) | Kind::LargeWaterWheel(_)))
         && let Some(wood) = game.held().and_then(|h| super::create_kinetics::wheel_wood_of(&h.item))
     {
+        let pos = wheel_at;
         *canceled = true;
         let dimension = game.dim.id().to_owned();
         let mut guard = server();
@@ -969,7 +982,7 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             want.push(("create:hz_part_millstone_inner", None, id, Axis::Y, standard, 0.0));
         }
         // WaterWheelRenderer: its OBJ wheel, drawn by `draw_wheel`.
-        Kind::WaterWheel(_) => {}
+        Kind::WaterWheel(_) | Kind::LargeWaterWheel(_) => {}
         Kind::EncasedFan(f) => {
             // EncasedFanRenderer: the shaft half behind, the propeller
             // spinning faster in front.
@@ -1201,7 +1214,15 @@ pub(super) fn draw(
                 * glam::Mat4::from_axis_angle(unit(f.axis()), angle.to_radians())
                 * rotate_to_face_vertical(f)
                 * glam::Mat4::from_translation(-half);
-            draw_wheel(game, c, m, packed, view.aux.max(0) as u8, out);
+            draw_wheel(game, c, m, packed, view.aux.max(0) as u8, false, out);
+        }
+        if let Kind::LargeWaterWheel(a) = view.kind {
+            let angle = render_angle(view.kind, pos, view.speed, time);
+            let m = glam::Mat4::from_translation(origin + half)
+                * glam::Mat4::from_axis_angle(unit(a), angle.to_radians())
+                * rotate_to_face_vertical(Dir::positive_of(a))
+                * glam::Mat4::from_translation(-half);
+            draw_wheel(game, c, m, packed, view.aux.max(0) as u8, true, out);
         }
     }
     drop(guard);
@@ -1275,12 +1296,12 @@ fn spruce(texture: &str) -> String {
 /// `AllPartialModels.WATER_WHEEL` (`create:block/water_wheel/wheel`, an
 /// OBJ model) from the game's resources: the content mod made from the
 /// player's Create jar.
-fn load_wheel(game: &Game<'_>) -> Option<Vec<super::create_obj::Quad>> {
+fn load_wheel(game: &Game<'_>, id: &str) -> Option<Vec<super::create_obj::Quad>> {
     use super::create_obj::{asset_file, model_file, parse_model_json, parse_mtl, parse_obj, quads};
     let root = &game.options.resources;
     let read = |file: &str| std::fs::read_to_string(root.join(file)).ok();
     let json = |id: &str| -> Option<serde_json::Value> { serde_json::from_str(&read(&model_file(id))?).ok() };
-    let mut model = parse_model_json(&json("create:block/water_wheel/wheel")?);
+    let mut model = parse_model_json(&json(id)?);
     for _ in 0..8 {
         let Some(parent) = model.parent.clone() else {
             break;
@@ -1317,12 +1338,18 @@ fn draw_wheel(
     m: glam::Mat4,
     light: u32,
     material: u8,
+    large: bool,
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
-    let quads = c.wheel.get_or_insert_with(|| {
-        let loaded = load_wheel(game);
+    let (slot, id) = if large {
+        (&mut c.large_wheel, "create:block/large_water_wheel/block")
+    } else {
+        (&mut c.wheel, "create:block/water_wheel/wheel")
+    };
+    let quads = slot.get_or_insert_with(|| {
+        let loaded = load_wheel(game, id);
         if loaded.is_none() {
-            log::warn!("Create: no water wheel model (models/block/water_wheel/wheel.json and its OBJ)");
+            log::warn!("Create: no water wheel model ({id} and its OBJ)");
         }
         loaded
     });

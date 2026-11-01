@@ -270,15 +270,50 @@ fn rotate_90(v: [f64; 3], axis: usize) -> [f64; 3] {
 
 /// `WaterWheelBlockEntity.getGeneratedSpeed` for a small wheel.
 pub fn water_wheel_speed(flow_score: i32) -> f32 {
-    (flow_score.clamp(-1, 1) * 8) as f32
+    water_wheel_speed_sized(flow_score, 1)
+}
+
+/// `getGeneratedSpeed` of a wheel of `getSize` `size` (2: the large one).
+pub fn water_wheel_speed_sized(flow_score: i32, size: i32) -> f32 {
+    (flow_score.clamp(-1, 1) * 8 / size) as f32
+}
+
+/// `WaterWheelBlockEntity.SMALL_OFFSETS` / `LARGE_OFFSETS`: where a wheel
+/// about `axis` (0 x, 1 y, 2 z) feels the flow, from its centre.
+pub fn wheel_offsets(axis: usize, large: bool) -> Vec<[i32; 3]> {
+    let dirs: Vec<[i32; 3]> = (0..3)
+        .filter(|k| *k != axis)
+        .flat_map(|k| {
+            let mut a = [0; 3];
+            let mut b = [0; 3];
+            a[k] = 1;
+            b[k] = -1;
+            [a, b]
+        })
+        .collect();
+    if !large {
+        return dirs;
+    }
+    let mut out = Vec::new();
+    for d in &dirs {
+        let centre = d.map(|c| c * 2);
+        out.push(centre);
+        for d2 in &dirs {
+            if (0..3).any(|k| d[k] != 0 && d2[k] != 0) {
+                continue;
+            }
+            out.push([0, 1, 2].map(|k| centre[k] + d2[k]));
+        }
+    }
+    out
 }
 
 // ---- RecipeApplier ---------------------------------------------------------
 
 /// `RecipeApplier.applyRecipeOn` with a processing recipe, on a stack of
 /// `count`: each item rolls its results (`roll`), merged onto the stacks
-/// rolled before up to their `max_stack`. Crafting remainders aren't
-/// returned (`returnProcessingRemainder`): none of the ported recipes has one.
+/// rolled before up to their `max_stack`. Crafting remainders
+/// (`returnProcessingRemainder`) are added by the glue (`with_remainder`).
 pub fn apply_processing_on(
     count: u32,
     mut roll: impl FnMut() -> Vec<(String, u32)>,
@@ -1046,5 +1081,20 @@ mod tests {
                 ("minecraft:glass".into(), 16)
             ]
         );
+    }
+
+    #[test]
+    fn large_water_wheels() {
+        assert_eq!(wheel_offsets(2, false).len(), 4);
+        let large = wheel_offsets(2, true);
+        assert_eq!(large.len(), 12);
+        assert!(
+            large.contains(&[2, 0, 0])
+                && large.contains(&[2, 1, 0])
+                && large.contains(&[-1, -2, 0])
+        );
+        assert!(large.iter().all(|o| o[2] == 0));
+        assert_eq!(water_wheel_speed_sized(3, 2), 4.0);
+        assert_eq!(water_wheel_speed_sized(-1, 2), -4.0);
     }
 }
