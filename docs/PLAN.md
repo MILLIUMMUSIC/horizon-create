@@ -65,7 +65,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      wheels, fans (a quarter turn off the face's axis) and presses (from above or below); sneaking takes ours into
      the inventory (not in creative), a block entity's items dropped. Through `native_use_item_on`, and through
      `native_right_click_block` for blocks whose template has a use of its own (press, mixer, millstone, depot,
-     basin), which would take the click first. Not yet: sounds, the wrench's own render and attack on minecarts.
+     basin), which would take the click first. A wrench in the main hand of a player not in creative breaks a minecart in one blow (`wrenchInstaKillsMinecarts`: the window's player through a cancellable hook on `Game::attack_cart`, guests through `native_attack_entity`). Engine gaps: its sounds (mod sound events) and its own render (`WrenchItemRenderer`'s turning gear: a mod's own item model, horizon-rust/horizon#7488).
    - Water wheel model (`obj.rs`): an OBJ/MTL loader reads `wheel.json` (its `model`, `flip_v`, texture parents),
      `water_wheel.obj` and `.mtl` from the game's resources (the content mod made from the player's jar) at
      runtime, client side, and draws it turned with `rotateToFaceVertical` and spun with the network, in spruce

@@ -292,6 +292,27 @@ bindings = [
 ]
 
 [[injection]]
+id = "wrench-cart"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client::game::minecarts::Game<'_>::attack_cart"
+helper = "wrench_cart.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "attack-entity"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
+helper = "attack_entity.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
 id = "use-item"
 kind = "HEAD"
 target = "horizon_client::game::native_hooks::Game<'_>::native_use_item"

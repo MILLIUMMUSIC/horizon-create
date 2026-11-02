@@ -1,5 +1,11 @@
 # Validation
 
+## The wrench on minecarts (macOS, offscreen)
+
+Seen working: in survival, one left click with the wrench on a minecart on a rail breaks it and drops it as an item;
+a bare hand's click leaves it. Not checked yet: a guest on a LAN server (`native_attack_entity`), creative (the
+vanilla hit breaks it anyway).
+
 ## Fans pushing the player (macOS, offscreen)
 
 Seen working: a creative motor (16 RPM) driving an encased fan facing west; the player in survival standing three

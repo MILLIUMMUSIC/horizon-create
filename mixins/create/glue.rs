@@ -514,6 +514,43 @@ pub(super) fn right_click(
     }
 }
 
+/// `WrenchItem.wrenchInstaKillsMinecarts` for the window's player
+/// (`Game::attack_cart`): a wrench in the main hand of a player not in
+/// creative breaks the minecart it hits at once (`hurt` for 100).
+pub(super) fn wrench_attacks_cart(game: &mut Game<'_>) -> std::ops::ControlFlow<bool> {
+    use std::ops::ControlFlow::{Break, Continue};
+    if game.creative || !game.held().is_some_and(|s| &*s.item == WRENCH) {
+        return Continue(());
+    }
+    let Some((i, d)) = game.cart_hit() else {
+        return Continue(());
+    };
+    if !game.before_block(d) || game.mob_hit().is_some_and(|m| m.1 < d) {
+        return Continue(());
+    }
+    let area = game.carts[i].bounds();
+    game.hurt_cart(i, 100.0, false, false);
+    game.vehicle_attack_sounds(area, None);
+    game.swing_arm();
+    Break(true)
+}
+
+/// `native_attack_entity` (a guest's blow): the wrench breaks a minecart at
+/// once, as `wrench_attacks_cart` does for the window's player.
+pub(super) fn attack_entity(game: &mut Game<'_>, entity: i32, canceled: &mut bool) {
+    let Some(player) = game.native_acting_player() else {
+        return;
+    };
+    if player.game_mode == 1 || !game.held().is_some_and(|s| &*s.item == WRENCH) {
+        return;
+    }
+    let Some(i) = game.carts.iter().position(|c| c.id as i32 == entity) else {
+        return;
+    };
+    game.hurt_cart(i, 100.0, false, false);
+    *canceled = true;
+}
+
 /// `native_use_item`: Create's client answers SUCCESS to a click its block
 /// took and sends no `UseItem` after it; Horizon's client sends one (a
 /// bucket would then pour beside a tank). The use of the hand whose click
