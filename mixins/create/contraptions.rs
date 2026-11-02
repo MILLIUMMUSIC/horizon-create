@@ -1898,6 +1898,7 @@ fn draw_block(
         }),
         "create:fluid_tank" => Some("create:hz_tank_single_window"),
         "create:creative_fluid_tank" => Some("create:hz_creative_tank_single_window"),
+        "create:smart_chute" => Some("create:hz_part_smart_chute"),
         _ => None,
     };
     if let Some(h) = holder.and_then(|h| registry.default_state(h)) {

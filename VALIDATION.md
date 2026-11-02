@@ -1,5 +1,13 @@
 # Validation
 
+## Chute goggles, survival and the powered smart chute (macOS, offscreen)
+
+Seen working: wearing the goggles, a chute looked at shows "Chute Information", "No attached fans" and "-> Items
+move Downward"; a smart chute beside a redstone block is drawn with its powered model; a chute under a chute set
+to face east breaks and drops (the upper one then turns straight, having no chute below beside it).
+
+Not checked yet: the fan lines and "Contains" in the goggles, a powered smart chute losing its signal.
+
 ## Belt covers and riders (macOS, offscreen)
 
 Seen working: a belt along X (seven blocks, a creative motor at 16 RPM) with three segments cased in andesite and

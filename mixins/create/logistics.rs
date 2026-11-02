@@ -1222,6 +1222,26 @@ pub(super) fn draw_chute(
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
     let smart = is_smart_chute(game, pos);
+    if smart {
+        // SmartChuteBlock's blockstate: its model by `POWERED`.
+        let powered = slots.get(3).is_some_and(|(_, f)| f & 32 != 0);
+        let holder = if powered {
+            "create:hz_part_smart_chute_powered"
+        } else {
+            "create:hz_part_smart_chute"
+        };
+        if let Some(state) = game.pack.assets.registry.default_state(holder) {
+            let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+            let light = [[0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+                .iter()
+                .map(|d| game.world.light(pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]))
+                .fold(0u8, |a, l| (a & 0xF0).max(l & 0xF0) | (a & 0x0F).max(l & 0x0F));
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]));
+            let m = glam::Mat4::from_translation((corner - camera).as_vec3());
+            game.block_model_vertices(state, seed, m, packed, false, out);
+        }
+    }
     if smart && let Some((filter, _)) = slots.get(2).filter(|(id, _)| !id.is_empty()) {
         draw_smart_chute_filter(game, camera, pos, filter, out);
     }
@@ -1960,8 +1980,15 @@ pub(super) fn chutes_update(game: &mut Game<'_>, dimension: &str) {
         let Some((facing, shape)) = chute_at(game, p) else {
             continue;
         };
-        let template_up = prop(game, p, "facing").as_deref() == Some("up");
         let up = above(p);
+        // ChuteBlock.canSurvive: not under a chute leading off sideways
+        // (the block breaks, as `updateShape` leaves it).
+        if chute_at(game, up).is_some_and(|(f, _)| f != Dir::Down) {
+            let [x, y, z] = p;
+            game.native_run_command(&format!("execute in {dimension} run setblock {x} {y} {z} air destroy"));
+            continue;
+        }
+        let template_up = prop(game, p, "facing").as_deref() == Some("up");
         let around = ChuteAround {
             target_is_chute: is_chute(game, chute_target(p, facing)),
             inputs: [Dir::North, Dir::South, Dir::West, Dir::East]
@@ -2945,10 +2972,50 @@ pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
     let mut view = vec![super::create_machines::stack_view(chute.item.as_ref())];
     view.push((String::new(), (chute.position.clamp(0.0, 1.0) * 200.0) as u32));
     // FilteringRenderer: a smart chute's filter and amount.
-    if let Some((f, _)) = &smart {
-        view.push((f.item.clone().unwrap_or_default(), f.count));
+    match &smart {
+        Some((f, _)) => view.push((f.item.clone().unwrap_or_default(), f.count)),
+        None => view.push((String::new(), 0)),
     }
+    // For the goggles (`addToGoggleTooltip`): the fans' push and pull and
+    // which way items move.
+    let sign = |v: f32, up: u32, down: u32| if v > 0.0 { up } else if v < 0.0 { down } else { 0 };
+    let powered = smart.as_ref().is_some_and(|(_, p)| *p);
+    let flags = sign(push, 1, 2) | sign(pull, 4, 8) | if motion > 0.0 { 0 } else { 16 } | u32::from(powered) << 5;
+    view.push((String::new(), flags));
     super::create_machines::note_view(game, pos, view);
+}
+
+/// `ChuteBlockEntity.addToGoggleTooltip`, from what this client was told
+/// of the chute at `pos`, in Create's English (`create.tooltip.chute.*`).
+pub(super) fn chute_goggle_lines(game: &Game<'_>, pos: Pos) -> Option<Vec<(String, u32)>> {
+    if !block_name(game, pos).is_some_and(|n| is_chute_block(&n)) {
+        return None;
+    }
+    let slots = super::create_machines::client_slots(pos)?;
+    let flags = slots.get(3).map_or(16, |(_, f)| *f);
+    let (gray, yellow, green, white) = (0xAAAAAA, 0xFFFF55, 0x55FF55, 0xFFFFFF);
+    let mut lines = vec![("Chute Information".to_owned(), white)];
+    if flags & 15 == 0 {
+        lines.push((" No attached fans".to_owned(), gray));
+    }
+    // `pull` > 0 pulls from above; `push` > 0 pushes from below.
+    match flags & 12 {
+        4 => lines.push((" Fans pull from Above".to_owned(), gray)),
+        8 => lines.push((" Fans push from Above".to_owned(), gray)),
+        _ => {}
+    }
+    match flags & 3 {
+        1 => lines.push((" Fans push from Below".to_owned(), gray)),
+        2 => lines.push((" Fans pull from Below".to_owned(), gray)),
+        _ => {}
+    }
+    let way = if flags & 16 != 0 { "Downward" } else { "Upward" };
+    lines.push((format!(" -> Items move {way}"), yellow));
+    if let Some((id, count)) = slots.first().filter(|(id, c)| !id.is_empty() && *c > 0) {
+        let name = game.pack.names.display_item(id);
+        lines.push((format!(" Contains: {name} x{count}"), green));
+    }
+    Some(lines)
 }
 
 // ---- Saving ---------------------------------------------------------------------

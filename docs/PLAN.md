@@ -128,9 +128,12 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      straight, its filter on its four sides (clicked with the item, an empty hand clears it; drawn there) and its
      amount (the wheel, up to 64 at a time) kept in its block entity's data; it takes and hands on only what passes,
      stops while powered by redstone around it (read each tick: a template's `powered` would give off a signal), and
-     draws its item only at its bottom. Not yet: `canSurvive` (a chute under a diagonal one), the goggle tooltip,
-     the smart chute's powered model, hoppers inserting into a smart chute past its filter (Horizon's container
-     path), `ExtractionCountMode.EXACTLY`.
+     draws its item only at its bottom. A chute under one leading off sideways breaks
+     (`canSurvive`); the goggles show the chute's fans and which way items move and what it holds
+     (`addToGoggleTooltip`, the fans' push and pull sent with its item); the smart chute is drawn by its `POWERED`
+     model (blank blockstate, `hz_part_smart_chute[_powered]`). Engine gaps: hoppers inserting into a smart chute past
+     its filter (Horizon's container path), `ExtractionCountMode.EXACTLY` (set only on the value settings board: a
+     mod screen with a free cursor).
    - Andesite funnel (`funnel.rs`; no block entity): extracting (placed normally) puts one item every 8 ticks
      from the inventory behind in front of it, unless an item still lies there; collecting (placed sneaking, or
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt

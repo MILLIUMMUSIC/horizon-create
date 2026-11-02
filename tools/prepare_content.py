@@ -203,6 +203,9 @@ PARTIALS = {
     "cogwheel_shaftless": "create:block/cogwheel_shaftless",
     "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
     "mechanical_mixer_head": "create:block/mechanical_mixer/head",
+    # SmartChuteBlock's models, by `powered`.
+    "smart_chute": "create:block/smart_chute/block",
+    "smart_chute_powered": "create:block/smart_chute/block_powered",
     # PumpRenderer's cog.
     "mechanical_pump_cog": "create:block/mechanical_pump/cog",
     # ArmRenderer's and DeployerRenderer's partials.
@@ -749,6 +752,13 @@ def fit_chutes(content, names):
     decl["shapes"] = {"property": "facing", "values": {f: [box(0, 0, 0, 16, 16, 16)] for f in FACINGS}}
     decl.setdefault("properties", {})["light"] = 0
     write_json(blocks / "smart_chute.json", decl)
+    # Its model by `powered` is drawn by the native mod (from what the server
+    # read), from `hz_part_smart_chute` and `hz_part_smart_chute_powered`.
+    models = content / "assets" / "create" / "models" / "block"
+    write_json(models / "hz_blank_smart_chute.json", {"textures": {"particle": "create:block/smart_chute"}})
+    write_json(states / "smart_chute.json", {"variants": {
+        f"facing={f}": {"model": "create:block/hz_blank_smart_chute"} for f in FACINGS
+    }})
 
 
 # Fluid pipes: Create's `fluid_pipe` (six `north`...`down` booleans, set by

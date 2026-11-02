@@ -1900,7 +1900,10 @@ pub(super) fn hud(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
         Some(view) => goggle_lines(&view),
         None => match super::create_fluid_glue::client_fluids(dim_code(game.dim.id()), hit.pos) {
             Some((tanks, count)) => fluid_lines(&tanks, count),
-            None => return,
+            None => match super::create_logistics::chute_goggle_lines(game, hit.pos) {
+                Some(lines) => lines,
+                None => return,
+            },
         },
     };
     if lines.is_empty() {
