@@ -382,6 +382,8 @@ pub struct Arm<S> {
     pub last_input_index: i32,
     pub last_output_index: i32,
     pub redstone_locked: bool,
+    /// `goggles`: worn since goggles were used on it (drawn on its claw).
+    pub goggles: bool,
     lazy_tick_counter: i32,
     /// Something changed for saving and clients (`setChanged`, `sendData`).
     pub dirty: bool,
@@ -413,6 +415,7 @@ impl<S: ArmStack> Arm<S> {
             last_input_index: -1,
             last_output_index: -1,
             redstone_locked: false,
+            goggles: false,
             lazy_tick_counter: LAZY_TICK_RATE,
             dirty: false,
             previous_target: NO_TARGET,

@@ -1163,6 +1163,7 @@ fn write_arm(arm: &Arm<ItemStack>, pos: Pos, nbt: &mut Compound) {
     put(nbt, "LastInput", Tag::Int(arm.last_input_index));
     put(nbt, "LastOutput", Tag::Int(arm.last_output_index));
     put(nbt, "ScrollValue", Tag::Int(arm.selection_mode.code()));
+    put(nbt, "Goggles", Tag::Byte(i8::from(arm.goggles)));
 }
 
 fn read_arm(nbt: &Compound, pos: Pos, game: &Game<'_>) -> Arm<ItemStack> {
@@ -1178,6 +1179,7 @@ fn read_arm(nbt: &Compound, pos: Pos, game: &Game<'_>) -> Arm<ItemStack> {
     arm.last_input_index = get_int(nbt, "LastInput").unwrap_or(-1);
     arm.last_output_index = get_int(nbt, "LastOutput").unwrap_or(-1);
     arm.selection_mode = super::create_arm::SelectionMode::from_code(get_int(nbt, "ScrollValue").unwrap_or(0));
+    arm.goggles = matches!(nbt.get(&JavaString::from("Goggles")), Some(Tag::Byte(b)) if *b != 0);
     arm.dirty = false;
     arm
 }
@@ -1739,6 +1741,22 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         ARM => {
             if holding_wrench {
                 return false;
+            }
+            // ArmBlock.useItemOn: goggles go on an arm without them (the
+            // item stays in hand), once.
+            if game.held().is_some_and(|s| &*s.item == "create:goggles") {
+                let dim = game.dim.id().to_owned();
+                let put_on = with_state(|st| match st.arms.get_mut(&(dim, pos)) {
+                    Some(a) if !a.goggles => {
+                        a.goggles = true;
+                        a.dirty = true;
+                        true
+                    }
+                    _ => false,
+                });
+                if put_on {
+                    return true;
+                }
             }
             // ArmBlock.useItemOn: the held item back to the player.
             let taken = game
@@ -2485,6 +2503,7 @@ fn encode_arm(arm: &Arm<ItemStack>) -> Vec<u8> {
         out.extend_from_slice(&a.to_le_bytes());
     }
     push_item(&mut out, arm.held.as_ref());
+    out.push(u8::from(arm.goggles));
     out
 }
 
@@ -2716,6 +2735,7 @@ enum ClientView {
         angles: [f32; 4],
         previous: [f32; 4],
         held: String,
+        goggles: bool,
     },
     Deployer {
         state: State,
@@ -2781,10 +2801,12 @@ pub(super) fn from_server(data: &[u8]) {
                     Some((ClientView::Arm { angles: a, .. }, _)) => *a,
                     _ => angles,
                 };
+                let after = 18 + usize::from(v[17]);
                 ClientView::Arm {
                     angles,
                     previous,
                     held: item(&v[17..]),
+                    goggles: v.get(after).is_some_and(|g| *g != 0),
                 }
             }
             Some(3) if v.len() >= 15 => ClientView::Vault {
@@ -2882,6 +2904,7 @@ pub(super) fn draw(
                 angles,
                 previous,
                 held,
+                goggles,
             } => {
                 // LerpedFloat.getValue(partialTicks) between the last two.
                 let pt = ticks.min(1.0);
@@ -2911,7 +2934,13 @@ pub(super) fn draw(
                 // transformHead
                 m *= glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -15.0 / 16.0))
                     * glam::Mat4::from_rotation_x(deg(head - 45.0));
-                parts.push(("create:hz_part_arm_claw_base", m));
+                // ARM_CLAW_BASE_GOGGLES when it wears goggles.
+                let claw = if *goggles {
+                    "create:hz_part_arm_claw_base_goggles"
+                } else {
+                    "create:hz_part_arm_claw_base"
+                };
+                parts.push((claw, m));
                 let has_item = !held.is_empty();
                 let block_item = has_item && is_block_item(game, held);
                 for flip in [1.0f32, -1.0] {

@@ -5,7 +5,10 @@
 Seen working: with the mechanical arm item held, two depots clicked are outlined, one blue (extract), one yellow
 (deposit); a left click on the blue one takes it out of the selection (its outline goes, the depot stays).
 
-Not checked yet: the wrench showing a placed arm's points, the outlines going when the item is put away.
+Engineer's goggles used on a placed arm: the arm's data reads `Goggles: 1b` and the goggles stay in hand.
+
+Not checked yet: the wrench showing a placed arm's points, the outlines going when the item is put away, the
+goggles drawn on the claw (the screenshots only showed the arm from behind).
 
 ## Large water wheel placement (macOS, offscreen)
 

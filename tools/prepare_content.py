@@ -211,6 +211,7 @@ PARTIALS = {
     "arm_lower_body": "create:block/mechanical_arm/lower_body",
     "arm_upper_body": "create:block/mechanical_arm/upper_body",
     "arm_claw_base": "create:block/mechanical_arm/claw_base",
+    "arm_claw_base_goggles": "create:block/mechanical_arm/claw_base_goggles",
     "arm_upper_claw_grip": "create:block/mechanical_arm/upper_claw_grip",
     "arm_lower_claw_grip": "create:block/mechanical_arm/lower_claw_grip",
     "deployer_pole": "create:block/deployer/pole",
