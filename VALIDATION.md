@@ -1,5 +1,13 @@
 # Validation
 
+## Large water wheel placement (macOS, offscreen)
+
+Seen working: two large wheels along X side by side drawn (the second with the extension's longer axle); a large
+wheel clicked onto the stone floor with room around it is placed with its structure; one clicked where a stone
+block stands in its ring is not placed, the item stays in hand and "Clear Blocks for Placement" shows in red.
+
+Not checked yet: the extension's axle seen closely against the plain one, a wheel placed against a wall's side.
+
 ## The wrench on minecarts (macOS, offscreen)
 
 Seen working: in survival, one left click with the wrench on a minecart on a rail breaks it and drops it as an item;

@@ -61,6 +61,7 @@ struct Client {
     wheel: Option<Option<Vec<super::create_obj::Quad>>>,
     /// The large water wheel's.
     large_wheel: Option<Option<Vec<super::create_obj::Quad>>>,
+    large_wheel_extension: Option<Option<Vec<super::create_obj::Quad>>>,
 }
 
 static SERVER: Mutex<Option<Server>> = Mutex::new(None);
@@ -699,7 +700,10 @@ pub(super) fn use_item_on(
     face: [i32; 3],
     claimed: &mut bool,
 ) {
-    if super::create_logistics::use_connector(game, stack, pos) || super::create_arms::use_item_on(game, stack, pos) {
+    if super::create_logistics::use_connector(game, stack, pos)
+        || super::create_arms::use_item_on(game, stack, pos)
+        || large_wheel_blocked(game, stack, pos, face)
+    {
         *claimed = true;
         return;
     }
@@ -710,6 +714,56 @@ pub(super) fn use_item_on(
     if wrench(game, pos, face, sneaking) {
         *claimed = true;
     }
+}
+
+/// `LargeWaterWheelBlock.getStateForPlacement` and
+/// `LargeWaterWheelBlockItem.place`: a large water wheel is placed only
+/// where the eight blocks around it across its axis can be replaced; else
+/// nothing is placed and the player is told ("Clear Blocks for Placement").
+/// The axis is the clicked face's, as the chain's template places it, so
+/// Create's second try one block further (for a face across the axis) never
+/// applies. True when the placement was stopped.
+fn large_wheel_blocked(game: &mut Game<'_>, stack: &horizon_client::items::ItemStack, pos: Pos, face: [i32; 3]) -> bool {
+    if &*stack.item != "create:large_water_wheel" {
+        return false;
+    }
+    let replaceable = |game: &Game<'_>, p: Pos| {
+        let w = &game.world;
+        if !w.loaded(p[0], p[2]) || p[1] < w.shape.min_y || p[1] >= w.shape.max_y() {
+            return false;
+        }
+        let id = w.block(p[0], p[1], p[2]);
+        w.is_air(id) || game.res.facts().get(id).replaceable
+    };
+    // BlockItem.place: into the clicked block if it can be replaced, else
+    // beside it.
+    let at = if replaceable(game, pos) {
+        pos
+    } else {
+        [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]]
+    };
+    let axis = Dir::nearest(face).axis();
+    let mut room = true;
+    for x in -1..=1 {
+        for y in -1..=1 {
+            for z in -1..=1 {
+                let o = [x, y, z];
+                if o[axis as usize] != 0 || o == [0, 0, 0] {
+                    continue;
+                }
+                room &= replaceable(game, [at[0] + x, at[1] + y, at[2] + z]);
+            }
+        }
+    }
+    if room {
+        return false;
+    }
+    if let Some(player) = game.native_acting_player() {
+        let line = horizon_client::text::Text::translate("create.large_water_wheel.not_enough_space", &[])
+            .with_color(0xFF5D6C);
+        game.native_action_bar(player.uuid, line);
+    }
+    true
 }
 
 /// `WrenchItem.useOn` on an `IWrenchable` of ours: `onWrenched` turns it
@@ -1426,7 +1480,7 @@ pub(super) fn draw(
                 * glam::Mat4::from_axis_angle(unit(f.axis()), angle.to_radians())
                 * rotate_to_face_vertical(f)
                 * glam::Mat4::from_translation(-half);
-            draw_wheel(game, c, m, packed, view.aux.max(0) as u8, false, out);
+            draw_wheel(game, c, m, packed, view.aux.max(0) as u8, false, false, out);
         }
         if let Kind::LargeWaterWheel(a) = view.kind {
             let angle = render_angle(view.kind, pos, view.speed, time);
@@ -1434,7 +1488,18 @@ pub(super) fn draw(
                 * glam::Mat4::from_axis_angle(unit(a), angle.to_radians())
                 * rotate_to_face_vertical(Dir::positive_of(a))
                 * glam::Mat4::from_translation(-half);
-            draw_wheel(game, c, m, packed, view.aux.max(0) as u8, true, out);
+            // LargeWaterWheelBlock.EXTENSION (`updateShape`): another large
+            // wheel on its negative side draws the longer axle
+            // (`WaterWheelRenderer`'s LARGE_EXTENSION).
+            let n = Dir::positive_of(a).normal();
+            let behind = [pos[0] - n[0], pos[1] - n[1], pos[2] - n[2]];
+            let extension = game
+                .pack
+                .assets
+                .registry
+                .state(game.world.block(behind[0], behind[1], behind[2]))
+                .is_some_and(|s| s.name == "create:large_water_wheel");
+            draw_wheel(game, c, m, packed, view.aux.max(0) as u8, true, extension, out);
         }
     }
     drop(guard);
@@ -1564,9 +1629,12 @@ fn draw_wheel(
     light: u32,
     material: u8,
     large: bool,
+    extension: bool,
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
-    let (slot, id) = if large {
+    let (slot, id) = if large && extension {
+        (&mut c.large_wheel_extension, "create:block/large_water_wheel/block_extension")
+    } else if large {
         (&mut c.large_wheel, "create:block/large_water_wheel/block")
     } else {
         (&mut c.wheel, "create:block/water_wheel/wheel")
