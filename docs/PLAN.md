@@ -100,8 +100,12 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      a shaft per new end), and otherwise takes a casing off or turns a pulley back into a middle segment (its
      shaft back). The connector on an end's outer half (`useConnector`) adds a segment beyond it (of its colour),
      or joins the belt there (`beltStatesCompatible`; flipped to run the same way, `flipBelt`; its colour taken,
-     the items of both moved to the joined belt's start, the two shafts and the connector given back). Not yet:
-     vertical and sideways belts, covers (`setCovered`), the cased shapes, entities and players riding belts (`BeltMovementHandler`), tunnels, crushers, water
+     the items of both moved to the joined belt's start, the two shafts and the connector given back). Mobs and the window's player
+     standing on a belt ride it (`BeltMovementHandler.transportEntity`: `speed / 480` a tick along its axis, up and
+     down slopes, centred unless the player walks; not while sneaking; the server moves mobs, the window moves its
+     player as Create's client does). Not yet:
+     vertical and sideways belts, covers (`setCovered`), the cased shapes, riders slowed and blocked by other
+     entities, LAN guests riding belts, entities and players riding belts (`BeltMovementHandler`), tunnels, crushers, water
      bottles washing it, the slicer's outline feedback, sounds.
    - Chute (`chute.rs`: `ChuteBlockEntity`'s item and `handleDownwardOutput`/`handleInputFromAbove`; a mod block
      entity): items fall at 4 blocks a second, into the inventory below (containers, depots, belt segments), into

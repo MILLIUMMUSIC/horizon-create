@@ -74,6 +74,11 @@ fn client() -> MutexGuard<'static, Option<Client>> {
     CLIENT.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The speed this client was last told the kinetic block at `pos` turns at.
+pub(super) fn client_speed(pos: Pos) -> Option<f32> {
+    client().as_ref()?.view.blocks.get(&pos).map(|v| v.speed)
+}
+
 fn dim_code(id: &str) -> u8 {
     match id {
         "minecraft:the_nether" => 1,

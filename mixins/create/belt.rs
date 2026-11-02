@@ -1690,6 +1690,103 @@ pub fn wrench_slice(
     }
 }
 
+/// `BeltMovementHandler.transportEntity`: how far an entity with its feet
+/// at `at` on the belt segment at `pos` (turning at `speed` rpm) is moved
+/// this tick; none when the belt doesn't take it (too slow, not on top, off
+/// to a side). `walking`: a living entity moving by itself is not centred.
+/// Entities in the way aren't looked for.
+pub fn entity_motion(
+    state: BeltState,
+    pos: Pos,
+    speed: f32,
+    at: [f64; 3],
+    walking: bool,
+) -> Option<[f64; 3]> {
+    if speed.abs() < 1.0 {
+        return None;
+    }
+    if at[1] - 0.25 < f64::from(pos[1]) {
+        return None;
+    }
+    let axis = state.facing.axis();
+    let movement_facing = if speed < 0.0 {
+        Dir::positive_of(axis)
+    } else {
+        Dir::positive_of(axis).opposite()
+    };
+    let movement_speed = f64::from(speed / 480.0);
+    // Direction.get(axis == X ? NEGATIVE : POSITIVE, axis).
+    let direction = if axis == Axis::X {
+        Dir::West
+    } else {
+        Dir::South
+    };
+    let n = direction.normal();
+    let mut movement = [
+        f64::from(n[0]) * movement_speed,
+        0.0,
+        f64::from(n[2]) * movement_speed,
+    ];
+    let diff_center = if axis == Axis::Z {
+        f64::from(pos[0]) + 0.5 - at[0]
+    } else {
+        f64::from(pos[2]) + 0.5 - at[2]
+    };
+    if diff_center.abs() > 48.0 / 64.0 {
+        return None;
+    }
+    let sloped = state.slope != Slope::Horizontal;
+    let top = 13.0 / 16.0;
+    let height = at[1] - f64::from(pos[1]);
+    let (lower, upper) = if state.slope == Slope::Upward {
+        (Part::End, Part::Start)
+    } else {
+        (Part::Start, Part::End)
+    };
+    let on_slope = sloped
+        && (matches!(state.part, Part::Middle | Part::Pulley)
+            || state.part == lower && height < top
+            || state.part == upper && height > top);
+    let toward = movement_facing == state.facing;
+    let mut moving_down = on_slope
+        && state.slope
+            == if toward {
+                Slope::Downward
+            } else {
+                Slope::Upward
+            };
+    let mut moving_up = on_slope
+        && state.slope
+            == if toward {
+                Slope::Upward
+            } else {
+                Slope::Downward
+            };
+    if axis == Axis::Z {
+        std::mem::swap(&mut moving_down, &mut moving_up);
+    }
+    let along = if axis == Axis::X {
+        movement[0]
+    } else {
+        movement[2]
+    }
+    .abs();
+    if moving_up {
+        movement[1] += along;
+    }
+    if moving_down {
+        movement[1] -= along;
+    }
+    if !walking {
+        // Centred across the belt.
+        let c = Dir::positive_of(state.facing.clockwise(Axis::Y).axis()).normal();
+        let k = diff_center * movement_speed.abs().min(0.1) * 4.0;
+        movement[0] += f64::from(c[0]) * k;
+        movement[2] += f64::from(c[2]) * k;
+    }
+    Some(movement)
+}
+
 /// `BeltSlicer.beltStatesCompatible`: a belt `b` can join belt `a`.
 pub fn states_compatible(a: BeltState, b: BeltState) -> bool {
     match a.slope {
@@ -2611,5 +2708,33 @@ mod tests {
         t.belt_position = 0.5;
         inv.items.push(t);
         assert_eq!(inv.moved(3, true, 2)[0].belt_position, 4.5);
+    }
+
+    #[test]
+    fn belts_carry_what_stands_on_them() {
+        let east = BeltState {
+            facing: Dir::East,
+            slope: Slope::Horizontal,
+            part: Part::Middle,
+        };
+        // 48 rpm: 0.1 blocks a tick, towards -X for a positive speed.
+        let m = entity_motion(east, [0, 0, 0], 48.0, [0.5, 0.8125, 0.5], false).unwrap();
+        assert!((m[0] + 0.1).abs() < 1e-6 && m[2].abs() < 1e-9);
+        // Pulled back to the middle from a side.
+        let m = entity_motion(east, [0, 0, 0], 48.0, [0.5, 0.8125, 0.8], false).unwrap();
+        assert!(m[2] < 0.0);
+        // Too slow, under the top, off the side.
+        assert_eq!(
+            entity_motion(east, [0, 0, 0], 0.5, [0.5, 0.8125, 0.5], false),
+            None
+        );
+        assert_eq!(
+            entity_motion(east, [0, 0, 0], 48.0, [0.5, 0.1, 0.5], false),
+            None
+        );
+        assert_eq!(
+            entity_motion(east, [0, 0, 0], 48.0, [0.5, 0.8125, 1.4], false),
+            None
+        );
     }
 }

@@ -1,5 +1,12 @@
 # Validation
 
+## Riding belts (macOS, offscreen)
+
+Seen working: on a belt turned by a creative motor at 16 RPM, a pig and the player standing on it move along
+it, about two blocks in three seconds (`speed / 480` a tick), the way its items go. 179 unit tests pass (1 new).
+
+Not checked yet: sloped belts, the end of a belt (into a wall), centring from a side, sneaking, a walking player.
+
 ## Extending belts with the connector (macOS, offscreen)
 
 Seen working: the connector on the outer half of one belt's end joins it to the belt beyond (one five-block

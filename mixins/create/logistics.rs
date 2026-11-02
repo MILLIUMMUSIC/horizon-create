@@ -801,6 +801,7 @@ pub(super) fn belts_tick(game: &mut Game<'_>, dimension: &str, belts: &[(Pos, Be
         taken.insert(p, e);
     }
     take_dropped(game, &mut taken);
+    carry_mobs(game, dimension);
     let message = belt_updates(dimension, &mut taken, full);
     with_state(|s| {
         for (p, e) in taken {
@@ -819,6 +820,78 @@ pub(super) fn belts_tick(game: &mut Game<'_>, dimension: &str, belts: &[(Pos, Be
             }
         }
     }
+}
+
+/// The belt segment something with its feet at `at` stands on, and the
+/// segment's place.
+fn belt_standing(game: &Game<'_>, at: [f64; 3]) -> Option<(Pos, BeltState)> {
+    let x = at[0].floor() as i32;
+    let z = at[2].floor() as i32;
+    let y = at[1].floor() as i32;
+    [y, y - 1].into_iter().find_map(|y| belt_at(game, [x, y, z]).map(|b| ([x, y, z], b)))
+}
+
+/// Whether moving to `to` would walk into a block (one that isn't a belt).
+fn belt_blocked(game: &Game<'_>, to: [f64; 3]) -> bool {
+    let p = [to[0].floor() as i32, (to[1] + 0.05).floor() as i32, to[2].floor() as i32];
+    if belt_at(game, p).is_some() {
+        return false;
+    }
+    let state = game.world.block(p[0], p[1], p[2]);
+    !game.world.is_air(state) && game.res.facts().get(state).sturdy_full != 0
+}
+
+/// `BeltMovementHandler.transportEntity` for the level's mobs.
+fn carry_mobs(game: &mut Game<'_>, dimension: &str) {
+    let moves: Vec<(u32, [f64; 3])> = game
+        .native_mobs(dimension)
+        .into_iter()
+        .filter_map(|m| {
+            let (pos, state) = belt_standing(game, m.pos)?;
+            let speed = belt_speed(game, pos);
+            let motion = super::create_belt::entity_motion(state, pos, speed, m.pos, false)?;
+            let to = [0, 1, 2].map(|i| m.pos[i] + motion[i]);
+            (!belt_blocked(game, to)).then_some((m.id, to))
+        })
+        .collect();
+    for (id, to) in moves {
+        game.native_teleport_mob(dimension, id, to);
+    }
+}
+
+/// `BeltMovementHandler` for the window's own player (as Create moves it on
+/// its client): not while sneaking, not centred while walking.
+pub(super) fn belt_client_tick(game: &mut Game<'_>) {
+    use winit::keyboard::KeyCode as K;
+    if !game.native_window() || game.keys.contains(&K::ShiftLeft) {
+        return;
+    }
+    let Some(p) = game.player.as_ref() else {
+        return;
+    };
+    let at = [p.position.x, p.position.y, p.position.z];
+    let Some((pos, state)) = belt_standing(game, at) else {
+        return;
+    };
+    let Some(speed) = super::create_glue::client_speed(pos) else {
+        return;
+    };
+    let walking = [K::KeyW, K::KeyA, K::KeyS, K::KeyD].iter().any(|k| game.keys.contains(k));
+    let Some(motion) = super::create_belt::entity_motion(state, pos, speed, at, walking) else {
+        return;
+    };
+    let to = [0, 1, 2].map(|i| at[i] + motion[i]);
+    if belt_blocked(game, to) {
+        return;
+    }
+    let Some(p) = game.player.as_mut() else {
+        return;
+    };
+    p.position.x = to[0];
+    p.position.y = to[1];
+    p.position.z = to[2];
+    p.fall_distance = 0.0;
+    p.ground.on_ground = true;
 }
 
 /// `BeltBlock.updateEntityAfterFallOn` and `entityInside` for item
