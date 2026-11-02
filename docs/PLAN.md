@@ -132,7 +132,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt
      funnel (`getShapeForPosition`): pulling items off the belt into the inventory behind
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
-     wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. Not yet: the belt funnel's own model and flap. Brass funnels: part 3.
+     wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. A horizontal funnel's flaps are drawn at rest (`FunnelRenderer`, its blockstate). Not yet: the belt funnel's own model
+     and flap offsets, the flaps moving (`FunnelFlapPacket`). Brass funnels: part 3.
    Fluids (**compiled and unit-tested only, not yet run in the game**):
    - Fluid pipes (`fluids.rs`: `FluidTransportBehaviour`, `PipeConnection` with its three layers, `FlowSource`,
      `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`; `fluid_glue.rs`): straight pipes only, placed like a chain
@@ -217,7 +218,9 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      its sides; a window between tunnels, which the wrench closes and opens); it breaks off when the belt below
      goes. Its sides and flaps (`updateTunnelConnections`) are worked out each tick. A stack entering a junction
      along the belt puts one item onto each side with a flap that takes it, and waits while one doesn't
-     (`flapTunnelsAndCheckIfStuck`). Not yet: the flaps drawn and moving (`BeltTunnelRenderer`, `TunnelFlapPacket`),
+     (`flapTunnelsAndCheckIfStuck`). Flaps are drawn at rest (`BeltTunnelRenderer`/`FlapStuffs`: the content's blockstates add four flaps on the sides
+     `updateTunnelConnections` gives each shape). Not yet: the flaps moving (`TunnelFlapPacket`), hidden by a tunnel
+     or extended funnel beside,
      the belt's casing under it (belts have no casing here), placing it only on belts (`BeltTunnelItem`; one placed
      elsewhere breaks at once), display links (its item handler, `cap`, reaches the belt below it: funnels, chutes and arms insert and extract through it).
    - Brass tunnel (`tunnel.rs`, `logistics.rs`): the andesite tunnel's blocks, holding the stack that enters it when it

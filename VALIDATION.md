@@ -1,5 +1,12 @@
 # Validation
 
+## Tunnel and funnel flaps (macOS, offscreen)
+
+Seen working: an andesite tunnel on a belt shows its four flaps hanging in its openings along the belt; a
+horizontal brass funnel on a chest's side shows its flaps. Content only (blockstates), no native change.
+
+Not checked yet: the T and cross shapes' side flaps, brass tunnels, andesite funnels.
+
 ## Vertical and sideways belts (macOS, offscreen)
 
 Seen working: the connector between two shafts along X one above the other (four apart) makes a vertical belt

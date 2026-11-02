@@ -296,6 +296,51 @@ TUNNEL_ALONG_Z = [box(0, 0, 0, 2, 16, 16), box(14, 0, 0, 16, 16, 16), box(2, 10,
                   box(2, 0, 2, 14, 10, 14)]
 
 
+# FlapStuffs.renderFlaps at rest: four flaps `SEGMENT_STEP` apart, moved by
+# `X_OFFSET`, turned to the side (`horizontalAngle(side.getOpposite())` as a
+# blockstate's clockwise turn).
+FLAP_TURNS = {"north": 0, "east": 90, "south": 180, "west": 270}
+
+
+def fit_flaps(content, folder, z_offset=0.0):
+    models = content / "assets" / "create" / "models" / "block" / folder
+    path = models / "flap.json"
+    if not path.exists():
+        return None
+    flap = read_json(path)
+    elements = []
+    for segment in range(4):
+        dx = 0.075 - 3.05 * segment
+        for e in flap.get("elements", []):
+            e = json.loads(json.dumps(e))
+            e["from"][0] += dx
+            e["to"][0] += dx
+            e["from"][2] += z_offset
+            e["to"][2] += z_offset
+            if "rotation" in e:
+                e["rotation"]["origin"][0] += dx
+                e["rotation"]["origin"][2] += z_offset
+            elements.append(e)
+    write_json(models / "hz_flaps.json", {"textures": flap.get("textures", {}), "elements": elements})
+    return f"create:block/{folder}/hz_flaps"
+
+
+def tunnel_flap_sides(shape, axis):
+    """`BeltTunnelBlockEntity.updateTunnelConnections`' sides (a tunnel or
+    an extended belt funnel beside it isn't looked for)."""
+    sides = []
+    for side, d_axis, positive_dir in (("north", "z", False), ("south", "z", True),
+                                       ("west", "x", False), ("east", "x", True)):
+        if d_axis != axis:
+            positive = positive_dir != (d_axis == "z")
+            if shape in ("straight", "window", "closed"):
+                continue
+            if positive and shape == "t_left" or not positive and shape == "t_right":
+                continue
+        sides.append(side)
+    return sides
+
+
 def tunnel_blocks(kind):
     return {(f"{kind}_tunnel" if shape == "straight" else f"hz_{kind}_tunnel_{shape}"): shape
             for shape in TUNNEL_SHAPES}
@@ -513,6 +558,7 @@ def fit_logistics(content, names):
         names[f"block.create.{name}"] = names.get("block.create.belt", "Mechanical Belt")
 
     turns = {"north": 0, "east": 1, "south": 2, "west": 3}
+    funnel_flaps = fit_flaps(content, "funnel", 1.0)
     shapes = dict(FUNNEL_SHAPES)
     for f, q in turns.items():
         shapes[f] = [turn_y(b, q) for b in FUNNEL_WALL_NORTH]
@@ -539,8 +585,18 @@ def fit_logistics(content, names):
                 if props.get("extracting") == extracting and props.get("powered", "false") == "false" \
                         and props.get("waterlogged", "false") == "false" and "facing" in props:
                     variants[f"facing={props['facing']}"] = model
-            write_json(states / f"{name}.json", {"variants": variants})
+            # FunnelRenderer's flaps at rest on a horizontal funnel
+            # (`-getFlapOffset`: 1/16 out for a funnel not on a belt).
+            parts = []
+            for key, model in variants.items():
+                facing = key.split("=", 1)[1]
+                parts.append({"when": {"facing": facing}, "apply": model})
+                if funnel_flaps and facing in FLAP_TURNS:
+                    parts.append({"when": {"facing": facing},
+                                  "apply": {"model": funnel_flaps, "y": FLAP_TURNS[facing]}})
+            write_json(states / f"{name}.json", {"multipart": parts})
 
+    flaps = fit_flaps(content, "belt_tunnel")
     tunnel_shapes = {"z": TUNNEL_ALONG_Z}
     tunnel_shapes["x"] = [[z0, y0, x0, z1, y1, x1] for x0, y0, z0, x1, y1, z1 in TUNNEL_ALONG_Z]
     tunnel_shapes["y"] = tunnel_shapes["x"]
@@ -569,7 +625,17 @@ def fit_logistics(content, names):
             # A chain placed upright, until the native mod turns it.
             if "axis=x" in variants:
                 variants["axis=y"] = variants["axis=x"]
-            write_json(states / f"{name}.json", {"variants": variants})
+            # BeltTunnelRenderer's flaps at rest, on the sides
+            # `updateTunnelConnections` gives them.
+            parts = []
+            for key, model in variants.items():
+                axis = key.split("=", 1)[1]
+                parts.append({"when": {"axis": axis}, "apply": model})
+                if flaps:
+                    for side in tunnel_flap_sides(shape, axis):
+                        parts.append({"when": {"axis": axis},
+                                      "apply": {"model": flaps, "y": FLAP_TURNS[side]}})
+            write_json(states / f"{name}.json", {"multipart": parts})
 
     fit_chutes(content, names)
     fit_arms(content, names)
