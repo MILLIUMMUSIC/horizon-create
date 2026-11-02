@@ -40,6 +40,12 @@ name = "create_fan"
 source = "fan.rs"
 
 [[module]]
+id = "ct"
+file = "crates/horizon-client/src/game.rs"
+name = "create_ct"
+source = "ct.rs"
+
+[[module]]
 id = "tank"
 file = "crates/horizon-client/src/game.rs"
 name = "create_tank"

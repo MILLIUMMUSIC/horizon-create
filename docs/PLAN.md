@@ -157,12 +157,13 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      block goes (`splitMulti`: the controller keeps a block's worth, the rest handed out bottom up, all of it when the
      controller went), and look again for a multiblock the next tick. Their parts and fluid live in the native mod and
      are saved beside the world; each block is drawn with `FluidTankGenerator`'s model for its place and window
-     (blank blockstate, hidden `hz_tank_*` holders), the fluid as one box through the windows (`FluidTankRenderer`,
+     (blank blockstate, hidden `hz_tank_*` holders) with `FluidTankModel`'s connected textures (`ct.rs`) and the
+     sides toward joined blocks culled, the fluid as one box through the windows (`FluidTankRenderer`,
      none with windows shut), tiled a block at a time. The wrench toggles the whole tank's windows. Buckets only in
      creative, as `FluidTankBlock.useItemOn`. The creative fluid tank (`CreativeSmartFluidTank`): a bucket sets its
      fluid, pipes drain it endlessly and fills are voided; in survival an empty bucket takes it out and clears it.
      Not yet: the boiler (milestone 7, with the steam engine), tanks on moving structures (`FluidTankMovementBehavior`),
-     connected textures (`FluidTankModel`'s CT: engine gap, a model a mod builds per state), light from glowing fluids
+     light from glowing fluids
      (`luminosity`: engine gap, a template's light is fixed), comparators (engine gap: no block entity on the
      template), the fluid level's easing (`LerpedFloat`), sounds and particles on buckets.
    - Basin fluids: two input and two output tanks of 1000 mB (`SmartFluidTankBehaviour`, inputs keeping their
@@ -183,8 +184,11 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      creation queue), split when a block goes and join again on their next tick. Funnels, chutes and arms reach the
      whole vault in `SameSizeCombinedInvWrapper`'s slot order; hoppers reach one block's 20 slots. Placed against a
      lone vault it takes that vault's axis (the hook doesn't say which face was clicked), else the player's facing's;
-     the wrench from above or below takes it out of its vault and turns it. Not yet: `LARGE` and the connected
-     textures (the plain model is drawn for every block), comparators.
+     the wrench from above or below takes it out of its vault and turns it. Its blockstate is blank: the native mod
+     draws each block from hidden holders (`hz_vault_x`, `hz_vault_z`) with `ItemVaultCTBehaviour`'s connected
+     textures (`ct.rs`, `CTModel`'s sheets: medium, or large past 2 wide, the `LARGE` property), its part sent over
+     `create:arms`. On moving structures it is drawn without them. Not yet: comparators (engine gap: no comparator
+     hook for a mod block entity's slots).
    - Mechanical arm (`arm.rs`: `ArmBlockEntity`, `ArmInteractionPoint` and the types for depots, belts, basins,
      chutes, deployers, millstones and funnels, `ArmAngleTarget`; `arms.rs`): a mod block entity holding its item on
      an enchanting table's template, a kinetic block (`Kind::MechanicalArm`: a small cog, 2 su). Its phases, the
@@ -478,14 +482,15 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
 - Mod blocks can't take a `UseItem` back: Create's client answers SUCCESS to a click its block took and sends no
   `UseItem`; Horizon's client sends it anyway, so `glue::use_item` drops the main hand's use in the tick of a click a
   Create block took (one global note, not per player).
-- No connected textures for mod blocks (Create's `CTModel`, the tank's `FluidTankModel`): multiblock tanks show each
-  block's own frame.
+- No connected textures for chunk-meshed mod blocks (Create's `CTModel` needs the model per position): `ct.rs` has
+  the rules, and only blocks the native mod draws itself use them (tanks, vaults); casings, chassis and windows show
+  each block's own frame.
 - The fluid tank's template (glass) has no block entity: its contents live in the native mod beside the world
   (lost if the native mod is removed), hoppers and comparators see nothing. Drawn fluids are opaque (the native
   draw hook takes vertices on one layer) and water takes the plains' colour, not the biome's.
 - No template has a facing and a block entity without uses of its own (a dispenser's would dispense a mod's
   items on redstone): the deployer keeps its state beside the world and hoppers can't reach it; nor six facings and
-  `axis_along_first` (a block per value). The vault's `LARGE` and the arm's `ceiling` have no template property to
+  `axis_along_first` (a block per value). The arm's `ceiling` has no template property to
   live in.
 - Native mods can't act as a player (`DeployerFakePlayer`): the deployer places blocks through Horizon's own
   placement code and breaks them through the level's, which a module inside `crate::game` reaches; items' uses,

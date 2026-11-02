@@ -13,7 +13,12 @@ bucket takes a lava bucket out once and empties it, and a water bucket on a regu
 (Create: "in Survival Mode Fluids cannot be added or taken manually"). A bucket's click on a tank no longer also
 pours a source next to it (the client's `UseItem` after a click Create took is dropped).
 
-Not checked yet: 3-wide tanks, two tanks of different fluids side by side staying apart, pipes and pumps on a
+Connected textures (`ct.rs`): a 1×1×2 tank shows one frame over both blocks; a 3×3×6 item vault placed by
+`setblock` draws as one vault with the large sheets (frame and rivets running across its blocks), each face lit by
+the block it faces.
+
+Not checked yet: 3-wide tanks, a 2-wide vault (medium sheets), vaults along X, vaults and tanks on moving
+structures (drawn plain), two tanks of different fluids side by side staying apart, pipes and pumps on a
 multiblock tank (they reach the controller's tank through any block), a tank 32 high.
 
 ## Goggles on tanks (macOS, offscreen)

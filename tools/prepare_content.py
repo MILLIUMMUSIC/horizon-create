@@ -814,10 +814,18 @@ def fit_arms(content, names):
     decl.pop("shapes", None)
     decl.setdefault("properties", {})["light"] = 0
     write_json(blocks / "item_vault.json", decl)
+    # Blank: the native mod draws each vault block (ItemVaultCTBehaviour's
+    # connected textures need its multiblock) from hidden holders, the model
+    # turned along X or Z as Create's blockstate turns it.
+    models = content / "assets" / "create" / "models" / "block"
+    write_json(models / "hz_blank_item_vault.json", {"textures": {"particle": "create:block/vault/vault_front_small"}})
     write_json(states / "item_vault.json", {"variants": {
-        f"facing={f}": ({"model": "create:block/item_vault", "y": y} if y else {"model": "create:block/item_vault"})
-        for f, y in VAULT_TURNS.items()
+        f"facing={f}": {"model": "create:block/hz_blank_item_vault"} for f in VAULT_TURNS
     }})
+    for along, y in (("x", 90), ("z", 0)):
+        write_json(blocks / f"hz_vault_{along}.json", {"template": "minecraft:stone", "item": False})
+        variant = {"model": "create:block/item_vault", "y": y} if y else {"model": "create:block/item_vault"}
+        write_json(states / f"hz_vault_{along}.json", {"variants": {"": variant}})
     original = read_json(states / "deployer.json") if (states / "deployer.json").exists() else None
     base = read_json(blocks / "deployer.json") if (blocks / "deployer.json").exists() else {}
     for name, along in DEPLOYERS.items():

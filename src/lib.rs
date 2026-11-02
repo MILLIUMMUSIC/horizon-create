@@ -12,6 +12,8 @@ pub mod create_belt;
 pub mod create_chute;
 #[path = "../mixins/create/contraption.rs"]
 pub mod create_contraption;
+#[path = "../mixins/create/ct.rs"]
+pub mod create_ct;
 #[path = "../mixins/create/deployer.rs"]
 pub mod create_deployer;
 #[path = "../mixins/create/fan.rs"]

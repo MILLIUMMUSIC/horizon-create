@@ -882,7 +882,7 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
         let origin = (corner - camera).as_vec3();
         let boxes: Vec<(FluidStack, [f32; 6])> = match shown {
             Shown::Tank(t) => {
-                draw_tank_block(game, &tanks, pos, &t, origin, packed, out);
+                draw_tank_block(game, &tanks, pos, &t, origin, out);
                 // FluidTankRenderer: the controller draws the fluid, through
                 // its windows only.
                 if t.controller != pos || !t.window || t.fluid.is_empty() {
@@ -920,7 +920,6 @@ fn draw_tank_block(
     pos: Pos,
     t: &ShownTank,
     origin: glam::Vec3,
-    light: u32,
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
     let c = tanks.get(&t.controller).unwrap_or(t);
@@ -941,8 +940,124 @@ fn draw_tank_block(
     let Some(state) = state else {
         return;
     };
+    // FluidTankCTBehaviour.connectsTo: the same kind of tank, one multiblock.
+    let connected = |other: Pos| {
+        tanks
+            .get(&other)
+            .is_some_and(|o| o.controller == t.controller && o.creative == t.creative)
+    };
+    // FluidTankModel.standard / creative: the side, top and inner shifts.
+    let (side, top, inner) = if t.creative {
+        ("create:block/creative_fluid_tank", "create:block/creative_casing", "create:block/creative_casing")
+    } else {
+        ("create:block/fluid_tank", "create:block/fluid_tank_top", "create:block/fluid_tank_inner")
+    };
+    draw_ct_model(
+        game,
+        state,
+        pos,
+        glam::Mat4::from_translation(origin),
+        // FluidTankModel's CullData: the quads culled toward a joined block
+        // beside it are left out (none above or below).
+        |cull| {
+            let n = cull.normal();
+            cull.axis() != Axis::Y && connected([pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]])
+        },
+        // FluidTankCTBehaviour.getShift: the inner texture on Y faces, else
+        // the side's on horizontal faces and the top's on vertical ones.
+        |facing, name| {
+            let original = if facing.axis() == Axis::Y && name == inner {
+                inner
+            } else if facing.axis() == Axis::Y {
+                top
+            } else {
+                side
+            };
+            let (up, right) = super::create_ct::default_frame(facing);
+            (name == original).then(|| (format!("{original}_connected"), up, right))
+        },
+        connected,
+        out,
+    );
+}
+
+/// `CTModel`: the model of `state` drawn at `m` (each face lit by the
+/// block it faces, as the chunk mesh lights it), each quad culled toward a
+/// direction `culled` names left out, and each face whose sprite `shift`
+/// answers for (its connected sprite and the face's up and right) moved onto
+/// the tile of that `RECTANGLE` sheet its neighbours (`connected`) pick.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_ct_model(
+    game: &Game<'_>,
+    state: horizon_world::registry::BlockStateId,
+    pos: Pos,
+    m: glam::Mat4,
+    culled: impl Fn(Dir) -> bool,
+    shift: impl Fn(Dir, &str) -> Option<(String, Dir, Dir)>,
+    connected: impl Fn(Pos) -> bool,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    use super::create_ct::{CtType, build_context, target_uv};
+    use horizon_assets::model::Direction as D;
     let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]));
-    game.block_model_vertices(state, seed, glam::Mat4::from_translation(origin), light, false, out);
+    let Ok(models) = game.pack.render.model_catalog.collect_seeded(state, seed) else {
+        return;
+    };
+    let dir = |d: D| match d {
+        D::Down => Dir::Down,
+        D::Up => Dir::Up,
+        D::North => Dir::North,
+        D::South => Dir::South,
+        D::West => Dir::West,
+        D::East => Dir::East,
+    };
+    let sprites = &game.gui.atlas.sprites;
+    for (_, model) in &models {
+        for face in &model.faces {
+            let Some(name) = game.pack.layer_names.get(&face.layer) else {
+                continue;
+            };
+            let Some(s) = sprites.get(name) else {
+                continue;
+            };
+            if face.quad.cull.map(dir).is_some_and(&culled) {
+                continue;
+            }
+            let facing = dir(face.quad.facing);
+            let ct = shift(facing, name).and_then(|(target, up, right)| {
+                let t = sprites.get(&target)?;
+                let c = build_context(CtType::Rectangle, pos, facing, up, right, &connected);
+                Some((t, CtType::Rectangle.index(&c)))
+            });
+            let shade: u32 = match face.quad.facing {
+                D::Up => 255,
+                D::Down => 127,
+                D::North | D::South => 204,
+                D::West | D::East => 153,
+            };
+            let color = 0xFF00_0000 | shade << 16 | shade << 8 | shade;
+            let n = facing.normal();
+            let light = packed_light(game, [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]]);
+            for k in 0..4 {
+                let p = face.quad.positions[k];
+                let mut uv = face.quad.uv[k];
+                let (mut u0, mut v0, mut du, mut dv) = (s.u0, s.v0, s.u1 - s.u0, s.v1 - s.v0);
+                if let Some((t, index)) = ct {
+                    uv = target_uv(uv, index, CtType::Rectangle);
+                    (u0, v0, du, dv) = (t.u0, t.v0, t.u1 - t.u0, t.v1 - t.v0);
+                }
+                out.push(horizon_client::mesher::Vertex {
+                    normal: [0; 4],
+                    pos: m.transform_point3(glam::Vec3::from_array(p)).to_array(),
+                    uv: [u0 + uv[0] * du, v0 + uv[1] * dv],
+                    layer: 0,
+                    color,
+                    light,
+                    glint_uv: [0.0, 0.0],
+                });
+            }
+        }
+    }
 }
 
 /// `FluidRenderer.renderFluidBox` over a box many blocks wide and high

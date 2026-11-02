@@ -1889,6 +1889,21 @@ fn draw_block(
         let n = d.normal();
         glam::Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32).abs()
     };
+    // Vaults and tanks draw from hidden holders too (blank blockstates):
+    // without their multiblock's connected textures here.
+    let holder = match s.name.as_str() {
+        "create:item_vault" => Some(match s.properties.get("facing").map(String::as_str) {
+            Some("east" | "west") => "create:hz_vault_x",
+            _ => "create:hz_vault_z",
+        }),
+        "create:fluid_tank" => Some("create:hz_tank_single_window"),
+        "create:creative_fluid_tank" => Some("create:hz_creative_tank_single_window"),
+        _ => None,
+    };
+    if let Some(h) = holder.and_then(|h| registry.default_state(h)) {
+        game.block_model_vertices(h, seed, m, packed, false, out);
+        return;
+    }
     // Rotating blocks keep their model on a hidden block of their own.
     if matches!(s.name.as_str(), "create:shaft" | "create:cogwheel" | "create:large_cogwheel") {
         let holder = format!("create:hz_{}", &s.name["create:".len()..]);

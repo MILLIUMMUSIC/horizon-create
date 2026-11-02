@@ -90,7 +90,9 @@ through `arms.rs`'s item handler (`Inv::Psi`).
 Fluid tanks join into multiblocks in `tank.rs` (ConnectivityHandler with
 fluids, windows, the creative tank; the vault's copy in `vault.rs` has no
 fluids); their blockstates are blank and `fluid_glue.rs` draws each block's
-model from hidden `hz_tank_*` holders.
+model from hidden `hz_tank_*` holders, with Create's connected textures
+(`ct.rs`, `fluid_glue::draw_ct_model`); vaults are drawn the same way from
+their part sent in `create:arms` (view kind 3).
 Fluids: `fluids.rs` (rules) reaches every fluid holder through the
 `FluidAccess` trait; `fluid_glue.rs` answers it (tanks kept in the native
 mod, basins' tanks in their block entity's data). Pipes and pumps tick from

@@ -328,6 +328,16 @@ fn vault_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
         entity,
     };
     super::create_vault::tick(&mut level, pos);
+    // What clients draw of it: its axis, controller and width (the
+    // connected textures, `ItemVaultCTBehaviour`).
+    let part = read_part(vault_axis(game, pos), &entity.nbt);
+    let mut view = vec![3u8, u8::from(part.axis == Axis::X)];
+    for v in part.controller_of(pos) {
+        view.extend_from_slice(&v.to_le_bytes());
+    }
+    view.push(part.width.clamp(0, 255) as u8);
+    let dim = game.dim.id().to_owned();
+    with_state(|s| note(s, &dim, pos, view));
 }
 
 /// The vault blocks whose slots make the vault at `pos`, in slot order.
@@ -2322,7 +2332,7 @@ fn send(game: &mut Game<'_>, dimension: &str, full: bool) {
                     && game.world.loaded(p[0], p[2])
                     && !matches!(
                         block_name(game, *p).as_deref(),
-                        Some(ARM | DEPLOYER | DEPLOYER_ALONG)
+                        Some(ARM | DEPLOYER | DEPLOYER_ALONG | VAULT)
                     )
             })
             .map(|(_, p)| *p)
@@ -2634,6 +2644,11 @@ enum ClientView {
         reach: f32,
         held: String,
     },
+    Vault {
+        along_x: bool,
+        controller: Pos,
+        width: i32,
+    },
 }
 
 static CLIENT: Mutex<Option<HashMap<Pos, (ClientView, Instant)>>> = Mutex::new(None);
@@ -2691,6 +2706,11 @@ pub(super) fn from_server(data: &[u8]) {
                     held: item(&v[17..]),
                 }
             }
+            Some(3) if v.len() >= 15 => ClientView::Vault {
+                along_x: v[1] != 0,
+                controller: [int(&v[2..]), int(&v[6..]), int(&v[10..])],
+                width: i32::from(v[14]),
+            },
             Some(2) if v.len() >= 16 => ClientView::Deployer {
                 state: State::from_code(v[1]),
                 punch: v[2] != 0,
@@ -2852,6 +2872,53 @@ pub(super) fn draw(
                         * glam::Mat4::from_scale(glam::Vec3::splat(scale));
                     draw_item(game, held, im, centre, light, ARM, out);
                 }
+            }
+            ClientView::Vault {
+                along_x,
+                controller,
+                width,
+            } => {
+                // The vault's blockstate is blank: its model, turned along
+                // its axis, with ItemVaultCTBehaviour's connected textures
+                // (`LARGE` past 2 wide picks the large sheets).
+                let holder = if *along_x { "create:hz_vault_x" } else { "create:hz_vault_z" };
+                let Some(state) = model_state(game, holder) else {
+                    continue;
+                };
+                let axis = if *along_x { Axis::X } else { Axis::Z };
+                let large = *width > 2;
+                // ItemVaultCTBehaviour.connectsTo: the same state, one vault.
+                let connected = |other: Pos| {
+                    matches!(views.get(&other), Some((ClientView::Vault { along_x: x, controller: c, width: w }, _))
+                        if x == along_x && c == controller && (*w > 2) == large)
+                };
+                super::create_fluid_glue::draw_ct_model(
+                    game,
+                    state,
+                    *pos,
+                    origin,
+                    |_| false,
+                    |facing, name| {
+                        let kind = if facing.axis() == axis {
+                            "front"
+                        } else if facing == Dir::Up {
+                            "top"
+                        } else if facing == Dir::Down {
+                            "bottom"
+                        } else {
+                            "side"
+                        };
+                        let original = format!("create:block/vault/vault_{kind}_small");
+                        if name != original {
+                            return None;
+                        }
+                        let sheet = if large { "large" } else { "medium" };
+                        let (up, right) = super::create_ct::vault_frame(facing, axis);
+                        Some((format!("create:block/vault/vault_{kind}_{sheet}"), up, right))
+                    },
+                    connected,
+                    out,
+                );
             }
             ClientView::Deployer {
                 state,
