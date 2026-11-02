@@ -45,7 +45,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      per 16 items (`create:splashing`, `create:haunting`, vanilla smoking, smelting/blasting, items without a
      smelting result burnt unless fire resistant); a depot's held item in it (or a block below a horizontal
      current) processed the same way. Rebuilt every 30 ticks and when its speed changes. The propeller partial
-     turns at five times the speed (80 to 1280). Mobs in the current are pushed (from rest: Horizon gives no mob's motion), set on fire, hurt (vanilla damage types standing in for Create's), blinded and slowed, horses haunted into skeleton horses; players in it are hurt and blinded through commands. Not yet: pushing players (no hook moves them), the air particles and the fan's sound (Create's own particle and sound: Horizon plays vanilla sounds only), chutes (part of the chute's list). A nozzle on a fan's face pushes mobs and items around it away or draws them in (`NozzleBlockEntity`), and processing hands back inputs' crafting remainders (`applyRecipeOn(.., true)`: pressing, splashing, haunting, deploying).
+     turns at five times the speed (80 to 1280). Mobs in the current are pushed (from rest: Horizon gives no mob's motion), set on fire, hurt (vanilla damage types standing in for Create's), blinded and slowed, horses haunted into skeleton horses; players in it are hurt and blinded through commands, and pushed on the window's own side (`fan_client_tick`, from the current its client builds; an eighth as hard sneaking, not when flying in creative), as by a nozzle. Engine gaps: the air particles and the fan's sound (Create's own particle type and sound event: Horizon has no mod particles and plays vanilla sounds only); a guest player on a LAN server isn't pushed (only the window's player moves on its own side). A nozzle on a fan's face pushes mobs and items around it away or draws them in (`NozzleBlockEntity`), and processing hands back inputs' crafting remainders (`applyRecipeOn(.., true)`: pressing, splashing, haunting, deploying).
    - Mechanical mixer and basin: the mixer (4 su, a small cog, needs 30 RPM) runs `MechanicalMixerBlockEntity`'s
      40-tick cycle with its `processingTicks` (`log2(512 / speed) * 15 + 1` at the bottom) over a basin two below;
      the basin is a mod block entity with 9 input and 9 output slots (hoppers in and out, items thrown in, an empty
@@ -404,6 +404,20 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
 
 ## Engine gaps to raise upstream (as hook point requests)
 
+Upstream issues for these gaps (horizon-rust/horizon), checked 2026-11-03. Closed after the pinned `aa27eca`, so
+usable once the pin moves: #5290 (a mod block declares its own state properties: belts, pipes, funnels, tunnels,
+tanks, the vault's `LARGE`, the arm's `ceiling`), #5549 (block entities for mod blocks whatever their template),
+#5497 (a mod block's comparator output), #5482 and #5483 (mod particle types), #6138 (random ticks on any mod
+block), #1040 (mod capability: storage). Still open: #5548 (drawing baked models at a block every frame),
+#5550 (render shape, composed shapes, a state chosen on placement), #4169 (connected textures), #6301 and #5553
+(mod fluids), #5556 (fake players, mod entity types, moving groups of blocks), #5212 and #6300 (mod entity and
+block types from code), #7465 (a mod particle's own behaviour). None found for mod sound events.
+
+Decision (2026-11-03): the pin stays at `aa27eca` while the "Not yet" items that work there are ported; moving it
+(about 6800 commits, the mixins checked again) is a step of its own after that, and the gaps the issues above closed
+come back as work then, ported as Create does them.
+
+
 - A mod-drawn screen outside a container menu, with a free cursor: Create 6's value settings board (hold right
   click on a value box, pick a value with the mouse) has nowhere to open. The value box takes the mouse wheel
   instead (`native_wheel`, as Create 0.5 did).
@@ -414,8 +428,9 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   top instead of inside.
 - Container insertion rules: hoppers fill a basin's input slots as any container's, not as `BasinInventory`
   (one slot per item kind).
-- Pushing and hurting mobs and players from a native mod's server tick (the fan's current): `native_push_mob`
-  reaches mobs only, players not at all.
+- Pushing players from a native mod's server tick (the fan's current): `native_push_mob` reaches mobs only; the
+  window's own player is pushed from `native_tick`, guests on a LAN server not at all.
+- Mod particle types and mod sound events: native mods spawn vanilla particles and play vanilla sounds only.
 
 - Draw hook for mod block entities (today: a mixin into `transient_block_geometry`), and a per-state "hide from
   the chunk mesh" flag (today: blank blockstate models plus hidden `hz_*` blocks holding the real models).

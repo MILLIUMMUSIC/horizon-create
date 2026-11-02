@@ -1,5 +1,13 @@
 # Validation
 
+## Fans pushing the player (macOS, offscreen)
+
+Seen working: a creative motor (16 RPM) driving an encased fan facing west; the player in survival standing three
+blocks in front of it is pushed west (velocity about −0.009 a tick, about 0.6 blocks in three seconds on stone).
+
+Not checked yet: sneaking (an eighth as hard), creative flight (not pushed), a nozzle pushing the player, a fan
+blowing up lifting the player.
+
 ## Fluid tank multiblocks (macOS, offscreen)
 
 Seen working: twelve tanks placed by `setblock` as a 2×2 base three high join into one tank (the goggles show

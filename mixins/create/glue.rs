@@ -75,6 +75,28 @@ fn client() -> MutexGuard<'static, Option<Client>> {
 }
 
 /// The speed this client was last told the kinetic block at `pos` turns at.
+/// The fans this client was told of in its dimension: position, facing,
+/// speed; and the dimension's code.
+pub(super) fn client_fans(game: &Game<'_>) -> (u8, Vec<(Pos, Dir, f32)>) {
+    let dim = dim_code(game.dim.id());
+    let guard = client();
+    let fans = guard
+        .as_ref()
+        .filter(|c| c.view.dim == dim)
+        .map(|c| {
+            c.view
+                .blocks
+                .iter()
+                .filter_map(|(p, v)| match v.kind {
+                    Kind::EncasedFan(f) => Some((*p, f, v.speed)),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (dim, fans)
+}
+
 pub(super) fn client_speed(pos: Pos) -> Option<f32> {
     client().as_ref()?.view.blocks.get(&pos).map(|v| v.speed)
 }

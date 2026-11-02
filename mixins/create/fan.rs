@@ -399,12 +399,21 @@ pub fn aligned_distance_to_face(p: [f64; 3], block: Pos, face: Dir) -> f64 {
     (p[k] - plane).abs()
 }
 
-/// `AirCurrent.tickAffectedEntities`' push on an entity (not sneaking) at
-/// `distance` from the fan's centre, moving at `motion`: its new motion.
-pub fn push(motion: [f64; 3], flow: Dir, speed: f32, distance: f64, max_distance: f32) -> [f64; 3] {
+/// `AirCurrent.tickAffectedEntities`' push on an entity at `distance` from
+/// the fan's centre, moving at `motion`: its new motion (a sneaking entity
+/// is pushed an eighth as hard).
+pub fn push(
+    motion: [f64; 3],
+    flow: Dir,
+    speed: f32,
+    distance: f64,
+    max_distance: f32,
+    sneaking: bool,
+) -> [f64; 3] {
     let n = flow.normal();
+    let sneak_modifier = if sneaking { 4096.0 } else { 512.0 };
     let acceleration =
-        (f64::from(speed.abs()) / 512.0 / (distance / f64::from(max_distance))) as f32;
+        (f64::from(speed.abs()) / sneak_modifier / (distance / f64::from(max_distance))) as f32;
     let max = 5.0;
     let mut out = motion;
     for k in 0..3 {
@@ -820,7 +829,9 @@ mod tests {
 
     #[test]
     fn the_air_pushes_items_along() {
-        let v = push([0.0; 3], Dir::East, 256.0, 2.0, 20.0);
+        let v = push([0.0; 3], Dir::East, 256.0, 2.0, 20.0, false);
+        let sneaking = push([0.0; 3], Dir::East, 256.0, 2.0, 20.0, true);
+        assert!(sneaking[0] > 0.0 && sneaking[0] < v[0]);
         // 256 / 512 / (2 / 20) = 5 a tick, an eighth of it at once.
         assert!((v[0] - 5.0 / 8.0).abs() < 1e-6);
         assert_eq!((v[1], v[2]), (0.0, 0.0));

@@ -1687,7 +1687,7 @@ static HAUNTING: std::sync::Mutex<Vec<((String, u32), i32)>> = std::sync::Mutex:
 /// current: mobs pushed along (from rest: Horizon gives no mob's motion),
 /// then each processing type's `affectEntity`, through vanilla commands
 /// (`damage`, `effect`, `data`) with vanilla damage types standing in for
-/// Create's. Players aren't pushed (no hook moves them).
+/// Create's. Players are pushed on their own side (`fan_client_tick`).
 fn fan_entities(game: &mut Game<'_>, dimension: &str, pos: Pos, facing: Dir, speed: f32, current: &AirCurrent) {
     let flow = if current.pushing { facing } else { facing.opposite() };
     let centre = pos.map(|v| f64::from(v) + 0.5);
@@ -1699,7 +1699,7 @@ fn fan_entities(game: &mut Game<'_>, dimension: &str, pos: Pos, facing: Dir, spe
             continue;
         }
         let d = ((0..3).map(|k| (m.pos[k] - centre[k]).powi(2)).sum::<f64>()).sqrt().max(0.01);
-        let v = super::create_fan::push([0.0; 3], flow, speed, d, current.max_distance);
+        let v = super::create_fan::push([0.0; 3], flow, speed, d, current.max_distance, false);
         game.native_push_mob(dimension, m.id, v);
         let Some(kind) = current.type_at(aligned_distance_to_face(m.pos, pos, facing) as f32) else {
             continue;
@@ -1774,9 +1774,91 @@ fn fan_entities(game: &mut Game<'_>, dimension: &str, pos: Pos, facing: Dir, spe
     }
 }
 
+/// The window's fans' currents, as its client builds them: by position,
+/// the current, the speed it was built for and the ticks until it is
+/// rebuilt (`EncasedFanBlockEntity.tick` runs on clients too).
+type ClientFans = HashMap<Pos, (AirCurrent, f32, i32)>;
+static CLIENT_FANS: std::sync::Mutex<Option<(u8, ClientFans)>> = std::sync::Mutex::new(None);
+
+/// `AirCurrent.tickAffectedEntities` and `NozzleBlockEntity.tick` for the
+/// window's own player, where the player moves (`native_tick`): the fans
+/// the kinetics told this client of push it along their current (an eighth
+/// as hard when sneaking, not when flying in creative), and their nozzles
+/// push it away or draw it in.
+pub(super) fn fan_client_tick(game: &mut Game<'_>) {
+    if !game.native_window() {
+        return;
+    }
+    let (dim, fans) = super::create_glue::client_fans(game);
+    let mut guard = CLIENT_FANS.lock().unwrap_or_else(|e| e.into_inner());
+    let c = guard.get_or_insert_with(|| (dim, HashMap::new()));
+    if c.0 != dim {
+        *c = (dim, HashMap::new());
+    }
+    c.1.retain(|p, _| fans.iter().any(|f| f.0 == *p));
+    let Some(p) = game.player.as_ref() else {
+        return;
+    };
+    let creative_flying = p.flying && game.mode_id() == 1;
+    let at = [p.position.x, p.position.y, p.position.z];
+    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    let mut motion = [p.velocity.x, p.velocity.y, p.velocity.z];
+    let mut pushed = false;
+    for (pos, facing, speed) in fans {
+        let (current, built, cooldown) = c.1.entry(pos).or_insert_with(|| (AirCurrent::default(), f32::NAN, 0));
+        *cooldown -= 1;
+        if *cooldown < 0 || *built != speed || current.direction != Some(facing) {
+            *cooldown = FAN_BLOCK_CHECK_RATE;
+            *built = speed;
+            current.rebuild(&FanWorld { game }, pos, facing, speed);
+        }
+        if speed == 0.0 {
+            continue;
+        }
+        // NozzleBlockEntity: every entity in range, players too.
+        let n = facing.normal();
+        let nozzle = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+        let is_nozzle = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(nozzle[0], nozzle[1], nozzle[2]))
+            .is_some_and(|s| s.name == "create:nozzle" && s.properties.get("facing").map(String::as_str) == Some(facing.name()));
+        if is_nozzle {
+            let centre = nozzle.map(|v| f64::from(v) + 0.5);
+            let diff = [0, 1, 2].map(|k| at[k] - centre[k]);
+            let range = super::create_fan::max_distance(speed);
+            if let Some(v) = super::create_fan::nozzle_push(diff, range, current.pushing, false) {
+                motion = [0, 1, 2].map(|k| motion[k] + v[k]);
+                pushed = true;
+            }
+        }
+        if current.max_distance <= 0.0 || creative_flying {
+            continue;
+        }
+        let in_current = current.touches([at[0] - 0.3, at[1], at[2] - 0.3, at[0] + 0.3, at[1] + 1.8, at[2] + 0.3]);
+        if !in_current {
+            continue;
+        }
+        let flow = if current.pushing { facing } else { facing.opposite() };
+        let centre = pos.map(|v| f64::from(v) + 0.5);
+        let d = ((0..3).map(|k| (at[k] - centre[k]).powi(2)).sum::<f64>()).sqrt().max(0.01);
+        motion = super::create_fan::push(motion, flow, speed, d, current.max_distance, sneaking);
+        pushed = true;
+    }
+    drop(guard);
+    if !pushed {
+        return;
+    }
+    if let Some(p) = game.player.as_mut() {
+        p.velocity = horizon_core::geometry::Vec3::new(motion[0], motion[1], motion[2]);
+        p.fall_distance = 0.0;
+    }
+}
+
 /// `NozzleBlockEntity`: a nozzle on the fan's face pushes mobs and items
-/// around it away (or draws them in) as far as the current reaches; players
-/// aren't moved (no hook moves them), sight isn't checked.
+/// around it away (or draws them in) as far as the current reaches (players
+/// on their own side, `fan_client_tick`); sight isn't checked.
 fn fan_nozzle(game: &mut Game<'_>, dimension: &str, pos: Pos, facing: Dir, speed: f32, current: &AirCurrent) {
     let n = facing.normal();
     let at = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
@@ -1832,7 +1914,7 @@ fn fan_items(
         }
         let distance_old = ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2) + (p[2] - centre[2]).powi(2)).sqrt();
         let v = d.velocity;
-        let v = push([v.x, v.y, v.z], flow, speed, distance_old, current.max_distance);
+        let v = push([v.x, v.y, v.z], flow, speed, distance_old, current.max_distance, false);
         game.dropped[i].velocity = horizon_core::geometry::Vec3::new(v[0], v[1], v[2]);
         let distance = aligned_distance_to_face(p, pos, facing);
         let Some(kind) = current.type_at(distance as f32) else {
