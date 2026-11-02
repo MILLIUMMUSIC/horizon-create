@@ -195,8 +195,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      speed and keeps its drops; on a belt or depot below, deploying recipes apply one item per cycle as
      `BeltDeployerCallbacks` does (results not locked; the held item used, damaged or kept). Arms, funnels and chutes
      reach its hand and overflow. Pole, hand and held item are drawn as `DeployerRenderer` does, its timer running on
-     the client between updates. Not yet: other item uses and blocks' own uses, entities in front (feeding, shearing,
-     attacking), fist bumps, the filter slot, sandpaper polishing and sequenced assembly, the
+     the client between updates. Punching, a mob in the block in front takes the fist's 1 plus the held item's
+     attack damage (`player.attack`, through Horizon's mob hooks; no armour, knockback, enchantments or tool wear,
+     its drops falling where it dies). Not yet: other item uses and blocks' own uses, using items on entities
+     (feeding, shearing), fist bumps, the filter slot, sandpaper polishing and sequenced assembly, the
      crafting remainder of a damaged tool, hoppers into it (no block entity), its goggle lines, sounds and particles.
    Part 3, brass funnel and belt tunnels (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md
    lists the in-game checks):

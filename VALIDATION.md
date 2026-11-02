@@ -1,5 +1,13 @@
 # Validation
 
+## Deployers punching mobs (macOS, offscreen)
+
+Built and checked by `tools/horizon.py check`/`build` only. In the game a deployer facing east was set to punch
+with the wrench (its save says `punch`), but the creative motor beside it never joined its network in that rig,
+so the pig in front was not hit: unverified.
+
+Not checked yet: a punching deployer hurting and killing a mob in front, the held sword's damage, a mob's drops.
+
 ## Item vaults as contraption storage (macOS, offscreen)
 
 Built and checked by `tools/horizon.py check`/`build` only: `storage_items` now reads and writes captured item

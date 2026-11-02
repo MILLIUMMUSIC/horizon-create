@@ -1824,8 +1824,11 @@ impl DeployerWorld<ItemStack> for Front<'_, '_> {
         if self.transported_below() {
             return;
         }
-        // Entities in front (using items on mobs, punching them) aren't
-        // ported: no native hook lets a mod act as a player on an entity.
+        // A mob in the block in front is punched (`player.attack`); using
+        // items on mobs isn't ported (no hook interacts as a player).
+        if mode == Mode::Punch && self.punch_mob(held.as_ref()) {
+            return;
+        }
         match mode {
             Mode::Punch => self.punch(held, inventory),
             Mode::Use => self.use_item(held),
@@ -1834,6 +1837,41 @@ impl DeployerWorld<ItemStack> for Front<'_, '_> {
 }
 
 impl Front<'_, '_> {
+    /// `DeployerHandler.activate`'s entities in the clicked block: one at
+    /// random takes the fist's 1 plus the held item's attack damage (no
+    /// armour, knockback, enchantments or tool wear here; its drops fall
+    /// where it dies). True when there was one.
+    fn punch_mob(&mut self, held: Option<&ItemStack>) -> bool {
+        let t = self.clicked().map(f64::from);
+        let inside: Vec<(u32, f32)> = self
+            .game
+            .native_mobs(&self.dim)
+            .into_iter()
+            .filter(|m| {
+                m.pos[0] + 0.3 > t[0]
+                    && m.pos[0] - 0.3 < t[0] + 1.0
+                    && m.pos[2] + 0.3 > t[2]
+                    && m.pos[2] - 0.3 < t[2] + 1.0
+                    && m.pos[1] + 1.8 > t[1]
+                    && m.pos[1] < t[1] + 1.0
+            })
+            .map(|m| (m.id, m.health))
+            .collect();
+        if inside.is_empty() {
+            return false;
+        }
+        let roll = horizon_core::random::RandomSource::next_int_bound(&mut self.game.world.random, inside.len() as i32);
+        let (id, health) = inside[roll.unwrap_or(0).max(0) as usize % inside.len()];
+        let bonus = held.and_then(|h| self.game.items().items.get(&*h.item).map(|i| i.attack_damage)).unwrap_or(0.0);
+        let left = health - (1.0 + bonus);
+        if left <= 0.0 {
+            self.game.native_kill_mob(&self.dim, id);
+        } else {
+            self.game.native_set_mob_health(&self.dim, id, left);
+        }
+        true
+    }
+
     /// `DeployerHandler.activate`'s left click: breaking progress, then the
     /// block harvested into the fake player's inventory.
     fn punch(&mut self, held: &mut Option<ItemStack>, inventory: &mut Vec<ItemStack>) {
