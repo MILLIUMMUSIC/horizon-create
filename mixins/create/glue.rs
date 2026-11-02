@@ -1566,12 +1566,15 @@ pub(super) fn hud(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
         if c.view.dim != dim_code(game.dim.id()) {
             return;
         }
-        let Some(v) = c.view.blocks.get(&hit.pos).copied() else {
-            return;
-        };
-        v
+        c.view.blocks.get(&hit.pos).copied()
     };
-    let lines = goggle_lines(&view);
+    let lines = match view {
+        Some(view) => goggle_lines(&view),
+        None => match super::create_fluid_glue::client_fluids(dim_code(game.dim.id()), hit.pos) {
+            Some((tanks, count)) => fluid_lines(&tanks, count),
+            None => return,
+        },
+    };
     if lines.is_empty() {
         return;
     }
@@ -1614,6 +1617,34 @@ fn value_tip(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
         game.native_text(batch, text, [x, y], *rgb, true);
         y += 12.0;
     }
+}
+
+/// `IHaveGoggleInformation.containedFluidTooltip` for a fluid handler of
+/// `count` tanks: each fluid held, its amount and its tank's capacity.
+fn fluid_lines(tanks: &[(super::create_fluids::FluidStack, i32)], count: usize) -> Vec<(String, u32)> {
+    let held: Vec<_> = tanks.iter().filter(|(f, _)| f.amount > 0 && !f.fluid.is_empty()).collect();
+    if held.is_empty() && count > 1 {
+        return Vec::new();
+    }
+    let mut lines = vec![("Fluid Container".to_owned(), WHITE)];
+    for (f, capacity) in &held {
+        // The fluid's name from its id (Create's are only names here).
+        let path = f.fluid.rsplit(':').next().unwrap_or(&f.fluid);
+        let name: Vec<String> = path
+            .split('_')
+            .map(|w| {
+                let mut c = w.chars();
+                c.next().map(|h| h.to_uppercase().chain(c).collect()).unwrap_or_default()
+            })
+            .collect();
+        lines.push((format!(" {}", name.join(" ")), GRAY));
+        lines.push((format!(" {}mB / {}mB", f.amount, capacity), GOLD));
+    }
+    if held.is_empty() {
+        let capacity = tanks.first().map_or(0, |(_, c)| *c);
+        lines.push((format!(" Capacity: {capacity}mB"), GRAY));
+    }
+    lines
 }
 
 /// `KineticBlockEntity.addToTooltip` and `addToGoggleTooltip`, and the

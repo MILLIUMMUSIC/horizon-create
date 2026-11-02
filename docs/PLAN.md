@@ -134,7 +134,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
      wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. A horizontal funnel's flaps are drawn at rest (`FunnelRenderer`, its blockstate). Not yet: the belt funnel's own model
      and flap offsets, the flaps moving (`FunnelFlapPacket`). Brass funnels: part 3.
-   Fluids (**compiled and unit-tested only, not yet run in the game**):
+   Fluids (run in the game: see VALIDATION.md):
    - Fluid pipes (`fluids.rs`: `FluidTransportBehaviour`, `PipeConnection` with its three layers, `FlowSource`,
      `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`; `fluid_glue.rs`): straight pipes only, placed like a chain
      along the clicked face's axis (engine gap below), open at both ends. Flows start where there is pressure, take
@@ -164,7 +164,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    - Not yet: fluids without a block in Horizon (Create's honey, chocolate, tea, builder's tea, milk, potions) and
      their pipe effects (`OpenPipeEffectHandler`), corners, junctions and encased, glass and smart pipes, valves,
      pipe rims and connection pieces (`PipeAttachmentModel`), particles and sounds, the item drain, the spout, the
-     hose pulley, portable fluid interfaces, goggles' tank contents.
+     hose pulley, portable fluid interfaces. The goggles show a tank's and a basin's fluids and amounts
+     (`containedFluidTooltip`).
    Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
    checks):
    - Item vault (`vault.rs`: `ItemVaultBlock`, `ItemVaultBlockEntity`, `ConnectivityHandler`; `arms.rs`): a mod block

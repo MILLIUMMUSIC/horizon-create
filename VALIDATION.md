@@ -1,5 +1,12 @@
 # Validation
 
+## Goggles on tanks (macOS, offscreen)
+
+Seen working: a fluid tank filled with a water bucket, looked at with the goggles, shows "Fluid Container",
+"Water" and "1000mB / 8000mB" beside the crosshair.
+
+Not checked yet: an empty tank's capacity line, a basin's fluids, Create's own fluid names.
+
 ## Deployers punching mobs (macOS, offscreen)
 
 Seen working: a deployer facing east (16 RPM) switched to punch with the wrench hits a pig in the block two in

@@ -649,6 +649,22 @@ pub(super) fn save_all() {
 // ---- Client -------------------------------------------------------------
 
 /// `native_net_from_server` on `create:fluids`.
+/// What this client was last told the tank or basin at `pos` holds, with
+/// each tank's capacity (`IFluidHandler` for the goggles): none for
+/// another block.
+pub(super) fn client_fluids(dimension: u8, pos: Pos) -> Option<(Vec<(FluidStack, i32)>, usize)> {
+    let guard = CLIENT.lock().unwrap_or_else(|e| e.into_inner());
+    let (dim, shown) = guard.as_ref()?;
+    if *dim != dimension {
+        return None;
+    }
+    Some(match shown.get(&pos)? {
+        Shown::Tank(f) => (vec![(f.clone(), TANK_CAPACITY)], 1),
+        // Two input and two output tanks.
+        Shown::Basin(fs) => (fs.iter().map(|f| (f.clone(), super::create_fluids::BASIN_TANK)).collect(), 4),
+    })
+}
+
 pub(super) fn from_server(data: &[u8]) {
     let Some((dim, full, entries)) = decode(data) else {
         log::debug!("Create: a bad fluids message");
