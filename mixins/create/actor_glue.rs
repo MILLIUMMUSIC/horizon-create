@@ -294,7 +294,15 @@ pub(super) fn storage_items<R>(
                 parts.push((i, key, name, items.len(), None));
                 items
             }
-            Some((key, BlockEntity::Mod(m))) if vault => {
+            Some((key, BlockEntity::Mod(mut m))) if vault => {
+                // Saved data leaves out trailing empty slots: all of its
+                // container's back.
+                let mut container = None;
+                super::create_machines::block_entity_container(&name, &mut container);
+                let slots = container.map_or(m.items.len(), |c| c.slots);
+                if m.items.len() < slots {
+                    m.items.resize(slots, None);
+                }
                 let items = m.items.clone();
                 parts.push((i, key, name, items.len(), Some(m)));
                 items

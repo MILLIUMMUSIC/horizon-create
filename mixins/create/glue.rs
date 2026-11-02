@@ -858,10 +858,14 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
     if value == current {
         return;
     }
-    if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(pos, value)) {
-        log::debug!("Create: scroll value: {e}");
-        return;
-    }
+    // Sent once the wheel rests (`send_scrolled_values`), as Create's value
+    // board sends when let go: each change of a motor's speed counts towards
+    // its network's flicker score, and a quick scroll would break it.
+    PENDING_VALUES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(pos, (value, std::time::Instant::now()));
     // Shown at once; the server's update follows.
     if let Some(slot) = slot {
         super::create_machines::client_set_count(pos, slot, value as u32);
@@ -870,6 +874,37 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
     let mut guard = client();
     if let Some(v) = guard.as_mut().and_then(|c| c.view.blocks.get_mut(&pos)) {
         v.aux = value as i16;
+    }
+}
+
+/// Values scrolled on this client, waiting for the wheel to rest.
+static PENDING_VALUES: Mutex<Option<HashMap<Pos, (i32, std::time::Instant)>>> = Mutex::new(None);
+
+/// The window's tick: scrolled values half a second (10 ticks) after the
+/// last step go to the server.
+pub(super) fn send_scrolled_values(game: &mut Game<'_>) {
+    if !game.native_window() {
+        return;
+    }
+    let ready: Vec<(Pos, i32)> = {
+        let mut guard = PENDING_VALUES.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(pending) = guard.as_mut() else {
+            return;
+        };
+        let ready: Vec<(Pos, i32)> = pending
+            .iter()
+            .filter(|(_, (_, at))| at.elapsed().as_millis() >= 500)
+            .map(|(p, (v, _))| (*p, *v))
+            .collect();
+        for (p, _) in &ready {
+            pending.remove(p);
+        }
+        ready
+    };
+    for (pos, value) in ready {
+        if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(pos, value)) {
+            log::debug!("Create: scroll value: {e}");
+        }
     }
 }
 

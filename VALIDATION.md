@@ -2,19 +2,29 @@
 
 ## Deployers punching mobs (macOS, offscreen)
 
-Built and checked by `tools/horizon.py check`/`build` only. In the game a deployer facing east was set to punch
-with the wrench (its save says `punch`), but the creative motor beside it never joined its network in that rig,
-so the pig in front was not hit: unverified.
+Seen working: a deployer facing east (16 RPM) switched to punch with the wrench hits a pig in the block two in
+front once per cycle (10 health down by 1 each time) until it dies and drops its porkchops; with an iron sword
+handed to it, a pig takes 6 a hit and dies in two. 181 unit tests pass (2 new).
 
-Not checked yet: a punching deployer hurting and killing a mob in front, the held sword's damage, a mob's drops.
+Not checked yet: armour, other weapons, several mobs in the block.
+
+## Scrolling a creative motor no longer breaks what it drives (macOS, offscreen)
+
+Seen working: a creative motor driving a shaft and an encased fan, scrolled 40 steps down and 60 up with the mouse
+wheel, keeps them (the shaft used to break): the value goes to the server once the wheel rests (half a second),
+not at every step, which counted towards Create's flicker score (`MAX_FLICKER_SCORE`). Before, a quick scroll
+broke shafts, fans and pistons in its network.
 
 ## Item vaults as contraption storage (macOS, offscreen)
 
-Built and checked by `tools/horizon.py check`/`build` only: `storage_items` now reads and writes captured item
-vaults' slots (their mod block entities' data) as it does chests'.
+Seen once: a piston pushing a slime block with an item vault on it and a drill drilled a stone, but the
+cobblestone dropped: Horizon's saved data leaves out a block entity's trailing empty slots, so the captured empty
+vault had none. Fixed (the vault's slots are filled back to its container's count); the rerun didn't happen
+because the test piston wouldn't assemble again (it turns at 16 RPM, 64 su, but stays retracted).
 
-Not checked yet: anything in the game (a drill or harvester filling a vault on a moving structure, a portable
-storage interface emptying it, the items still in the vault when it is put back).
+Not checked yet: the fix in the game (a drill or harvester filling a vault on a moving structure, a portable
+storage interface emptying it, the items still in the vault when it is put back); why that rig's piston stays
+retracted.
 
 ## Tunnel and funnel flaps (macOS, offscreen)
 

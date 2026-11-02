@@ -2563,6 +2563,38 @@ mod tests {
     }
 
     #[test]
+    fn scrolling_a_motor_through_zero_breaks_nothing() {
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.place([1, 64, 0], Kind::Shaft(Axis::X));
+        r.place([2, 64, 0], Kind::EncasedFan(Dir::East));
+        r.ticks(2);
+        let mut v = 16;
+        while v > -16 {
+            v = motor_scroll_step(v, false);
+            assert!(r.k.set_motor_speed(&mut r.world, [0, 64, 0], v));
+            r.ticks(1);
+            assert!(r.world.destroyed.is_empty(), "at {v}");
+            assert_eq!(r.speed([2, 64, 0]), v as f32, "at {v}");
+        }
+    }
+
+    #[test]
+    fn a_motor_jumping_to_the_other_way_breaks_nothing() {
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.place([1, 64, 0], Kind::Shaft(Axis::X));
+        r.place([2, 64, 0], Kind::EncasedFan(Dir::East));
+        r.ticks(2);
+        for v in [-64, 48, -12, 256] {
+            assert!(r.k.set_motor_speed(&mut r.world, [0, 64, 0], v));
+            r.ticks(1);
+            assert!(r.world.destroyed.is_empty(), "at {v}");
+            assert_eq!(r.speed([2, 64, 0]), v as f32, "at {v}");
+        }
+    }
+
+    #[test]
     fn hand_crank_turns_for_ten_ticks() {
         let mut r = Rig::new();
         // Crank facing up: its shaft points down, into the shaft below it.
