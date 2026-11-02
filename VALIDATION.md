@@ -17,14 +17,12 @@ broke shafts, fans and pistons in its network.
 
 ## Item vaults as contraption storage (macOS, offscreen)
 
-Seen once: a piston pushing a slime block with an item vault on it and a drill drilled a stone, but the
-cobblestone dropped: Horizon's saved data leaves out a block entity's trailing empty slots, so the captured empty
-vault had none. Fixed (the vault's slots are filled back to its container's count); the rerun didn't happen
-because the test piston wouldn't assemble again (it turns at 16 RPM, 64 su, but stays retracted).
+Seen working: a mechanical piston (16 RPM) pushing a slime block with an item vault on it and a drill east: the
+drill breaks the stone in its way and the cobblestone goes into the vault, still there when the vault is put
+back at the end. (The first try dropped it: Horizon's saved data leaves out trailing empty slots, so a captured
+empty vault had none; they are filled back to its container's count now.)
 
-Not checked yet: the fix in the game (a drill or harvester filling a vault on a moving structure, a portable
-storage interface emptying it, the items still in the vault when it is put back); why that rig's piston stays
-retracted.
+Not checked yet: a portable storage interface emptying a vault on a structure, a vault of several blocks.
 
 ## Tunnel and funnel flaps (macOS, offscreen)
 
