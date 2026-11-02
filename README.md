@@ -21,7 +21,7 @@ ported, unit-tested and checked in the game in part. See
 [docs/PLAN.md](docs/PLAN.md) for what is ported and what comes next, and [VALIDATION.md](VALIDATION.md) for what was
 checked how.
 
-## Progress: about 55 %
+## Progress: about 56 %
 
 An estimate, updated with every push to `main`: each milestone of [docs/PLAN.md](docs/PLAN.md) has a weight (its
 share of Create's gameplay and of the porting work), and the total is the weighted share of what is ported. Blocks
@@ -36,7 +36,7 @@ horizon-port-pack carries over without behaviour (decoration, plain items) count
 | 5. Contraptions | 20 % | 86 % | 17.2 % |
 | 6. Trains | 15 % | 0 % | 0.0 % |
 | 7. Everything else (blaze burner and heat, crafters, saws, drills, spout and drain, gauges, redstone, packages, Ponder...) | 25 % | 2 % | 0.5 % |
-| **Total** | 100 % | | **55 %** |
+| **Total** | 100 % | | **56 %** |
 
 Not done in a milestone counts against it: its "Not yet" lists in docs/PLAN.md (corner pipes, valves, smart chutes,
 the brass tunnel's other modes, heated recipes...). "Done" means ported and at least partly checked in the game.
