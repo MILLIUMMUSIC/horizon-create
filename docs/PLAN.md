@@ -105,7 +105,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      down slopes, centred unless the player walks; not while sneaking; the server moves mobs, the window moves its
      player as Create's client does). Not yet:
      vertical and sideways belts, covers (`setCovered`), the cased shapes, riders slowed and blocked by other
-     entities, LAN guests riding belts, entities and players riding belts (`BeltMovementHandler`), tunnels, crushers, water
+     entities, LAN guests riding belts, tunnels, crushers, water
      bottles washing it, the slicer's outline feedback, sounds.
    - Chute (`chute.rs`: `ChuteBlockEntity`'s item and `handleDownwardOutput`/`handleInputFromAbove`; a mod block
      entity): items fall at 4 blocks a second, into the inventory below (containers, depots, belt segments), into
