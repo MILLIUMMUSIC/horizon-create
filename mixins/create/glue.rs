@@ -266,7 +266,9 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         // The creative motors' scroll values (`ScrollValueBehaviour.setValue`),
         // and brass funnels' amounts (their filter's count).
         for (pos, value) in values {
-            if super::create_logistics::is_brass_funnel(game, pos) {
+            if super::create_logistics::is_brass_funnel(game, pos)
+                || super::create_logistics::smart_chute_filter_side(game, pos, Dir::North)
+            {
                 amounts.push((pos, value));
                 continue;
             }
@@ -389,6 +391,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_logistics::belts_removed(game, &removed_belts);
     for (pos, value) in amounts {
         super::create_logistics::set_funnel_amount(game, pos, value);
+        super::create_logistics::set_smart_chute_amount(game, pos, value);
     }
     super::create_logistics::changed(game, dimension, &changed_here);
     super::create_contraptions::contacts_changed(game, &changed_here);
@@ -782,17 +785,24 @@ fn looked_at_value_box(game: &Game<'_>) -> Option<(Pos, i32)> {
 
 /// A brass funnel's filter slot under the crosshair and its amount
 /// (`FilteringBehaviour.count`): the wheel steps it.
-fn looked_at_funnel_amount(game: &Game<'_>) -> Option<(Pos, i32)> {
+/// A smart chute's filter (on its sides) too: its amount is its view's
+/// third slot. The slot comes back with the amount.
+fn looked_at_funnel_amount(game: &Game<'_>) -> Option<(Pos, i32, usize)> {
     let hit = game.pick()?;
-    if !super::create_logistics::is_brass_funnel(game, hit.pos)
-        || !super::create_logistics::funnel_filter_side(game, hit.pos, Dir::nearest(hit.face))
+    let face = Dir::nearest(hit.face);
+    let slot = if super::create_logistics::is_brass_funnel(game, hit.pos)
+        && super::create_logistics::funnel_filter_side(game, hit.pos, face)
     {
+        0
+    } else if super::create_logistics::smart_chute_filter_side(game, hit.pos, face) {
+        2
+    } else {
         return None;
-    }
+    };
     let count = super::create_machines::client_slots(hit.pos)
-        .and_then(|s| s.first().map(|(_, c)| *c))
+        .and_then(|s| s.get(slot).map(|(_, c)| *c))
         .unwrap_or(64);
-    Some((hit.pos, count as i32))
+    Some((hit.pos, count as i32, slot))
 }
 
 /// `ValueSettingsInputHandler.canInteract` on this client.
@@ -823,16 +833,16 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         }
         return;
     }
-    let Some((pos, current, funnel)) = looked_at_value_box(game)
-        .map(|(p, c)| (p, c, false))
-        .or_else(|| looked_at_funnel_amount(game).map(|(p, c)| (p, c, true)))
+    let Some((pos, current, slot)) = looked_at_value_box(game)
+        .map(|(p, c)| (p, c, None))
+        .or_else(|| looked_at_funnel_amount(game).map(|(p, c, s)| (p, c, Some(s))))
     else {
         return;
     };
     *claimed = true;
     let mut value = current;
     for _ in 0..(steps.abs().round() as usize).max(1) {
-        value = if funnel {
+        value = if slot.is_some() {
             // FilteringBehaviour's count: 1 to 64.
             (value + if steps > 0.0 { 1 } else { -1 }).clamp(1, 64)
         } else {
@@ -847,8 +857,8 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         return;
     }
     // Shown at once; the server's update follows.
-    if funnel {
-        super::create_machines::client_set_count(pos, value as u32);
+    if let Some(slot) = slot {
+        super::create_machines::client_set_count(pos, slot, value as u32);
         return;
     }
     let mut guard = client();

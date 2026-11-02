@@ -272,7 +272,7 @@ pub fn filter_slot(state: FunnelState, side: Dir) -> ([f32; 3], f32, f32) {
 }
 
 /// `VecHelper.rotateCentered` about Y.
-fn rotate_centered_y(v: [f32; 3], degrees: f32) -> [f32; 3] {
+pub fn rotate_centered_y(v: [f32; 3], degrees: f32) -> [f32; 3] {
     let (sin, cos) = degrees.to_radians().sin_cos();
     let (x, z) = (v[0] - 0.5, v[2] - 0.5);
     [x * cos + z * sin + 0.5, v[1], z * cos - x * sin + 0.5]

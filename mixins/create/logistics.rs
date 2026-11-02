@@ -228,14 +228,62 @@ fn chute_block(shape: ChuteShape) -> &'static str {
     }
 }
 
+pub(super) const SMART_CHUTE: &str = "create:smart_chute";
+
 pub(super) fn is_chute_block(name: &str) -> bool {
-    ChuteShape::ALL.iter().any(|s| chute_block(*s) == name)
+    name == SMART_CHUTE || ChuteShape::ALL.iter().any(|s| chute_block(*s) == name)
+}
+
+fn is_smart_chute(game: &Game<'_>, pos: Pos) -> bool {
+    block_name(game, pos).as_deref() == Some(SMART_CHUTE)
+}
+
+/// A smart chute's `FilteringBehaviour` (kept in its block entity's data),
+/// and whether it is powered (`canActivate`, noted by its own tick): none
+/// for another chute.
+fn smart_filter(game: &Game<'_>, pos: Pos) -> Option<(Filter, bool)> {
+    use horizon_client::containers::BlockEntity as B;
+    if !is_smart_chute(game, pos) {
+        return None;
+    }
+    let Some(B::Mod(m)) = game.world.block_entities.get(&(pos[0], pos[1], pos[2])) else {
+        return Some((Filter::default(), false));
+    };
+    Some(read_smart_filter(m))
+}
+
+fn read_smart_filter(m: &ModBlockEntity) -> (Filter, bool) {
+    let item = match m.nbt.get(&JavaString::from("Filter")) {
+        Some(Tag::String(t)) => Some(t.to_string_lossy()).filter(|t| !t.is_empty()),
+        _ => None,
+    };
+    let count = match m.nbt.get(&JavaString::from("FilterAmount")) {
+        Some(Tag::Int(v)) => (*v).clamp(1, 64) as u32,
+        _ => 64,
+    };
+    let powered = matches!(m.nbt.get(&JavaString::from("Powered")), Some(Tag::Byte(1)));
+    (Filter { item, count }, powered)
+}
+
+/// `canAcceptItem` of the chute at `pos`: empty, and for a smart chute
+/// unpowered and passing its filter.
+fn chute_accepts(game: &Game<'_>, pos: Pos, stack: &ItemStack) -> bool {
+    use horizon_client::containers::BlockEntity as B;
+    let empty = match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+        Some(B::Mod(m)) => m.items.first().is_none_or(Option::is_none),
+        _ => false,
+    };
+    empty && smart_filter(game, pos).is_none_or(|(f, powered)| !powered && f.test(&stack.item))
 }
 
 /// The facing and shape of the chute at `pos` (a template's `up`, before
 /// it is set, stands for down).
 fn chute_at(game: &Game<'_>, pos: Pos) -> Option<(Dir, ChuteShape)> {
     let name = block_name(game, pos)?;
+    // A smart chute is always straight (`AbstractChuteBlock.getFacing`).
+    if name == SMART_CHUTE {
+        return Some((Dir::Down, ChuteShape::Normal));
+    }
     let shape = ChuteShape::ALL.into_iter().find(|s| chute_block(*s) == name)?;
     let facing = prop(game, pos, "facing")
         .and_then(|f| Dir::ALL.into_iter().find(|d| d.name() == f))
@@ -649,6 +697,8 @@ fn direct_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack) -> Option<Opti
             })
             .flatten()
         }
+        // ChuteItemHandler.insertItem: what `canAcceptItem` takes.
+        Some(name) if is_chute_block(name) && !chute_accepts(game, pos, &stack) => None,
         Some(name) if is_chute_block(name) => game
             .native_with_mod_block_entity(pos, |be| {
                 if be.items.first().is_some_and(Option::is_some) {
@@ -1034,6 +1084,10 @@ pub(super) fn draw_chute(
     slots: &[(String, u32)],
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
+    let smart = is_smart_chute(game, pos);
+    if smart && let Some((filter, _)) = slots.get(2).filter(|(id, _)| !id.is_empty()) {
+        draw_smart_chute_filter(game, camera, pos, filter, out);
+    }
     let Some((id, count)) = slots.first() else {
         return;
     };
@@ -1041,8 +1095,10 @@ pub(super) fn draw_chute(
         return;
     }
     let place = slots.get(1).map_or(0.5, |(_, p)| *p as f32 / 200.0);
-    // ChuteRenderer: straight chutes only, in a window or pulled in below.
+    // ChuteRenderer: straight chutes only, in a window or pulled in below;
+    // SmartChuteRenderer: at its bottom only.
     match chute_at(game, pos) {
+        _ if smart && place > 0.0 => return,
         Some((Dir::Down, ChuteShape::Window)) => {}
         Some((Dir::Down, _)) if place <= 0.5 => {}
         _ => return,
@@ -1063,6 +1119,40 @@ pub(super) fn draw_chute(
     game.submit_item_world(&state, m, horizon_client::block_entity_render::vertex_light(light), out);
 }
 
+/// FilteringRenderer on a smart chute: its filter in the slot on each side
+/// (`SmartChuteFilterSlotPositioning`: 8, 11, 15.5 turned to the side).
+fn draw_smart_chute_filter(
+    game: &Game<'_>,
+    camera: glam::DVec3,
+    pos: Pos,
+    id: &str,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+    if corner.distance_squared(camera) > 32.0 * 32.0 {
+        return;
+    }
+    let light = game.world.light(pos[0], pos[1], pos[2]);
+    // isGui3d: block items stand at full size, others lie flat at half.
+    let block = game.pack.assets.registry.default_state(id).is_some();
+    let scale = if block { 1.0 } else { 0.5 } + 1.0 / 64.0;
+    let z_offset = if block { 0.0 } else { -0.15 };
+    let stack = ItemStack::new(id, 1);
+    for side in [Dir::North, Dir::South, Dir::West, Dir::East] {
+        let angle = side.horizontal_angle();
+        let at = super::create_funnel::rotate_centered_y([0.5, 11.0 / 16.0, 15.5 / 16.0], angle);
+        let centre = corner + glam::DVec3::new(f64::from(at[0]), f64::from(at[1]), f64::from(at[2]));
+        let m = glam::Mat4::from_translation((centre - camera).as_vec3())
+            * glam::Mat4::from_rotation_y((angle + 180.0).to_radians())
+            * glam::Mat4::from_scale(glam::Vec3::splat(0.5 * scale))
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z_offset));
+        let owner = super::item_draw::owner_at(centre.to_array(), 0.0, SMART_CHUTE);
+        let resolved =
+            game.resolve_item(&stack, horizon_assets::item_model::DisplayContext::Fixed, Some(&owner), pos[0] ^ pos[2]);
+        game.submit_item_world(&resolved, m, horizon_client::block_entity_render::vertex_light(light), out);
+    }
+}
+
 // ---- Players ------------------------------------------------------------------
 
 /// `native_right_click_block` on a belt: an empty hand takes the items on
@@ -1070,7 +1160,10 @@ pub(super) fn draw_chute(
 /// pulley. True for every belt: the template's own menu never opens.
 pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
     // ChuteBlock.useItemOn: industrial iron encases it (and stays in hand).
-    if let Some((facing, shape)) = chute_at(game, pos)
+    if right_click_smart_chute(game, pos, face) {
+        return true;
+    }
+    if let Some((facing, shape)) = chute_at(game, pos).filter(|_| !is_smart_chute(game, pos))
         && game.held().is_some_and(|h| &*h.item == "create:industrial_iron_block")
     {
         if let Some(next) = super::create_chute::encased(shape) {
@@ -1427,12 +1520,16 @@ pub(super) fn chutes_update(game: &mut Game<'_>, dimension: &str) {
         (todo, sneaked)
     });
     for p in sneaked {
-        if let Some((_, shape)) = chute_at(game, p) {
+        if let Some((_, shape)) = chute_at(game, p).filter(|_| !is_smart_chute(game, p)) {
             set_chute(game, p, Dir::Down, shape);
         }
     }
     for p in todo {
         if !game.world.loaded(p[0], p[2]) {
+            continue;
+        }
+        // SmartChuteBlock.updateChuteState keeps its state.
+        if is_smart_chute(game, p) {
             continue;
         }
         let Some((facing, shape)) = chute_at(game, p) else {
@@ -1456,7 +1553,7 @@ pub(super) fn chutes_update(game: &mut Game<'_>, dimension: &str) {
 
 /// `ChuteBlock.onWrenched`: true for every chute.
 pub(super) fn wrench_chute(game: &mut Game<'_>, pos: Pos) -> bool {
-    let Some((facing, shape)) = chute_at(game, pos) else {
+    let Some((facing, shape)) = chute_at(game, pos).filter(|_| !is_smart_chute(game, pos)) else {
         return false;
     };
     if let Some(next) = super::create_chute::wrenched(facing, shape).filter(|n| *n != shape) {
@@ -1687,6 +1784,44 @@ fn right_click_funnel(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
     let left = insert_into(game, behind, f.facing, stack);
     *game.held_mut() = left;
     true
+}
+
+/// `FilteringBehaviour.onShortInteract` on a smart chute's side (its four
+/// filter slots hold one filter): the held item becomes it, an empty hand
+/// clears it.
+fn right_click_smart_chute(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
+    if !is_smart_chute(game, pos) || Dir::nearest(face).axis() == Axis::Y {
+        return false;
+    }
+    let held = game.held().map(|s| s.item.to_string());
+    if held.as_deref().is_some_and(|i| i == "create:wrench" || i == super::create_arms::ARM) {
+        return false;
+    }
+    if game.native_acting_player().is_some_and(|p| p.game_mode == 3) {
+        return false;
+    }
+    let mut filter = smart_filter(game, pos).map(|(f, _)| f).unwrap_or_default();
+    filter.set(held.as_deref());
+    let text = filter.item.clone().unwrap_or_default();
+    game.native_with_mod_block_entity(pos, |be| {
+        be.nbt.insert(JavaString::from("Filter"), Tag::String(text.as_str().into()));
+    });
+    true
+}
+
+/// The smart chute at `pos` extracts up to `value` (1 to 64) at a time.
+pub(super) fn set_smart_chute_amount(game: &mut Game<'_>, pos: Pos, value: i32) {
+    if !is_smart_chute(game, pos) || !(1..=64).contains(&value) {
+        return;
+    }
+    game.native_with_mod_block_entity(pos, |be| {
+        be.nbt.insert(JavaString::from("FilterAmount"), Tag::Int(value));
+    });
+}
+
+/// Whether `face` of the block at `pos` is a smart chute's filter slot.
+pub(super) fn smart_chute_filter_side(game: &Game<'_>, pos: Pos, face: Dir) -> bool {
+    is_smart_chute(game, pos) && face.axis() != Axis::Y
 }
 
 fn right_click_filter(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
@@ -1928,7 +2063,8 @@ fn side_insert(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack, simul
     }
     if simulate {
         let free = match block_name(game, pos).as_deref() {
-            Some(name) if name == super::create_machines::DEPOT || is_chute_block(name) => {
+            Some(name) if is_chute_block(name) => chute_accepts(game, pos, &stack),
+            Some(name) if name == super::create_machines::DEPOT => {
                 use horizon_client::containers::BlockEntity as B;
                 match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
                     Some(B::Mod(m)) => m.items.iter().all(Option::is_none),
@@ -2079,6 +2215,16 @@ struct ChuteAt<'a, 'g> {
     shape: ChuteShape,
     /// The input chute `chute_above_accepts` chose.
     best_input: std::cell::Cell<Option<Pos>>,
+    /// A smart chute's filter and power.
+    smart: Option<(Filter, bool)>,
+}
+
+impl ChuteAt<'_, '_> {
+    /// `canAcceptItem`'s filter, apart from the chute's world.
+    fn passes(&self) -> impl Fn(&ItemStack) -> bool + use<> {
+        let filter = self.smart.as_ref().map(|(f, _)| f.clone());
+        move |s| filter.as_ref().is_none_or(|f| f.test(&s.item))
+    }
 }
 
 impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
@@ -2106,22 +2252,21 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
         }
         Some(insert_into(self.game, below, Dir::Up, stack.clone()))
     }
+    fn active(&self) -> bool {
+        self.smart.as_ref().is_none_or(|(_, powered)| !powered)
+    }
+    fn extraction_amount(&self) -> u32 {
+        self.smart.as_ref().map_or(super::create_chute::CHUTE_EXTRACTION, |(f, _)| f.count)
+    }
     fn facing_down(&self) -> bool {
         self.facing == Dir::Down
     }
-    fn chute_below_accepts(&self) -> Option<bool> {
+    fn chute_below_accepts(&self, stack: &ItemStack) -> Option<bool> {
         let below = chute_target(self.pos, self.facing);
         if !is_chute(self.game, below) {
             return None;
         }
-        let empty = |game: &Game<'_>| {
-            use horizon_client::containers::BlockEntity as B;
-            match game.world.block_entities.get(&(below[0], below[1], below[2])) {
-                Some(B::Mod(m)) => m.items.first().is_none_or(Option::is_none),
-                _ => false,
-            }
-        };
-        Some(empty(self.game))
+        Some(chute_accepts(self.game, below, stack))
     }
     fn give_chute_below(&mut self, stack: ItemStack) {
         let below = chute_target(self.pos, self.facing);
@@ -2143,7 +2288,8 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
         if is_chute(self.game, above) {
             return None;
         }
-        extract_from(self.game, above, max, &|_| true)
+        let passes = self.passes();
+        extract_from(self.game, above, max, &passes)
     }
     fn insert_above(&mut self, stack: &ItemStack, simulate: bool) -> Option<Option<ItemStack>> {
         let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
@@ -2159,21 +2305,17 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
         }
         Some(insert_into(self.game, above, Dir::Down, stack.clone()))
     }
-    fn chute_above_accepts(&self) -> Option<bool> {
+    fn chute_above_accepts(&self, stack: &ItemStack) -> Option<bool> {
         let inputs = input_chutes(self.game, self.pos);
         if inputs.is_empty() {
             return None;
         }
-        use horizon_client::containers::BlockEntity as B;
-        // The empty input chute whose item moves up fastest (or stands).
+        // The input chute taking it whose item moves up fastest (or stands).
         let mut best: Option<(Pos, f32)> = None;
         for p in inputs {
-            let empty = match self.game.world.block_entities.get(&(p[0], p[1], p[2])) {
-                Some(B::Mod(m)) => m.items.first().is_none_or(Option::is_none),
-                _ => false,
-            };
+            let accepts = chute_accepts(self.game, p, stack);
             let motion = chute_motion(self.game, p);
-            if empty && motion >= 0.0 && best.is_none_or(|(_, m)| m < motion) {
+            if accepts && motion >= 0.0 && best.is_none_or(|(_, m)| m < motion) {
                 best = Some((p, motion));
             }
         }
@@ -2200,10 +2342,12 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
     }
     fn extract_below(&mut self, max: u32) -> Option<ItemStack> {
         let below = [self.pos[0], self.pos[1] - 1, self.pos[2]];
-        if is_chute(self.game, below) {
+        // A smart chute below gives to the chute above it (`grabCapability`).
+        if is_chute(self.game, below) && !is_smart_chute(self.game, below) {
             return None;
         }
-        extract_from(self.game, below, max, &|_| true)
+        let passes = self.passes();
+        extract_from(self.game, below, max, &passes)
     }
 }
 
@@ -2255,7 +2399,13 @@ fn chute_push(game: &Game<'_>, pos: Pos, depth: u32) -> f32 {
 /// `updateAirFlow`, `extractFromBelt` and `findEntities` of an empty chute
 /// blowing up: the first belt within reach below gives its middle item,
 /// else an item entity in the air drawn in under it.
-fn pull_from_below(game: &mut Game<'_>, pos: Pos, speed: f32, chute: &mut Chute<ItemStack>) {
+fn pull_from_below(
+    game: &mut Game<'_>,
+    pos: Pos,
+    speed: f32,
+    chute: &mut Chute<ItemStack>,
+    accept: &dyn Fn(&ItemStack) -> bool,
+) {
     let below = [pos[0], pos[1] - 1, pos[2]];
     let max = if is_chute(game, below) { 0.0 } else { max_pull_distance(speed) };
     let flow = if max > 0.0 {
@@ -2271,7 +2421,7 @@ fn pull_from_below(game: &mut Game<'_>, pos: Pos, speed: f32, chute: &mut Chute<
             let taken = with_belt_segment(game, at, |inv, _, index| {
                 let mut taken = None;
                 inv.apply_to_each_within(index as f32 + 0.5, 0.5, |t| {
-                    if taken.is_some() {
+                    if taken.is_some() || !accept(&t.stack) {
                         return None;
                     }
                     taken = Some(t.stack.clone());
@@ -2302,6 +2452,7 @@ fn pull_from_below(game: &mut Game<'_>, pos: Pos, speed: f32, chute: &mut Chute<
     let found = game.dropped.iter().position(|d| {
         let p = d.position;
         d.stack.count > 0
+            && accept(&d.stack)
             && (x + 0.05 - 0.125..=x + 0.95 + 0.125).contains(&p.x)
             && (z + 0.05 - 0.125..=z + 0.95 + 0.125).contains(&p.z)
             && (y - distance - 0.45 - 0.25..=y + 0.45).contains(&p.y)
@@ -2326,6 +2477,16 @@ fn chute_motion(game: &Game<'_>, pos: Pos) -> f32 {
 pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     let (push, pull) = chute_fans(game, pos);
     let motion = item_motion(push, pull);
+    // SmartChuteBlock.tick: powered from around, it stops (noted for the
+    // chutes handing it items).
+    let smart = if is_smart_chute(game, pos) {
+        let powered = super::create_glue::signal(game, pos);
+        entity.nbt.insert(JavaString::from("Powered"), Tag::Byte(i8::from(powered)));
+        Some((read_smart_filter(entity).0, powered))
+    } else {
+        None
+    };
+    let accept = |s: &ItemStack| smart.as_ref().is_none_or(|(f, powered)| !powered && f.test(&s.item));
     let seen = matches!(entity.nbt.get(&JavaString::from("HasItem")), Some(Tag::Byte(1)));
     let mut chute = chute_item(entity);
     // `setItem(stack)`: put in from the top, or the bottom when blown up.
@@ -2335,7 +2496,7 @@ pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
     // updateEntityAfterFallOn, when the chute takes items from above.
     if chute.item.is_none() && has_direct_input(game, pos) {
         super::create_machines::take_landed(game, pos, 0.75, |_, stack| {
-            if chute.item.is_some() {
+            if chute.item.is_some() || !accept(&stack) {
                 return Some(stack);
             }
             chute.set_item(Some(stack), 1.0);
@@ -2343,7 +2504,7 @@ pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
         });
     }
     if chute.item.is_none() && motion > 0.0 {
-        pull_from_below(game, pos, pull - push, &mut chute);
+        pull_from_below(game, pos, pull - push, &mut chute, &accept);
     }
     let (facing, shape) = chute_at(game, pos).unwrap_or((Dir::Down, ChuteShape::Normal));
     let mut world = ChuteAt {
@@ -2352,11 +2513,16 @@ pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
         facing,
         shape,
         best_input: std::cell::Cell::new(None),
+        smart: smart.clone(),
     };
     chute.tick(motion, &mut world);
     set_chute_item(entity, chute.item.clone(), chute.position);
     let mut view = vec![super::create_machines::stack_view(chute.item.as_ref())];
     view.push((String::new(), (chute.position.clamp(0.0, 1.0) * 200.0) as u32));
+    // FilteringRenderer: a smart chute's filter and amount.
+    if let Some((f, _)) = &smart {
+        view.push((f.item.clone().unwrap_or_default(), f.count));
+    }
     super::create_machines::note_view(game, pos, view);
 }
 

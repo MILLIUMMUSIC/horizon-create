@@ -1,5 +1,15 @@
 # Validation
 
+## Smart chute (macOS, offscreen)
+
+Seen working: a smart chute between two chests, its filter set to an iron ingot by clicking its side, takes the
+ten iron ingots and leaves the cobblestone in the chest above; the filter is drawn on its side. A redstone block
+beside it stops it (five more ingots stay above) until the block goes. The mouse wheel over its side sets the
+amount (kept in its data); at 1 the ingots come down one at a time. 174 unit tests pass (1 new).
+
+Not checked yet: a smart chute fed by another chute or a funnel past its filter, blown up by a fan, the amount
+after reloading, an empty hand clearing the filter.
+
 ## Diagonal chutes and chute shapes (macOS, offscreen)
 
 Seen working: a hopper over a straight chute over a diagonal chute facing east hands iron and gold ingots through

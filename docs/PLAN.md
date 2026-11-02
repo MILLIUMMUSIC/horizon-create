@@ -105,8 +105,13 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      sneaking) a chute faces it and leads down to the chute beside below, else turns straight; they hand items on
      (`getTargetChute`, `getInputChutes`) and drop none. Shapes from the chutes around (`updateChuteState`, a tick
      after a change), a block per shape on a lightning rod's template (`facing`) keeping the chute's item; the wrench
-     makes a window (`onWrenched`), industrial iron encases it. Not yet: `canSurvive` (a chute under a diagonal
-     one), the goggle tooltip, smart chutes.
+     makes a window (`onWrenched`), industrial iron encases it. Smart chute (`SmartChuteBlock`, `SmartChuteBlockEntity`):
+     straight, its filter on its four sides (clicked with the item, an empty hand clears it; drawn there) and its
+     amount (the wheel, up to 64 at a time) kept in its block entity's data; it takes and hands on only what passes,
+     stops while powered by redstone around it (read each tick: a template's `powered` would give off a signal), and
+     draws its item only at its bottom. Not yet: `canSurvive` (a chute under a diagonal one), the goggle tooltip,
+     the smart chute's powered model, hoppers inserting into a smart chute past its filter (Horizon's container
+     path), `ExtractionCountMode.EXACTLY`.
    - Andesite funnel (`funnel.rs`; no block entity): extracting (placed normally) puts one item every 8 ticks
      from the inventory behind in front of it, unless an item still lies there; collecting (placed sneaking, or
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt
@@ -212,7 +217,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      drops its stack. Mode and stack are saved in `create_logistics_*.txt`. Not yet: sided filters on the tunnel itself
      (`SidedFilteringBehaviour`); the brass tunnel's connected textures (`BrassTunnelCTBehaviour`); its window
      toggle (the wrench switches the mode instead); the goggle tooltip;  the distribution's stack drawn (`BrassTunnelRenderer`).
-   Later: smart chutes, the remaining belt features above.
+   Later: the remaining belt features above.
 5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions). In Create a
    contraption is an entity (`AbstractContraptionEntity`) holding the moved blocks (`Contraption`), drawn by its
    renderer and colliding through `ContraptionCollider`. Horizon (as of `aa27eca`) has no mod entities and no

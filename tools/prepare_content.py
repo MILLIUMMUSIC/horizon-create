@@ -619,6 +619,16 @@ def fit_chutes(content, names):
             variants["facing=up"] = variants["facing=down"]
         if variants:
             write_json(states / f"{name}.json", {"variants": variants})
+    # SmartChuteBlock: a full block whose `powered` (it stops while powered)
+    # the native mod reads from the redstone around it instead: a template's
+    # `powered` would give off a signal of its own. Its blockstate stays
+    # (`powered` only).
+    decl = read_json(blocks / "smart_chute.json") if (blocks / "smart_chute.json").exists() else {}
+    decl["template"] = "minecraft:lightning_rod"
+    decl.pop("default_state", None)
+    decl["shapes"] = {"property": "facing", "values": {f: [box(0, 0, 0, 16, 16, 16)] for f in FACINGS}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "smart_chute.json", decl)
 
 
 # Fluid pipes: Create's `fluid_pipe` (six `north`...`down` booleans, set by

@@ -77,13 +77,13 @@ static CLIENT: Mutex<Option<HashMap<Pos, Vec<(String, u32)>>>> = Mutex::new(None
 
 /// A brass funnel's amount as this client set it, before the server's
 /// update.
-pub(super) fn client_set_count(pos: Pos, count: u32) {
+pub(super) fn client_set_count(pos: Pos, slot: usize, count: u32) {
     let mut guard = CLIENT.lock().unwrap_or_else(|e| e.into_inner());
-    let slots = guard.get_or_insert_with(HashMap::new).entry(pos).or_insert_with(|| vec![(String::new(), 64)]);
-    match slots.first_mut() {
-        Some(first) => first.1 = count,
-        None => slots.push((String::new(), count)),
+    let slots = guard.get_or_insert_with(HashMap::new).entry(pos).or_insert_with(Vec::new);
+    if slots.len() <= slot {
+        slots.resize(slot + 1, (String::new(), 64));
     }
+    slots[slot].1 = count;
 }
 
 /// What this client was last told the block at `pos` holds.

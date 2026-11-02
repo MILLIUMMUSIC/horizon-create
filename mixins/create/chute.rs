@@ -131,7 +131,7 @@ pub trait ChuteWorld<S> {
     fn insert_below(&mut self, stack: &S, simulate: bool) -> Option<Option<S>>;
     /// `getTargetChute`: an empty chute below (`canAcceptItem`); none
     /// when there is no chute below.
-    fn chute_below_accepts(&self) -> Option<bool>;
+    fn chute_below_accepts(&self, stack: &S) -> Option<bool>;
     /// `targetChute.setItem(item, 1)`.
     fn give_chute_below(&mut self, stack: S);
     /// A funnel below facing down takes nothing from a chute.
@@ -144,6 +144,15 @@ pub trait ChuteWorld<S> {
     /// `grabCapability(UP)` and `ItemHelper.extract(UPTO, 16)`: what came
     /// out of the inventory above.
     fn extract_above(&mut self, max: u32) -> Option<S>;
+    /// `canActivate`: a smart chute stops while powered.
+    fn active(&self) -> bool {
+        true
+    }
+    /// `getExtractionAmount`: 16, a smart chute's filter amount (64 by
+    /// default).
+    fn extraction_amount(&self) -> u32 {
+        CHUTE_EXTRACTION
+    }
     /// The chute faces straight down (not diagonal).
     fn facing_down(&self) -> bool {
         true
@@ -154,7 +163,7 @@ pub trait ChuteWorld<S> {
     }
     /// The chute above (an input chute): whether it takes the item, its
     /// item moving up or standing (`getItemMotion() >= 0`); none: no chute.
-    fn chute_above_accepts(&self) -> Option<bool> {
+    fn chute_above_accepts(&self, _stack: &S) -> Option<bool> {
         None
     }
     /// `bestOutput.setItem(item, 0)`.
@@ -204,14 +213,18 @@ impl<S: Clone + PartialEq> Chute<S> {
     /// True when the item changed (`notifyUpdate`).
     pub fn tick(&mut self, motion: f32, world: &mut dyn ChuteWorld<S>) -> bool {
         if self.item.is_none() {
+            if !world.active() {
+                return false;
+            }
+            let amount = world.extraction_amount();
             if motion < 0.0
-                && let Some(stack) = world.extract_above(CHUTE_EXTRACTION)
+                && let Some(stack) = world.extract_above(amount)
             {
                 self.set_item(Some(stack), 1.0);
                 return true;
             }
             if motion > 0.0
-                && let Some(stack) = world.extract_below(CHUTE_EXTRACTION)
+                && let Some(stack) = world.extract_below(amount)
             {
                 self.set_item(Some(stack), 0.0);
                 return true;
@@ -253,7 +266,7 @@ impl<S: Clone + PartialEq> Chute<S> {
 
     /// `handleUpwardOutput` for an open chute.
     fn upward_output(&mut self, world: &mut dyn ChuteWorld<S>, simulate: bool) -> bool {
-        let Some(item) = self.item.clone() else {
+        let Some(item) = self.item.clone().filter(|_| world.active()) else {
             return false;
         };
         if let Some(remainder) = world.insert_above(&item, simulate) {
@@ -264,7 +277,7 @@ impl<S: Clone + PartialEq> Chute<S> {
             }
             return took;
         }
-        if let Some(accepts) = world.chute_above_accepts() {
+        if let Some(accepts) = world.chute_above_accepts(&item) {
             if accepts && !simulate {
                 world.give_chute_above(item);
                 self.set_item(None, 0.0);
@@ -284,7 +297,7 @@ impl<S: Clone + PartialEq> Chute<S> {
 
     /// `handleDownwardOutput` for a chute facing down.
     fn downward_output(&mut self, world: &mut dyn ChuteWorld<S>, simulate: bool) -> bool {
-        let Some(item) = self.item.clone() else {
+        let Some(item) = self.item.clone().filter(|_| world.active()) else {
             return false;
         };
         if let Some(remainder) = world.insert_below(&item, simulate) {
@@ -299,7 +312,7 @@ impl<S: Clone + PartialEq> Chute<S> {
                 return took;
             }
         }
-        if let Some(accepts) = world.chute_below_accepts() {
+        if let Some(accepts) = world.chute_below_accepts(&item) {
             if !simulate && accepts {
                 world.give_chute_below(item);
                 self.set_item(None, 0.0);
@@ -342,7 +355,7 @@ mod tests {
             }
             Some(None)
         }
-        fn chute_below_accepts(&self) -> Option<bool> {
+        fn chute_below_accepts(&self, _: &u32) -> Option<bool> {
             self.chute.map(|c| c.is_none())
         }
         fn give_chute_below(&mut self, stack: u32) {
@@ -446,13 +459,20 @@ mod tests {
         given_up: Vec<u32>,
         blown: Vec<u32>,
         below: Vec<u32>,
+        off: bool,
     }
 
     impl ChuteWorld<u32> for Column {
+        fn active(&self) -> bool {
+            !self.off
+        }
+        fn extraction_amount(&self) -> u32 {
+            64
+        }
         fn insert_below(&mut self, _: &u32, _: bool) -> Option<Option<u32>> {
             None
         }
-        fn chute_below_accepts(&self) -> Option<bool> {
+        fn chute_below_accepts(&self, _: &u32) -> Option<bool> {
             None
         }
         fn give_chute_below(&mut self, _: u32) {}
@@ -473,7 +493,7 @@ mod tests {
             }
             Some(None)
         }
-        fn chute_above_accepts(&self) -> Option<bool> {
+        fn chute_above_accepts(&self, _: &u32) -> Option<bool> {
             self.chute_above
         }
         fn give_chute_above(&mut self, stack: u32) {
@@ -583,5 +603,25 @@ mod tests {
         );
         assert_eq!(wrenched(Dir::Down, ChuteShape::Intersection), None);
         assert_eq!(encased(ChuteShape::Window), Some(ChuteShape::Encased));
+    }
+
+    #[test]
+    fn a_powered_smart_chute_stops() {
+        let motion = item_motion(64.0, 0.0);
+        let mut c: Chute<u32> = Chute::default();
+        let mut w = Column {
+            below: vec![7],
+            off: true,
+            ..Column::default()
+        };
+        assert!(!c.tick(motion, &mut w));
+        assert_eq!(c.item, None);
+        // Holding an item, it stays at the middle.
+        c.set_item(Some(3), 0.45);
+        for _ in 0..40 {
+            c.tick(motion, &mut w);
+        }
+        assert_eq!((c.item, c.position), (Some(3), 0.5));
+        assert!(w.blown.is_empty());
     }
 }
