@@ -15,7 +15,7 @@ use super::create_belt::{
     Conversion, FunnelShape, ProcessingResult, Slope, Stack, Transported, TunnelAbove, belt_chain,
     belts_between, can_connect, find_chain, item_place, on_removed,
 };
-use super::create_chute::{Chute, ChuteWorld, item_motion};
+use super::create_chute::{Chute, ChuteWorld, item_motion, max_pull_distance};
 use super::create_funnel::{
     BeltBelow, EXTRACTION_TIMER, Filter, FunnelState, Mode, amount_to_extract, as_belt_funnel,
     collects_entity_at, extracted_item, filter_slot, overflow_area, tick_cooldown,
@@ -1975,7 +1975,10 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
     }
     fn blocked_above(&self) -> bool {
         let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
-        funnel_at(self.game, above).is_some_and(|f| f.facing == Dir::Up) || sturdy(self.game, above, Dir::Down)
+        // An encased fan is a full block in Create (its stand-in isn't).
+        funnel_at(self.game, above).is_some_and(|f| f.facing == Dir::Up)
+            || sturdy(self.game, above, Dir::Down)
+            || matches!(super::create_glue::kind_at(self.game, above), Some(Kind::EncasedFan(_)))
     }
     fn drop_above(&mut self, stack: ItemStack, _: f32) {
         let c = self.pos.map(|v| f64::from(v) + 0.5);
@@ -2012,6 +2015,69 @@ fn chute_fans(game: &Game<'_>, pos: Pos) -> (f32, f32) {
     (push, pull)
 }
 
+/// `updateAirFlow`, `extractFromBelt` and `findEntities` of an empty chute
+/// blowing up: the first belt within reach below gives its middle item,
+/// else an item entity in the air drawn in under it.
+fn pull_from_below(game: &mut Game<'_>, pos: Pos, speed: f32, chute: &mut Chute<ItemStack>) {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    let max = if is_chute(game, below) { 0.0 } else { max_pull_distance(speed) };
+    let flow = if max > 0.0 {
+        super::create_machines::flow_limit_down(game, pos, max)
+    } else {
+        max
+    };
+    let mut i = 1;
+    while i as f32 <= flow + 1.0 {
+        let at = [pos[0], pos[1] - i, pos[2]];
+        if belt_at(game, at).is_some() {
+            // handleCenteredProcessingOnAllItems(.5): the first one taken.
+            let taken = with_belt_segment(game, at, |inv, _, index| {
+                let mut taken = None;
+                inv.apply_to_each_within(index as f32 + 0.5, 0.5, |t| {
+                    if taken.is_some() {
+                        return None;
+                    }
+                    taken = Some(t.stack.clone());
+                    Some(super::create_belt::Conversion {
+                        outputs: Vec::new(),
+                        held: None,
+                        locked: false,
+                    })
+                });
+                taken
+            })
+            .flatten();
+            if let Some(stack) = taken {
+                chute.set_item(Some(stack), -(i - 1) as f32);
+                return;
+            }
+            break;
+        }
+        i += 1;
+    }
+    let distance = f64::from(flow.max(0.0));
+    if distance <= 0.0 {
+        return;
+    }
+    // The box from the middle, `bottomPullDistance` + .5 down to .5 down,
+    // grown by .45; an item's box is .25 high.
+    let [x, y, z] = pos.map(f64::from);
+    let found = game.dropped.iter().position(|d| {
+        let p = d.position;
+        d.stack.count > 0
+            && (x + 0.05 - 0.125..=x + 0.95 + 0.125).contains(&p.x)
+            && (z + 0.05 - 0.125..=z + 0.95 + 0.125).contains(&p.z)
+            && (y - distance - 0.45 - 0.25..=y + 0.45).contains(&p.y)
+    });
+    if let Some(i) = found {
+        let d = &mut game.dropped[i];
+        let height = (d.position.y + 0.125 - y) as f32;
+        chute.set_item(Some(d.stack.clone()), height);
+        d.stack.count = 0;
+        game.dropped.retain(|d| d.stack.count > 0);
+    }
+}
+
 /// `getItemMotion` of the chute at `pos`.
 fn chute_motion(game: &Game<'_>, pos: Pos) -> f32 {
     let (push, pull) = chute_fans(game, pos);
@@ -2021,7 +2087,8 @@ fn chute_motion(game: &Game<'_>, pos: Pos) -> f32 {
 /// `ChuteBlockEntity.tick` on the server for the chute at `pos`, and
 /// `ChuteBlock.updateEntityAfterFallOn` (items falling on top go in).
 pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
-    let motion = chute_motion(game, pos);
+    let (push, pull) = chute_fans(game, pos);
+    let motion = item_motion(push, pull);
     let seen = matches!(entity.nbt.get(&JavaString::from("HasItem")), Some(Tag::Byte(1)));
     let mut chute = chute_item(entity);
     // `setItem(stack)`: put in from the top, or the bottom when blown up.
@@ -2036,6 +2103,9 @@ pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
             chute.set_item(Some(stack), 1.0);
             None
         });
+    }
+    if chute.item.is_none() && motion > 0.0 {
+        pull_from_below(game, pos, pull - push, &mut chute);
     }
     chute.tick(motion, &mut ChuteAt { game, pos });
     set_chute_item(entity, chute.item.clone(), chute.position);

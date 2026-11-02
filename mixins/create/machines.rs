@@ -1375,6 +1375,11 @@ fn draw_basin(
 // ---- The encased fan ------------------------------------------------------------
 
 /// The level in place, as an air current sees it.
+/// `AirCurrent.getFlowLimit` from `pos` downwards (a chute's pull).
+pub(super) fn flow_limit_down(game: &Game<'_>, pos: Pos, max: f32) -> f32 {
+    super::create_fan::flow_limit(&FanWorld { game }, pos, max, Dir::Down)
+}
+
 struct FanWorld<'a, 'g> {
     game: &'a Game<'g>,
 }

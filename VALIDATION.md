@@ -1,5 +1,13 @@
 # Validation
 
+## Upward chutes pulling from below (macOS, offscreen)
+
+Seen working: an encased fan facing down on two chutes, turned at 256 RPM by a creative motor, draws oak planks
+dropped on the ground two blocks under the chutes into them; they rise and wait in the top chute under the fan
+(the fan counts as a full block above, as in Create). Slower speeds don't reach the ground (the pull distance).
+
+Not checked yet: items taken from a belt under an upward chute, the pull distance at 32 and 64 RPM.
+
 ## Fans through chutes (macOS, offscreen)
 
 Seen working: an encased fan facing up under three chutes (16 RPM from a creative motor) blows iron ingots fed in
