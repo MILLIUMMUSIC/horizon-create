@@ -1690,7 +1690,56 @@ pub fn wrench_slice(
     }
 }
 
+/// `BeltSlicer.beltStatesCompatible`: a belt `b` can join belt `a`.
+pub fn states_compatible(a: BeltState, b: BeltState) -> bool {
+    match a.slope {
+        Slope::Upward if b.slope == Slope::Downward => a.facing == b.facing.opposite(),
+        Slope::Downward if b.slope == Slope::Upward => a.facing == b.facing.opposite(),
+        Slope::Upward | Slope::Downward => b.slope == a.slope && a.facing == b.facing,
+        _ => b.slope == a.slope && b.facing.axis() == a.facing.axis(),
+    }
+}
+
+/// `BeltSlicer.flipBelt`: the segment of a belt turned to run the other way.
+pub fn flip(state: BeltState) -> BeltState {
+    BeltState {
+        facing: state.facing.opposite(),
+        slope: match state.slope {
+            Slope::Upward => Slope::Downward,
+            Slope::Downward => Slope::Upward,
+            s => s,
+        },
+        part: match state.part {
+            Part::End => Part::Start,
+            Part::Start => Part::End,
+            p => p,
+        },
+    }
+}
+
 impl<S: Stack> BeltInventory<S> {
+    /// A merged belt's items, reversed along its `length` when it was
+    /// flipped and moved `shift` along.
+    pub fn moved(mut self, length: i32, flipped: bool, shift: i32) -> Vec<Transported<S>> {
+        for t in &mut self.items {
+            if flipped {
+                t.belt_position = length as f32 - t.belt_position;
+                t.prev_belt_position = length as f32 - t.prev_belt_position;
+            }
+            t.belt_position += shift as f32;
+            t.prev_belt_position += shift as f32;
+        }
+        self.items
+    }
+
+    /// `addItem` for each of `items`.
+    pub fn add_all(&mut self, items: Vec<Transported<S>>) {
+        for t in items {
+            self.insert(t);
+        }
+        self.dirty = true;
+    }
+
     /// The items of a belt shortened at its start: one segment back, those
     /// at its first one fall off (returned).
     pub fn shift_back(&mut self) -> Vec<S> {
@@ -2531,5 +2580,36 @@ mod tests {
             casing_model(state(Part::End)),
             Some(("horizontal_end", 270.0))
         );
+    }
+
+    #[test]
+    fn belts_join() {
+        let b = |facing, slope, part| BeltState {
+            facing,
+            slope,
+            part,
+        };
+        let east = b(Dir::East, Slope::Horizontal, Part::End);
+        assert!(states_compatible(
+            east,
+            b(Dir::West, Slope::Horizontal, Part::Start)
+        ));
+        assert!(!states_compatible(
+            east,
+            b(Dir::North, Slope::Horizontal, Part::Start)
+        ));
+        assert!(states_compatible(
+            b(Dir::East, Slope::Upward, Part::End),
+            b(Dir::West, Slope::Downward, Part::End)
+        ));
+        assert_eq!(
+            flip(b(Dir::West, Slope::Downward, Part::End)),
+            b(Dir::East, Slope::Upward, Part::Start)
+        );
+        let mut inv: BeltInventory<Item> = BeltInventory::new();
+        let mut t = Transported::new(Item("a", 1), 180);
+        t.belt_position = 0.5;
+        inv.items.push(t);
+        assert_eq!(inv.moved(3, true, 2)[0].belt_position, 4.5);
     }
 }

@@ -1236,6 +1236,11 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         }
         return true;
     }
+    // BeltSlicer.useConnector: the connector on a belt's end extends it.
+    if held.as_ref().is_some_and(|h| &*h.item == CONNECTOR) {
+        extend_belt(game, pos, state, face);
+        return true;
+    }
     // setCasingType: a casing on this segment (the block isn't used up).
     if let Some(casing) = held.as_ref().and_then(|h| super::create_belt::belt_casing(&h.item)) {
         set_belt_casing(game, pos, casing);
@@ -1450,6 +1455,111 @@ pub(super) fn wrench_belt(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneakin
         }
     }
     true
+}
+
+/// `BeltSlicer.useConnector` on the end segment at `pos`: a new segment
+/// beyond it, or the belt there joined to this one (flipped to run the same
+/// way; its two pulleys' shafts and the connector come back).
+fn extend_belt(game: &mut Game<'_>, pos: Pos, state: BeltState, face: [i32; 3]) {
+    use super::create_belt::Part;
+    let Chain::Belt { controller, segments } = find_chain(&World { game }, pos) else {
+        return;
+    };
+    let length = segments.len() as i32;
+    if length >= super::create_belt::MAX_BELT_LENGTH {
+        return;
+    }
+    let hit = click_point(game, pos, Dir::nearest(face));
+    if !super::create_belt::hovering_end(state, hit) {
+        return;
+    }
+    let v = super::create_belt::belt_vector(state).map(|c| c as i32);
+    let sign = if state.part == Part::Start { -1 } else { 1 };
+    let next = [pos[0] + v[0] * sign, pos[1] + v[1] * sign, pos[2] + v[2] * sign];
+    let dim = game.dim.id().to_owned();
+    let creative = game.native_acting_player().is_some_and(|p| p.game_mode == 1);
+    let dye = super::create_glue::with_kinetics(game, |k, _| {
+        super::create_belt::material_dye(k.get(controller).map_or(0, |e| e.material))
+    });
+    let free = Connector { game }.replaceable(next);
+    if free {
+        // Attach at the end: the end becomes a middle, the new one ends it.
+        set_belt(game, pos, BeltState { part: Part::Middle, ..state });
+        set_belt(game, next, state);
+        super::create_glue::with_kinetics(game, |k, _| {
+            if k.get(next).is_none() {
+                k.on_placed(next, Kind::Belt(state));
+            }
+            k.set_wheel_material(next, super::create_belt::belt_material(dye, super::create_belt::CASING_NONE));
+        });
+        if state.part == Part::Start {
+            with_state(|s| {
+                if let Some(e) = s.belts.remove(&(dim.clone(), controller)) {
+                    let belt = e.belt;
+                    let items = e.inv.moved(length, false, 1);
+                    let mut inv = BeltInventory::new();
+                    inv.add_all(items);
+                    s.belts.insert((dim.clone(), next), Entry { inv, belt });
+                }
+            });
+        }
+        return;
+    }
+    let Some(other) = belt_at(game, next) else {
+        return;
+    };
+    if !super::create_belt::states_compatible(state, other) {
+        return;
+    }
+    let Chain::Belt { controller: merged, segments: merged_segments } = find_chain(&World { game }, next) else {
+        return;
+    };
+    let merged_length = merged_segments.len() as i32;
+    if merged_length + length > super::create_belt::MAX_BELT_LENGTH {
+        return;
+    }
+    let flipped = state.facing != other.facing;
+    // The other belt takes this one's colour and, flipped, its direction.
+    for p in &merged_segments {
+        if flipped && let Some(b) = belt_at(game, *p) {
+            set_belt(game, *p, super::create_belt::flip(b));
+        }
+    }
+    super::create_glue::with_kinetics(game, |k, _| {
+        for p in &merged_segments {
+            let casing = super::create_belt::material_casing(k.get(*p).map_or(0, |e| e.material));
+            k.set_wheel_material(*p, super::create_belt::belt_material(dye, casing));
+        }
+    });
+    set_belt(game, pos, BeltState { part: Part::Middle, ..state });
+    if let Some(n) = belt_at(game, next) {
+        set_belt(game, next, BeltState { part: Part::Middle, ..n });
+    }
+    if !creative {
+        game.give_or_drop(ItemStack::new(SHAFT, 2));
+        game.give_or_drop(ItemStack::new(CONNECTOR, 1));
+    }
+    // The joined belt's items go to its start, past the first part's.
+    let Chain::Belt { controller: joined, .. } = find_chain(&World { game }, pos) else {
+        return;
+    };
+    with_state(|s| {
+        let ours = s.belts.remove(&(dim.clone(), controller));
+        let theirs = s.belts.remove(&(dim.clone(), merged));
+        let belt = ours.as_ref().or(theirs.as_ref()).map(|e| e.belt);
+        let Some(belt) = belt else {
+            return;
+        };
+        let ours_first = joined == controller;
+        let mut inv = BeltInventory::new();
+        if let Some(e) = ours {
+            inv.add_all(e.inv.moved(length, false, if ours_first { 0 } else { merged_length }));
+        }
+        if let Some(e) = theirs {
+            inv.add_all(e.inv.moved(merged_length, flipped, if ours_first { length } else { 0 }));
+        }
+        s.belts.insert((dim.clone(), joined), Entry { inv, belt });
+    });
 }
 
 /// A survival player's split takes a belt connector and a shaft for each

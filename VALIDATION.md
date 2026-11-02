@@ -1,5 +1,14 @@
 # Validation
 
+## Extending belts with the connector (macOS, offscreen)
+
+Seen working: the connector on the outer half of one belt's end joins it to the belt beyond (one five-block
+belt), and on the joined belt's end adds a sixth segment; driven by a creative motor, its cobblestone and
+potion (one from each former belt) run along all of it and are thrown off its end. 178 unit tests pass (1 new).
+
+Not checked yet: joining a belt running the other way (flipped), sloped belts, the colour taken over, the shafts
+and connector given back in survival, the 20-block limit.
+
 ## Belt casings and the wrench (macOS, offscreen)
 
 Seen working: brass and andesite casing clicked on two segments of a six-block belt draw Create's cased models

@@ -98,8 +98,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      with the hit point the client sent): on an end's outer half it shortens the belt (the items past it thrown
      off, or moved back to the new start), elsewhere it splits it in two (a survival player pays a connector and
      a shaft per new end), and otherwise takes a casing off or turns a pulley back into a middle segment (its
-     shaft back). Not yet: vertical and sideways belts, covers (`setCovered`), the cased shapes, extending belts
-     with the connector, entities and players riding belts (`BeltMovementHandler`), tunnels, crushers, water
+     shaft back). The connector on an end's outer half (`useConnector`) adds a segment beyond it (of its colour),
+     or joins the belt there (`beltStatesCompatible`; flipped to run the same way, `flipBelt`; its colour taken,
+     the items of both moved to the joined belt's start, the two shafts and the connector given back). Not yet:
+     vertical and sideways belts, covers (`setCovered`), the cased shapes, entities and players riding belts (`BeltMovementHandler`), tunnels, crushers, water
      bottles washing it, the slicer's outline feedback, sounds.
    - Chute (`chute.rs`: `ChuteBlockEntity`'s item and `handleDownwardOutput`/`handleInputFromAbove`; a mod block
      entity): items fall at 4 blocks a second, into the inventory below (containers, depots, belt segments), into
