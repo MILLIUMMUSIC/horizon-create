@@ -197,7 +197,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      `ArmInteractionPointHandler` does (on the server: the action bar says the mode), and the placed arm takes the
      points within 5 blocks. Its base, lower and upper arm, claw and grips are drawn from Create's partials with
      `ArmRenderer`'s transforms and the angles the server works out as Create's client does (`create:arms`); its held
-     item in the claw. As in Create 6, chests and vaults are no arm points. The mouse wheel over an arm's side steps its selection mode (round robin, forced round robin, prefer first; saved, said on the action bar); campfires (food), composters (compostables in, bone meal out) and respawn anchors (glowstone) are points. Not yet: ceiling arms, jukeboxes (Horizon keeps starting a disc's song to itself), blaze burners, crafters, saws, the dance, the selection's outlines, left click to deselect, goggles on the arm, sounds.
+     item in the claw. As in Create 6, chests and vaults are no arm points. The mouse wheel over an arm's side steps its selection mode (round robin, forced round robin, prefer first; saved, said on the action bar); campfires (food), composters (compostables in, bone meal out) and respawn anchors (glowstone) are points. Not yet: ceiling arms, jukeboxes (Horizon keeps starting a disc's song to itself), blaze burners, crafters, saws, the dance, goggles on the arm, sounds. The selection is outlined in each point's mode's colour while the arm item is held, and the points of an arm looked at with the wrench (`drawOutlines`, `checkForWrench`, on the window's side: the window finds its own selection by its player's name); a left click with the arm item takes a selected point out instead of hitting the block (`leftClickingBlocksDeselectsThem`).
    - Deployer (`deployer.rs`: `DeployerBlockEntity`'s cycle, `DeployerItemHandler`, `BeltDeployerCallbacks`,
      `create:deploying` and `create:item_application`; `arms.rs`): a kinetic block (`Kind::Deployer`, 4 su, its
      shaft by `axis_along_first`) with a block per `axis_along_first` on a lightning rod's template, placed as
@@ -408,7 +408,7 @@ Catnip's `Outliner` (`outline.rs`: slots kept alive each tick, eight ticks of fa
 boxes) is drawn by the native mod in the frame's own pass with a white sprite (`create:block/hz_blank`, made by
 `prepare_content.py`; Create's is ponder's `special/blank`). The server tells a player's client what to show over
 `create:outlines` (O1: slot, box, colour, line width, ticks). Fading outlines are drawn whole until they go (the frame
-takes no alpha). Used by: the large water wheel's `showBounds`.
+takes no alpha). Used by: the large water wheel's `showBounds`, the arm's selection.
 
 ## Engine gaps to raise upstream (as hook point requests)
 

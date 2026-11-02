@@ -1,5 +1,12 @@
 # Validation
 
+## Arm selection outlines (macOS, offscreen)
+
+Seen working: with the mechanical arm item held, two depots clicked are outlined, one blue (extract), one yellow
+(deposit); a left click on the blue one takes it out of the selection (its outline goes, the depot stays).
+
+Not checked yet: the wrench showing a placed arm's points, the outlines going when the item is put away.
+
 ## Large water wheel placement (macOS, offscreen)
 
 Seen working: two large wheels along X side by side drawn (the second with the extension's longer axle); a large

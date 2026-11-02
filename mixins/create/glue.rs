@@ -1650,6 +1650,15 @@ fn outlines_from_server(data: &[u8]) {
         .show_aabb(&slot, bounds, params, ticks);
 }
 
+/// `Outliner.showAABB` on the window's own side (its client handlers).
+pub(super) fn show_outline(slot: &str, bounds: [f64; 6], params: super::create_outline::Params) {
+    CLIENT_OUTLINES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .show_aabb(slot, bounds, params, 1);
+}
+
 /// `Outliner.tickOutlines`, each tick of the window's game.
 pub(super) fn outlines_tick(game: &Game<'_>) {
     if !game.native_window() {

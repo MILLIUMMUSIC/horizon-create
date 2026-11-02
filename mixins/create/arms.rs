@@ -55,6 +55,9 @@ struct Placed {
 struct Arms {
     /// `ArmInteractionPointHandler.currentSelection`, by player.
     selection: HashMap<u128, Vec<Point>>,
+    /// The selecting players' names, for the window to find its own
+    /// selection (its client knows its name, not its server UUID).
+    selection_names: HashMap<u128, String>,
     arms: HashMap<(String, Pos), Arm<ItemStack>>,
     deployers: HashMap<(String, Pos), Deployer<ItemStack>>,
     /// The fake player's `blockBreakingProgress`, by deployer.
@@ -1226,6 +1229,83 @@ fn note(s: &mut Arms, dim: &str, pos: Pos, view: Vec<u8>) {
     }
 }
 
+/// `ArmInteractionPoint.Mode.getColor`.
+fn mode_color(mode: super::create_arm::Mode) -> u32 {
+    match mode {
+        super::create_arm::Mode::Deposit => 0xDDC166,
+        super::create_arm::Mode::Take => 0x7FCDE0,
+    }
+}
+
+/// `ArmInteractionPointHandler.tick` and `checkForWrench`, on the window's
+/// side: with the arm item in hand its selected points are outlined in
+/// their mode's colour, and with the wrench the points of the arm looked at.
+pub(super) fn client_tick(game: &mut Game<'_>) {
+    if !game.native_window() {
+        return;
+    }
+    let held = game.held().map(|s| s.item.to_string());
+    let dim = game.dim.id().to_owned();
+    let points: Vec<Point> = match held.as_deref() {
+        Some(ARM) => {
+            let me = game.options.player_name();
+            with_state(|s| {
+                s.selection_names
+                    .iter()
+                    .find(|(_, n)| **n == me)
+                    .and_then(|(u, _)| s.selection.get(u))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+        }
+        Some(super::create_glue::WRENCH) => {
+            let Some(hit) = game.pick() else {
+                return;
+            };
+            with_state(|s| {
+                s.arms
+                    .get(&(dim.clone(), hit.pos))
+                    .map(|a| a.inputs.iter().chain(a.outputs.iter()).cloned().collect())
+                    .unwrap_or_default()
+            })
+        }
+        _ => return,
+    };
+    for p in points {
+        let Some(b) = game.block_collision_shape(p.pos).bounds() else {
+            continue;
+        };
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let [x, y, z] = p.pos.map(f64::from);
+        let bounds = [lo.x + x, lo.y + y, lo.z + z, hi.x + x, hi.y + y, hi.z + z];
+        let params = super::create_outline::Params {
+            rgb: mode_color(p.mode),
+            width: 1.0 / 16.0,
+        };
+        super::create_glue::show_outline(&format!("arm point {:?}", p.pos), bounds, params);
+    }
+}
+
+/// `ArmInteractionPointHandler.leftClickingBlocksDeselectsThem`: with the
+/// arm item in hand, a left click on a selected point takes it out of the
+/// selection instead of hitting the block. True when it took the click.
+pub(super) fn left_click(game: &mut Game<'_>, pos: Pos) -> bool {
+    if game.held().is_none_or(|s| &*s.item != ARM) {
+        return false;
+    }
+    let Some(player) = game.native_acting_player() else {
+        return false;
+    };
+    with_state(|s| {
+        let Some(list) = s.selection.get_mut(&player.uuid) else {
+            return false;
+        };
+        let before = list.len();
+        list.retain(|p| p.pos != pos);
+        list.len() != before
+    })
+}
+
 /// `native_use_item_on` with the arm item (`ArmItem.useOn` and
 /// `ArmInteractionPointHandler.rightClickingBlocksSelectsThem`): a click on
 /// a point selects it or cycles its mode; true when it took the click.
@@ -1243,6 +1323,7 @@ pub(super) fn use_item_on(game: &mut Game<'_>, stack: &ItemStack, pos: Pos) -> b
         return false;
     }
     let mode = with_state(|s| {
+        s.selection_names.insert(player.uuid, player.name.clone());
         let list = s.selection.entry(player.uuid).or_default();
         let i = match list.iter().position(|p| p.pos == pos) {
             Some(i) => i,
