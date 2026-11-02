@@ -1540,6 +1540,208 @@ pub fn belt_dye(item: &str) -> Option<u8> {
     DYES.iter().position(|d| *d == colour).map(|i| i as u8 + 1)
 }
 
+/// A belt segment's `material`: its dye in the low five bits, its
+/// `CasingType` above (`CASING_*`).
+pub const CASING_NONE: u8 = 0;
+pub const CASING_ANDESITE: u8 = 1;
+pub const CASING_BRASS: u8 = 2;
+
+pub fn belt_material(dye: u8, casing: u8) -> u8 {
+    (dye & 0x1f) | (casing << 5)
+}
+
+pub fn material_dye(material: u8) -> u8 {
+    material & 0x1f
+}
+
+pub fn material_casing(material: u8) -> u8 {
+    material >> 5
+}
+
+/// `BeltBlock.useItemOn`'s casings: the casing an item puts on a segment.
+pub fn belt_casing(item: &str) -> Option<u8> {
+    match item {
+        "create:andesite_casing" => Some(CASING_ANDESITE),
+        "create:brass_casing" => Some(CASING_BRASS),
+        _ => None,
+    }
+}
+
+/// The cased belt's blockstate model (`BeltGenerator`): its partial
+/// (`belt_casing/<slope>_<part>`) and the blockstate's turn about Y in
+/// degrees; none for vertical and sideways belts.
+pub fn casing_model(state: BeltState) -> Option<(&'static str, f32)> {
+    let y = (-state.facing.horizontal_angle()).rem_euclid(360.0);
+    let part = |start: &'static str, end: &'static str| match state.part {
+        Part::Start => start,
+        Part::End => end,
+        Part::Middle => "middle",
+        Part::Pulley => "pulley",
+    };
+    match state.slope {
+        Slope::Horizontal => Some((
+            match part("start", "end") {
+                "start" => "horizontal_start",
+                "end" => "horizontal_end",
+                "middle" => "horizontal_middle",
+                _ => "horizontal_pulley",
+            },
+            y,
+        )),
+        // Downward belts use the upward models turned around.
+        Slope::Upward | Slope::Downward => {
+            let downward = state.slope == Slope::Downward;
+            let name = match if downward {
+                part("end", "start")
+            } else {
+                part("start", "end")
+            } {
+                "start" => "diagonal_start",
+                "end" => "diagonal_end",
+                "middle" => "diagonal_middle",
+                _ => "diagonal_pulley",
+            };
+            Some((name, if downward { y } else { (y + 180.0) % 360.0 }))
+        }
+        Slope::Vertical | Slope::Sideways => None,
+    }
+}
+
+/// `BeltHelper.getBeltVector`.
+pub fn belt_vector(state: BeltState) -> [f64; 3] {
+    let n = state.facing.normal();
+    if state.slope == Slope::Vertical {
+        return [0.0, if state.facing.positive() { 1.0 } else { -1.0 }, 0.0];
+    }
+    let up = match state.slope {
+        Slope::Upward => 1.0,
+        Slope::Downward => -1.0,
+        _ => 0.0,
+    };
+    [f64::from(n[0]), up, f64::from(n[2])]
+}
+
+/// `BeltSlicer.hoveringEnd`: `hit` (from the block's centre) is on the
+/// outer half of an end segment.
+pub fn hovering_end(state: BeltState, hit: [f64; 3]) -> bool {
+    if matches!(state.part, Part::Middle | Part::Pulley) {
+        return false;
+    }
+    let v = belt_vector(state);
+    let dot = hit[0] * v[0] + hit[1] * v[1] + hit[2] * v[2];
+    (dot > 0.0) == (state.part == Part::End)
+}
+
+/// What `BeltSlicer.useWrench` does to the segment at `index` of a belt
+/// `length` long.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slice {
+    /// Not the slicer's: the wrench's own use (a casing off, a pulley back).
+    Pass,
+    Fail,
+    /// The end segment goes; the one beside it (`next`) ends the belt.
+    Shorten {
+        next: Pos,
+    },
+    /// Cut between the segment and `next`.
+    Split {
+        next: Pos,
+        toward_positive: bool,
+    },
+}
+
+pub fn wrench_slice(
+    state: BeltState,
+    pos: Pos,
+    index: i32,
+    length: i32,
+    cased: bool,
+    face: Dir,
+    hit: [f64; 3],
+) -> Slice {
+    if cased && face != Dir::Up {
+        return Slice::Pass;
+    }
+    if state.part == Part::Pulley && face.axis() != Axis::Y {
+        return Slice::Pass;
+    }
+    if length == 2 {
+        return Slice::Fail;
+    }
+    let v = belt_vector(state);
+    let step = [v[0] as i32, v[1] as i32, v[2] as i32];
+    let plus = [pos[0] + step[0], pos[1] + step[1], pos[2] + step[2]];
+    let minus = [pos[0] - step[0], pos[1] - step[1], pos[2] - step[2]];
+    if hovering_end(state, hit) {
+        return Slice::Shorten {
+            next: if state.part == Part::End { minus } else { plus },
+        };
+    }
+    let toward_positive = hit[0] * v[0] + hit[1] * v[1] + hit[2] * v[2] > 0.0;
+    if index == 0 || index == 1 && !toward_positive {
+        return Slice::Fail;
+    }
+    if index == length - 1 || index == length - 2 && toward_positive {
+        return Slice::Fail;
+    }
+    Slice::Split {
+        next: if toward_positive { plus } else { minus },
+        toward_positive,
+    }
+}
+
+impl<S: Stack> BeltInventory<S> {
+    /// The items of a belt shortened at its start: one segment back, those
+    /// at its first one fall off (returned).
+    pub fn shift_back(&mut self) -> Vec<S> {
+        let mut dropped = Vec::new();
+        let mut kept = Vec::new();
+        for mut t in std::mem::take(&mut self.items) {
+            t.belt_position -= 1.0;
+            if t.belt_position <= 0.0 {
+                dropped.push(t.stack);
+            } else {
+                kept.push(t);
+            }
+        }
+        self.items = kept;
+        self.dirty = true;
+        dropped
+    }
+
+    /// Those past a belt's new `length` after shortening at its end, taken
+    /// out (to be thrown off).
+    pub fn take_beyond(&mut self, old_length: i32) -> Vec<Transported<S>> {
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.items)
+            .into_iter()
+            .partition(|t| t.belt_position > (old_length - 1) as f32);
+        self.items = kept;
+        self.dirty = true;
+        gone
+    }
+
+    /// The split belt's second half: the items past the cut, placed along it.
+    pub fn split_off(&mut self, hit_segment: i32, toward_positive: bool) -> BeltInventory<S> {
+        let mut new = BeltInventory::new();
+        let cut = (hit_segment + i32::from(toward_positive)) as f32;
+        let mut kept = Vec::new();
+        for mut t in std::mem::take(&mut self.items) {
+            let position = t.belt_position - cut;
+            if position <= 0.0 {
+                kept.push(t);
+                continue;
+            }
+            t.belt_position = position;
+            t.prev_belt_position = position;
+            new.insert(t);
+        }
+        self.items = kept;
+        self.dirty = true;
+        new.dirty = true;
+        new
+    }
+}
+
 /// `BeltRenderer.getSpriteShiftEntry`: the scrolling sprite of a belt dyed
 /// `dye` (0: none).
 pub fn belt_scroll_sprite(dye: u8, diagonal: bool) -> String {
@@ -2227,5 +2429,107 @@ mod tests {
         assert_eq!(stacked_copies(64), 3);
         // new Random(0).nextFloat(), as Java gives it.
         assert!((JavaRandom::new(0).next_float() - 0.730_967_8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_wrench_slices_belts() {
+        let state = |part| BeltState {
+            facing: Dir::East,
+            slope: Slope::Horizontal,
+            part,
+        };
+        // The outer half of the end segment: it goes.
+        assert_eq!(
+            wrench_slice(
+                state(Part::End),
+                [5, 0, 0],
+                5,
+                6,
+                false,
+                Dir::Up,
+                [0.3, 0.5, 0.0]
+            ),
+            Slice::Shorten { next: [4, 0, 0] }
+        );
+        // The middle of a long belt: cut towards the hit.
+        assert_eq!(
+            wrench_slice(
+                state(Part::Middle),
+                [2, 0, 0],
+                2,
+                6,
+                false,
+                Dir::Up,
+                [0.3, 0.5, 0.0]
+            ),
+            Slice::Split {
+                next: [3, 0, 0],
+                toward_positive: true
+            }
+        );
+        // Too near either end, a two-long belt, a casing's side.
+        assert_eq!(
+            wrench_slice(
+                state(Part::Middle),
+                [1, 0, 0],
+                1,
+                6,
+                false,
+                Dir::Up,
+                [-0.3, 0.5, 0.0]
+            ),
+            Slice::Fail
+        );
+        assert_eq!(
+            wrench_slice(
+                state(Part::End),
+                [1, 0, 0],
+                1,
+                2,
+                false,
+                Dir::Up,
+                [0.3, 0.5, 0.0]
+            ),
+            Slice::Fail
+        );
+        assert_eq!(
+            wrench_slice(
+                state(Part::Middle),
+                [2, 0, 0],
+                2,
+                6,
+                true,
+                Dir::North,
+                [0.0, 0.0, -0.5]
+            ),
+            Slice::Pass
+        );
+        let mut inv: BeltInventory<Item> = BeltInventory::new();
+        for p in [0.5, 2.5, 4.5] {
+            let mut t = Transported::new(Item("a", 1), 180);
+            t.belt_position = p;
+            inv.items.push(t);
+        }
+        let mut second = inv.clone();
+        let new = second.split_off(2, true);
+        assert_eq!(new.items.len(), 1);
+        assert_eq!(new.items[0].belt_position, 1.5);
+        assert_eq!(inv.take_beyond(4).len(), 1);
+        assert_eq!(inv.shift_back().len(), 1);
+        assert_eq!(
+            material_casing(belt_material(4, CASING_BRASS)),
+            CASING_BRASS
+        );
+        assert_eq!(material_dye(belt_material(4, CASING_BRASS)), 4);
+        let cased = BeltState {
+            facing: Dir::North,
+            slope: Slope::Downward,
+            part: Part::End,
+        };
+        assert_eq!(casing_model(cased), Some(("diagonal_start", 180.0)));
+        assert_eq!(
+            casing_model(state(Part::End)),
+            Some(("horizontal_end", 270.0))
+        );
     }
 }

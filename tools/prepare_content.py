@@ -235,6 +235,9 @@ PARTIALS = {
     "bearing_top_wooden": "create:block/bearing/top_wooden",
     # BeltRenderer's partials.
     "belt_pulley": "create:block/belt_pulley",
+    # The cased belt's blockstate models (BeltGenerator), drawn over the belt.
+    **{f"belt_casing_{slope}_{part}": f"create:block/belt_casing/{slope}_{part}"
+       for slope in ("horizontal", "diagonal") for part in ("start", "middle", "end", "pulley")},
     "belt_start": "create:block/belt/start",
     "belt_middle": "create:block/belt/middle",
     "belt_end": "create:block/belt/end",

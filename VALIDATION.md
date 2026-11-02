@@ -1,5 +1,16 @@
 # Validation
 
+## Belt casings and the wrench (macOS, offscreen)
+
+Seen working: brass and andesite casing clicked on two segments of a six-block belt draw Create's cased models
+(brass and andesite sprites); the wrench on the andesite one's side takes the casing off. The wrench on a middle
+segment's top splits the belt in two (end and start parts beside each other, the items staying on their halves);
+on the outer half of the end segment it takes that segment off and the one before becomes the end (the belt
+stands). 177 unit tests pass (1 new).
+
+Not checked yet: shortening at the start (items moved back), a survival split's cost, a pulley turned back,
+casings on sloped belts, items thrown off a shortened end, a LAN guest's wrench (the look ray fallback).
+
 ## Belt dyeing, stacked and upright items (macOS, offscreen)
 
 Seen working: blue dye clicked on a six-block belt turns all of it blue (its scrolling sprite swapped); a water

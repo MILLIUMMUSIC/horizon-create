@@ -86,6 +86,8 @@ struct Logistics {
     /// Chutes to look at on the next tick (`AbstractChuteBlock`'s scheduled
     /// ticks and `updateShape`), and chutes placed while sneaking.
     chute_updates: HashSet<(String, Pos)>,
+    /// Belt segments the wrench took off (`BeltSlicer`): no chain to break.
+    sliced: HashSet<(String, Pos)>,
     sneak_chutes: Vec<(String, Pos)>,
 }
 
@@ -885,6 +887,10 @@ pub(super) fn belts_removed(game: &mut Game<'_>, removed: &[(Pos, BeltState)]) {
     let shaft = registry.default_state(SHAFT);
     let mut queue: Vec<(Pos, BeltState)> = removed.to_vec();
     let mut done: HashSet<Pos> = removed.iter().map(|(p, _)| *p).collect();
+    let sliced: Vec<Pos> = with_state(|s| {
+        removed.iter().filter(|(p, _)| s.sliced.remove(&(dimension.clone(), *p))).map(|(p, _)| *p).collect()
+    });
+    queue.retain(|(p, _)| !sliced.contains(p));
     while let Some((pos, state)) = queue.pop() {
         for (p, axis) in on_removed(&World { game }, state, pos) {
             if !done.insert(p) {
@@ -1223,10 +1229,16 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         if let Chain::Belt { segments, .. } = find_chain(&World { game }, pos) {
             super::create_glue::with_kinetics(game, |k, _| {
                 for p in &segments {
-                    k.set_wheel_material(*p, dye);
+                    let casing = super::create_belt::material_casing(k.get(*p).map_or(0, |e| e.material));
+                    k.set_wheel_material(*p, super::create_belt::belt_material(dye, casing));
                 }
             });
         }
+        return true;
+    }
+    // setCasingType: a casing on this segment (the block isn't used up).
+    if let Some(casing) = held.as_ref().and_then(|h| super::create_belt::belt_casing(&h.item)) {
+        set_belt_casing(game, pos, casing);
         return true;
     }
     match held {
@@ -1310,6 +1322,164 @@ fn place_against(game: &mut Game<'_>, pos: Pos, face: [i32; 3], stack: &ItemStac
             *game.held_mut() = None;
         }
     }
+}
+
+/// `BeltBlockEntity.setCasingType` on the segment at `pos`.
+fn set_belt_casing(game: &Game<'_>, pos: Pos, casing: u8) -> bool {
+    super::create_glue::with_kinetics(game, |k, _| {
+        let dye = super::create_belt::material_dye(k.get(pos).map_or(0, |e| e.material));
+        k.set_wheel_material(pos, super::create_belt::belt_material(dye, casing))
+    })
+}
+
+/// Where the click hit the block at `pos`, from its centre: the client's
+/// hit, else where the acting player's look meets face `face`.
+fn click_point(game: &Game<'_>, pos: Pos, face: Dir) -> [f64; 3] {
+    let centre = pos.map(|v| f64::from(v) + 0.5);
+    // The hit the client sent with the click, when there is one.
+    if let Some(hit) = game.pick().filter(|h| h.pos == pos) {
+        return [0, 1, 2].map(|i| hit.point[i] - centre[i]);
+    }
+    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    let Some(p) = game.native_acting_player() else {
+        return [0.0; 3];
+    };
+    let eye = [p.position[0], p.position[1] + if sneaking { 1.27 } else { 1.62 }, p.position[2]];
+    let (y, pt) = (f64::from(game.yaw).to_radians(), f64::from(game.pitch).to_radians());
+    let dir = [-y.sin() * pt.cos(), -pt.sin(), y.cos() * pt.cos()];
+    let n = face.normal();
+    let axis = n.iter().position(|v| *v != 0).unwrap_or(1);
+    let plane = f64::from(pos[axis]) + if n[axis] > 0 { 1.0 } else { 0.0 };
+    let t = if dir[axis].abs() < 1e-9 { 0.0 } else { (plane - eye[axis]) / dir[axis] };
+    [0, 1, 2].map(|i| eye[i] + dir[i] * t - centre[i])
+}
+
+/// The wrench on a belt: `BeltSlicer.useWrench` (shorten an end, split in
+/// two), else `BeltBlock.onWrenched` (a casing off, a pulley back to a
+/// middle segment and its shaft back).
+pub(super) fn wrench_belt(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool {
+    use super::create_belt::{Part, Slice};
+    let Some(state) = belt_at(game, pos) else {
+        return false;
+    };
+    let mode = game.native_acting_player().map_or(0, |p| p.game_mode);
+    if sneaking || mode == 2 || mode == 3 {
+        return true;
+    }
+    let Chain::Belt { controller, segments } = find_chain(&World { game }, pos) else {
+        return true;
+    };
+    let index = segments.iter().position(|p| *p == pos).unwrap_or(0) as i32;
+    let length = segments.len() as i32;
+    let material = super::create_glue::with_kinetics(game, |k, _| k.get(pos).map_or(0, |e| e.material));
+    let cased = super::create_belt::material_casing(material) != super::create_belt::CASING_NONE;
+    let face = Dir::nearest(face);
+    let hit = click_point(game, pos, face);
+    let creative = mode == 1;
+    let dim = game.dim.id().to_owned();
+    match super::create_belt::wrench_slice(state, pos, index, length, cased, face, hit) {
+        Slice::Fail => {}
+        Slice::Pass => {
+            if cased {
+                set_belt_casing(game, pos, super::create_belt::CASING_NONE);
+            } else if state.part == Part::Pulley {
+                set_belt(game, pos, BeltState { part: Part::Middle, ..state });
+                if !creative {
+                    game.give_or_drop(ItemStack::new(SHAFT, 1));
+                }
+            }
+        }
+        Slice::Shorten { next } => {
+            let replaced = belt_at(game, next);
+            let entry = with_state(|s| {
+                s.sliced.insert((dim.clone(), pos));
+                s.belts.remove(&(dim.clone(), controller))
+            });
+            if let Some(n) = replaced {
+                set_belt(game, next, BeltState { part: state.part, ..n });
+            }
+            if let Some(air) = game.pack.assets.registry.default_state("minecraft:air") {
+                game.native_set_block(&dim, pos, air, super::native_hooks::flags::UPDATE_ALL);
+            }
+            if !creative && replaced.is_some_and(|n| n.part == Part::Pulley) {
+                game.give_or_drop(ItemStack::new(SHAFT, 1));
+            }
+            let Some(mut e) = entry else {
+                return true;
+            };
+            if state.part == Part::End {
+                // Items past the new end are thrown off it.
+                let gone = e.inv.take_beyond(length);
+                let belt = e.belt;
+                let mut w = BeltsWorld {
+                    game,
+                    others: &mut HashMap::new(),
+                    belt,
+                };
+                for t in gone {
+                    e.inv.eject(&belt, &mut w, t);
+                }
+                with_state(|s| s.belts.insert((dim.clone(), controller), e));
+            } else {
+                // The next segment leads now; what was on the cut one falls.
+                let c = pos.map(|v| f64::from(v) + 0.5);
+                for stack in e.inv.shift_back() {
+                    game.spawn_item(stack, [c[0], c[1] - 0.5 + 11.0 / 16.0, c[2]], [0.0; 3], PICKUP_DELAY);
+                }
+                with_state(|s| s.belts.insert((dim.clone(), next), e));
+            }
+        }
+        Slice::Split { next, toward_positive } => {
+            let next_state = belt_at(game, next);
+            if !creative && !take_split_cost(game, state, next_state) {
+                return true;
+            }
+            set_belt(game, pos, BeltState { part: if toward_positive { Part::End } else { Part::Start }, ..state });
+            if let Some(n) = next_state {
+                set_belt(game, next, BeltState { part: if toward_positive { Part::Start } else { Part::End }, ..n });
+            }
+            let new_controller = if toward_positive { next } else { pos };
+            with_state(|s| {
+                let Some(e) = s.belts.get_mut(&(dim.clone(), controller)) else {
+                    return;
+                };
+                let inv = e.inv.split_off(index, toward_positive);
+                let belt = e.belt;
+                s.belts.insert((dim.clone(), new_controller), Entry { inv, belt });
+            });
+        }
+    }
+    true
+}
+
+/// A survival player's split takes a belt connector and a shaft for each
+/// new end that had none; false (nothing taken) without them.
+fn take_split_cost(game: &mut Game<'_>, state: BeltState, next: Option<BeltState>) -> bool {
+    use super::create_belt::Part;
+    let shafts = u32::from(!state.has_pulley()) + u32::from(next.is_some_and(|n| n.part == Part::Middle));
+    let count = |game: &Game<'_>, item: &str| -> u32 {
+        game.inventory.iter().flatten().filter(|s| &*s.item == item).map(|s| s.count).sum()
+    };
+    if count(game, CONNECTOR) < 1 || count(game, SHAFT) < shafts {
+        return false;
+    }
+    for (item, mut left) in [(CONNECTOR, 1), (SHAFT, shafts)] {
+        for slot in game.inventory.iter_mut() {
+            if left == 0 {
+                break;
+            }
+            let Some(s) = slot.as_mut().filter(|s| &*s.item == item) else {
+                continue;
+            };
+            let take = left.min(s.count);
+            s.count -= take;
+            left -= take;
+            if s.count == 0 {
+                *slot = None;
+            }
+        }
+    }
+    true
 }
 
 fn set_belt(game: &mut Game<'_>, pos: Pos, state: BeltState) -> bool {

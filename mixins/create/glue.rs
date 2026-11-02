@@ -507,9 +507,10 @@ fn right_click_hand(
         // Templates with a use of their own (a grindstone's or an enchanting
         // table's menu) would take the click before `native_use_item_on`:
         // the wrench acts here for them.
-        // Belts (a grindstone's template) aren't wrenched yet (BeltSlicer).
+        // Belts (a grindstone's template): BeltSlicer, then onWrenched.
         if matches!(kind, Some(Kind::Belt(_))) {
             *canceled = true;
+            super::create_logistics::wrench_belt(game, pos, face, sneaking);
             return;
         }
         let own_use = matches!(
@@ -1125,11 +1126,31 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                     "create:block/belt"
                 };
                 // A dyed belt's own scrolling sprite.
-                let target = super::create_belt::belt_scroll_sprite(view.aux.max(0) as u8, diagonal);
+                let dye = super::create_belt::material_dye(view.aux.max(0) as u8);
+                let target = super::create_belt::belt_scroll_sprite(dye, diagonal);
                 let scroll = belt_scroll(b, view.speed, time, bottom);
                 scrolls.resize(want.len(), None);
                 scrolls.push(Some((original, target, scroll)));
                 want.push((holder, None, turn, Axis::Y, 0.0, 0.0));
+            }
+            // BeltModel: a cased segment's blockstate model over it, its
+            // brass sprite swapped for andesite's on an andesite casing.
+            let casing = super::create_belt::material_casing(view.aux.max(0) as u8);
+            if casing != super::create_belt::CASING_NONE
+                && let Some((model, y)) = super::create_belt::casing_model(b)
+            {
+                let orient = glam::Mat4::from_rotation_y((-y).to_radians());
+                scrolls.resize(want.len(), None);
+                if casing == super::create_belt::CASING_ANDESITE {
+                    scrolls.push(Some((
+                        "create:block/belt/brass_belt_casing",
+                        "create:block/belt/andesite_belt_casing".to_owned(),
+                        0.0,
+                    )));
+                } else {
+                    scrolls.push(None);
+                }
+                want.push((casing_holder(model), None, orient, Axis::Y, 0.0, 0.0));
             }
             if b.has_pulley() {
                 let dir = b.facing.clockwise(Axis::Y);
@@ -1300,6 +1321,19 @@ pub(super) fn draw(
 }
 
 /// The model holder of a belt partial (`AllPartialModels.BELT_*`).
+fn casing_holder(name: &str) -> &'static str {
+    match name {
+        "horizontal_start" => "create:hz_part_belt_casing_horizontal_start",
+        "horizontal_middle" => "create:hz_part_belt_casing_horizontal_middle",
+        "horizontal_end" => "create:hz_part_belt_casing_horizontal_end",
+        "horizontal_pulley" => "create:hz_part_belt_casing_horizontal_pulley",
+        "diagonal_start" => "create:hz_part_belt_casing_diagonal_start",
+        "diagonal_middle" => "create:hz_part_belt_casing_diagonal_middle",
+        "diagonal_end" => "create:hz_part_belt_casing_diagonal_end",
+        _ => "create:hz_part_belt_casing_diagonal_pulley",
+    }
+}
+
 fn belt_holder(name: &str) -> &'static str {
     match name {
         "belt_start" => "create:hz_part_belt_start",
