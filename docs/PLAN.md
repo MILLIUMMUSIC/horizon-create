@@ -96,11 +96,17 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    - Chute (`chute.rs`: `ChuteBlockEntity`'s item and `handleDownwardOutput`/`handleInputFromAbove`; a mod block
      entity): items fall at 4 blocks a second, into the inventory below (containers, depots, belt segments), into
      the chute below, or out of the bottom onto the ground; an empty chute takes up to 16 from the inventory above
-     and items falling on top; its item drawn at its height. A fan facing up under a straight column pushes, one facing down on top pulls (`calculatePush`/`calculatePull`,
+     and items falling on top; its item drawn at its height in a window (`ChuteRenderer`). A fan facing up under a
+     column pushes, one facing down on top pulls (`calculatePush`/`calculatePull`, through diagonal chutes too,
      `getItemMotion`): items blown up go into the inventory or chute above or fly out of the top
      (`handleUpwardOutput`), and an upward chute takes from the inventory below (`handleInputFromBelow`). An empty upward
      chute takes the middle item of a belt within reach below or draws in an item entity under it (`updateAirFlow`,
-     `extractFromBelt`, `findEntities`; reach from `pull - push`). Not yet: diagonal chutes, window and intersection shapes, smart chutes.
+     `extractFromBelt`, `findEntities`; reach from `pull - push`). Diagonal chutes: placed on a block's side (not
+     sneaking) a chute faces it and leads down to the chute beside below, else turns straight; they hand items on
+     (`getTargetChute`, `getInputChutes`) and drop none. Shapes from the chutes around (`updateChuteState`, a tick
+     after a change), a block per shape on a lightning rod's template (`facing`) keeping the chute's item; the wrench
+     makes a window (`onWrenched`), industrial iron encases it. Not yet: `canSurvive` (a chute under a diagonal
+     one), the goggle tooltip, smart chutes.
    - Andesite funnel (`funnel.rs`; no block entity): extracting (placed normally) puts one item every 8 ticks
      from the inventory behind in front of it, unless an item still lies there; collecting (placed sneaking, or
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt

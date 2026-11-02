@@ -1,5 +1,18 @@
 # Validation
 
+## Diagonal chutes and chute shapes (macOS, offscreen)
+
+Seen working: a hopper over a straight chute over a diagonal chute facing east hands iron and gold ingots through
+it into the chute below and beside it and on into a chest; the lower chute turns into an intersection and the
+diagonal one into a diagonal intersection (nothing feeds it from the side), drawn from Create's models. A chute
+placed by hand on a block's east side faces east and stays diagonal. The wrench turns a straight chute into a
+window chute and back from encased; industrial iron encases it; items still pass after each change. 173 unit
+tests pass (1 new).
+
+Not checked yet: a run of diagonal chutes (the plain diagonal shape), an item kept while its chute changes shape,
+sneaking placement, fans through diagonal chutes, items drawn in a window, arms and funnels on a window or
+intersection chute.
+
 ## Upward chutes pulling from below (macOS, offscreen)
 
 Seen working: an encased fan facing down on two chutes, turned at 256 RPM by a creative motor, draws oak planks

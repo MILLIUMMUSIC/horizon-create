@@ -1002,7 +1002,7 @@ fn point_type_at(game: &Game<'_>, pos: Pos) -> Option<PointType> {
     match name.as_str() {
         super::create_machines::BASIN => Some(PointType::Basin),
         super::create_machines::DEPOT => Some(PointType::Depot),
-        super::create_logistics::CHUTE => Some(PointType::Chute),
+        name if super::create_logistics::is_chute_block(name) => Some(PointType::Chute),
         "create:millstone" => Some(PointType::Millstone),
         "minecraft:campfire" | "minecraft:soul_campfire" => Some(PointType::Campfire),
         "minecraft:composter" => Some(PointType::Composter),
@@ -1398,7 +1398,9 @@ fn directional_facing(game: &Game<'_>, pos: Pos, name: &str, clicked: Dir, p: &P
             _ => clicked,
         },
         "create:encased_fan" => {
-            let chute = |d: Dir| block_name(game, add(pos, d.normal())).as_deref() == Some(super::create_logistics::CHUTE);
+            let chute = |d: Dir| {
+                block_name(game, add(pos, d.normal())).is_some_and(|n| super::create_logistics::is_chute_block(&n))
+            };
             if chute(clicked.opposite()) {
                 return clicked.opposite();
             }

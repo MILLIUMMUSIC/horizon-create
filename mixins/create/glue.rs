@@ -407,6 +407,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_machines::fan_tick(game, dimension, &fans);
     super::create_logistics::belts_tick(game, dimension, &belts, full_update);
     super::create_logistics::funnels_tick(game, dimension);
+    super::create_logistics::chutes_update(game, dimension);
     super::create_logistics::tunnels_tick(game, dimension);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
@@ -513,7 +514,7 @@ fn right_click_hand(
             Some(Kind::MechanicalPress(_) | Kind::MechanicalMixer | Kind::Millstone)
         ) || name == super::create_machines::DEPOT
             || name == super::create_machines::BASIN
-            || name == super::create_logistics::CHUTE
+            || super::create_logistics::is_chute_block(&name)
             || name == super::create_arms::VAULT
             || name == super::create_arms::ARM;
         if own_use {
@@ -646,6 +647,7 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     if !sneaking
         && (super::create_logistics::wrench_funnel(game, pos)
             || super::create_logistics::wrench_tunnel(game, pos)
+            || super::create_logistics::wrench_chute(game, pos)
             || super::create_arms::wrench(game, pos, face))
     {
         return true;

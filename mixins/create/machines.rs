@@ -121,8 +121,10 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if super::create_arms::block_entity(block, entity) {
         return;
     }
-    let chute = block == super::create_logistics::CHUTE;
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || chute) {
+    if entity.is_none() && super::create_logistics::is_chute_block(block) {
+        *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
+    }
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -132,7 +134,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == super::create_logistics::CHUTE {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || super::create_logistics::is_chute_block(block) {
         *ticks = true;
     }
 }
@@ -144,6 +146,8 @@ pub(super) fn block_entity_container(block: &str, container: &mut Option<ModCont
         *container = Some(c);
         return;
     }
+    // Every chute's block has the chute's block entity.
+    let block = if super::create_logistics::is_chute_block(block) { super::create_logistics::CHUTE } else { block };
     let (slots, inputs, outputs): (usize, Vec<usize>, Vec<usize>) = match block {
         DEPOT => (DEPOT_SLOTS, vec![0], (0..DEPOT_SLOTS).collect()),
         MILLSTONE => (MILLSTONE_SLOTS, vec![0], (1..MILLSTONE_SLOTS).collect()),
@@ -902,7 +906,7 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                     .is_none_or(|s| {
                         s.name != DEPOT
                             && s.name != BASIN
-                            && s.name != super::create_logistics::CHUTE
+                            && !super::create_logistics::is_chute_block(&s.name)
                             && !super::create_funnel::is_funnel(&s.name)
                     })
         })
@@ -1020,7 +1024,7 @@ pub(super) fn draw_depots(
             .assets
             .registry
             .state(game.world.block(pos[0], pos[1], pos[2]))
-            .is_some_and(|s| s.name == super::create_logistics::CHUTE);
+            .is_some_and(|s| super::create_logistics::is_chute_block(&s.name));
         if chute {
             super::create_logistics::draw_chute(game, camera, *pos, slots, out);
             continue;

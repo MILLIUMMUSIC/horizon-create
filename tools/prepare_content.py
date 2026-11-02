@@ -125,9 +125,6 @@ CONTAINERS = {
     # BasinBlock's `facing` (where it pours out) needs a template property:
     # it always faces down, into its own output inventory.
     "basin": {"template": "minecraft:enchanting_table", "model": "create:block/basin/block"},
-    # ChuteBlock's `facing` and `shape` need template properties: chutes are
-    # straight (facing down), drawn as the plain one.
-    "chute": {"template": "minecraft:enchanting_table", "model": "create:block/chute/block"},
     # ArmBlock's `ceiling` needs a template property: arms stand on the floor.
     # The block keeps its base model; the native mod draws the cog and body.
     "mechanical_arm": {"template": "minecraft:enchanting_table", "model": "create:block/mechanical_arm/block"},
@@ -547,6 +544,7 @@ def fit_logistics(content, names):
                 variants["axis=y"] = variants["axis=x"]
             write_json(states / f"{name}.json", {"variants": variants})
 
+    fit_chutes(content, names)
     fit_arms(content, names)
     fit_pistons(content, names)
     fit_chassis(content, names)
@@ -566,6 +564,7 @@ def fit_logistics(content, names):
         **{name: f"create:{kind}_tunnel" for kind in ("andesite", "brass")
            for name in tunnel_blocks(kind) if name != f"{kind}_tunnel"},
         **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
+        **{name: "create:chute" for name in CHUTE_BLOCKS.values() if name != "chute"},
         "hz_mechanical_saw_along": "create:mechanical_saw",
         "elevator_contact": "create:redstone_contact",
         "water_wheel_structure": "create:large_water_wheel",
@@ -575,6 +574,51 @@ def fit_logistics(content, names):
         **{f"hz_gantry_shaft_{part}": "create:gantry_shaft" for part in ("start", "middle", "end")},
         "hz_gantry_carriage_along": "create:gantry_carriage",
     })
+
+
+# Chutes: ChuteBlock's `facing` (down or a side, toward where a diagonal
+# chute comes from) on a lightning rod's template (`up` stands for `down`
+# until the native mod sets it), a block per `shape`. A chute's block entity
+# is `create:chute` whatever its shape.
+CHUTE_BLOCKS = {"normal": "chute", "window": "chute_window", "intersection": "chute_intersection",
+                "encased": "chute_encased"}
+CHUTE_STRAIGHT = [box(1, 8, 1, 15, 16, 15), box(2, 0, 2, 14, 8, 14)]
+# ChuteShapes.createSlope (`PANEL` moved up and along 16 times), for a chute
+# facing south, cut at the block's bottom.
+CHUTE_SLOPE_SOUTH = [box(1, max(0, i - 15), i, 15, i + 4, i + 1) for i in range(16)]
+
+
+def fit_chutes(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    original = read_json(states / "chute.json") if (states / "chute.json").exists() else {}
+    base = read_json(blocks / "chute.json") if (blocks / "chute.json").exists() else {}
+    turns = {"north": 0, "east": 1, "south": 2, "west": 3}
+    for shape, name in CHUTE_BLOCKS.items():
+        full = shape in ("intersection", "encased")
+        shapes = {f: [box(0, 0, 0, 16, 16, 16)] if full else CHUTE_STRAIGHT for f in ("down", "up")}
+        for f, q in turns.items():
+            shapes[f] = [box(0, 0, 0, 16, 16, 16)] if full else [turn_y(b, q - 2) for b in CHUTE_SLOPE_SOUTH]
+        decl = dict(base)
+        decl["template"] = "minecraft:lightning_rod"
+        decl.pop("default_state", None)
+        decl["shapes"] = {"property": "facing", "values": shapes}
+        decl.setdefault("properties", {})["light"] = 0
+        if name != "chute":
+            decl["item"] = False
+            names[f"block.create.{name}"] = names.get("block.create.chute", "Chute")
+            write_json(loot_tables / f"{name}.json", loot(name, ["create:chute"]))
+        write_json(blocks / f"{name}.json", decl)
+        variants = {}
+        for key, model in original.get("variants", {}).items():
+            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            if props.get("shape") == shape and props.get("waterlogged", "false") == "false":
+                variants[f"facing={props['facing']}"] = model
+        if "facing=down" in variants:
+            variants["facing=up"] = variants["facing=down"]
+        if variants:
+            write_json(states / f"{name}.json", {"variants": variants})
 
 
 # Fluid pipes: Create's `fluid_pipe` (six `north`...`down` booleans, set by

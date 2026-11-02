@@ -15,7 +15,7 @@ use super::create_belt::{
     Conversion, FunnelShape, ProcessingResult, Slope, Stack, Transported, TunnelAbove, belt_chain,
     belts_between, can_connect, find_chain, item_place, on_removed,
 };
-use super::create_chute::{Chute, ChuteWorld, item_motion, max_pull_distance};
+use super::create_chute::{Chute, ChuteAround, ChuteShape, ChuteWorld, chute_state, item_motion, max_pull_distance};
 use super::create_funnel::{
     BeltBelow, EXTRACTION_TIMER, Filter, FunnelState, Mode, amount_to_extract, as_belt_funnel,
     collects_entity_at, extracted_item, filter_slot, overflow_area, tick_cooldown,
@@ -83,6 +83,10 @@ struct Logistics {
     first_shaft: HashMap<u128, (String, Pos)>,
     /// Funnels placed while sneaking, to turn into collecting ones.
     sneak_placed: Vec<(String, Pos)>,
+    /// Chutes to look at on the next tick (`AbstractChuteBlock`'s scheduled
+    /// ticks and `updateShape`), and chutes placed while sneaking.
+    chute_updates: HashSet<(String, Pos)>,
+    sneak_chutes: Vec<(String, Pos)>,
 }
 
 static STATE: Mutex<Option<Logistics>> = Mutex::new(None);
@@ -143,7 +147,7 @@ pub(super) fn is_belt(name: &str) -> bool {
 /// Blocks of ours outside the kinetics, whose changes the glue reports.
 pub(super) fn is_ours(name: &str) -> bool {
     is_belt(name)
-        || name == CHUTE
+        || is_chute_block(name)
         || super::create_funnel::is_funnel(name)
         || TunnelState::from_block(name, |_| None).is_some()
 }
@@ -211,7 +215,65 @@ fn can_insert_from_side(game: &Game<'_>, pos: Pos, side: Dir) -> bool {
 }
 
 fn is_chute(game: &Game<'_>, pos: Pos) -> bool {
-    block_name(game, pos).as_deref() == Some(CHUTE)
+    chute_at(game, pos).is_some()
+}
+
+/// The chute's block for each shape (its block entity is `CHUTE` for all).
+fn chute_block(shape: ChuteShape) -> &'static str {
+    match shape {
+        ChuteShape::Normal => CHUTE,
+        ChuteShape::Window => "create:chute_window",
+        ChuteShape::Intersection => "create:chute_intersection",
+        ChuteShape::Encased => "create:chute_encased",
+    }
+}
+
+pub(super) fn is_chute_block(name: &str) -> bool {
+    ChuteShape::ALL.iter().any(|s| chute_block(*s) == name)
+}
+
+/// The facing and shape of the chute at `pos` (a template's `up`, before
+/// it is set, stands for down).
+fn chute_at(game: &Game<'_>, pos: Pos) -> Option<(Dir, ChuteShape)> {
+    let name = block_name(game, pos)?;
+    let shape = ChuteShape::ALL.into_iter().find(|s| chute_block(*s) == name)?;
+    let facing = prop(game, pos, "facing")
+        .and_then(|f| Dir::ALL.into_iter().find(|d| d.name() == f))
+        .filter(|d| *d != Dir::Up)
+        .unwrap_or(Dir::Down);
+    Some((facing, shape))
+}
+
+fn below(pos: Pos) -> Pos {
+    [pos[0], pos[1] - 1, pos[2]]
+}
+
+fn above(pos: Pos) -> Pos {
+    [pos[0], pos[1] + 1, pos[2]]
+}
+
+fn step(pos: Pos, d: Dir) -> Pos {
+    let n = d.normal();
+    [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]]
+}
+
+/// `getTargetChute`: where a chute facing `facing` sends its items.
+fn chute_target(pos: Pos, facing: Dir) -> Pos {
+    if facing == Dir::Down { below(pos) } else { step(below(pos), facing.opposite()) }
+}
+
+/// `getInputChutes`: the chute above facing down, and those above and
+/// beside facing the way they lie.
+fn input_chutes(game: &Game<'_>, pos: Pos) -> Vec<Pos> {
+    let mut out = Vec::new();
+    for d in [Dir::Up, Dir::North, Dir::South, Dir::West, Dir::East] {
+        let facing = d.opposite();
+        let at = if facing == Dir::Down { above(pos) } else { step(above(pos), facing) };
+        if chute_at(game, at).is_some_and(|(f, _)| f == facing) {
+            out.push(at);
+        }
+    }
+    out
 }
 
 struct World<'a, 'g> {
@@ -552,8 +614,11 @@ fn has_direct_input(game: &Game<'_>, pos: Pos) -> bool {
     }
     match block_name(game, pos).as_deref() {
         Some(super::create_machines::DEPOT) => true,
-        // canDirectlyInsert: not under another chute.
-        Some(CHUTE) => !is_chute(game, [pos[0], pos[1] + 1, pos[2]]),
+        // canDirectlyInsert: an open chute not under one facing down.
+        Some(name) if is_chute_block(name) => {
+            chute_at(game, pos).is_some_and(|(f, s)| super::create_chute::is_open(f, s))
+                && chute_at(game, above(pos)).is_none_or(|(f, _)| f != Dir::Down)
+        }
         _ => funnel_at(game, pos).is_some_and(FunnelState::takes_from_belt_end),
     }
 }
@@ -584,7 +649,7 @@ fn direct_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack) -> Option<Opti
             })
             .flatten()
         }
-        Some(CHUTE) => game
+        Some(name) if is_chute_block(name) => game
             .native_with_mod_block_entity(pos, |be| {
                 if be.items.first().is_some_and(Option::is_some) {
                     return None;
@@ -976,6 +1041,12 @@ pub(super) fn draw_chute(
         return;
     }
     let place = slots.get(1).map_or(0.5, |(_, p)| *p as f32 / 200.0);
+    // ChuteRenderer: straight chutes only, in a window or pulled in below.
+    match chute_at(game, pos) {
+        Some((Dir::Down, ChuteShape::Window)) => {}
+        Some((Dir::Down, _)) if place <= 0.5 => {}
+        _ => return,
+    }
     let centre = glam::DVec3::new(
         f64::from(pos[0]) + 0.5,
         f64::from(pos[1]) + f64::from(place),
@@ -998,6 +1069,16 @@ pub(super) fn draw_chute(
 /// the segment (`BeltBlock.useItemOn`), a shaft on a middle segment makes a
 /// pulley. True for every belt: the template's own menu never opens.
 pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
+    // ChuteBlock.useItemOn: industrial iron encases it (and stays in hand).
+    if let Some((facing, shape)) = chute_at(game, pos)
+        && game.held().is_some_and(|h| &*h.item == "create:industrial_iron_block")
+    {
+        if let Some(next) = super::create_chute::encased(shape) {
+            set_chute(game, pos, facing, next);
+            return true;
+        }
+        return false;
+    }
     if right_click_filter(game, pos, face) || right_click_tunnel(game, pos) || right_click_funnel(game, pos, face) {
         return true;
     }
@@ -1195,10 +1276,22 @@ pub(super) fn use_connector(game: &mut Game<'_>, stack: &ItemStack, pos: Pos) ->
 /// `native_place_block`: a funnel placed while sneaking collects
 /// (`EXTRACTING` is `!sneaking`); funnels are remembered for their ticks.
 pub(super) fn placed(game: &Game<'_>, pos: Pos) {
+    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    // ChuteBlock.getStateForPlacement: a side clicked makes it diagonal,
+    // but not when sneaking.
+    if is_chute(game, pos) {
+        let dim = game.dim.id().to_owned();
+        with_state(|s| {
+            if sneaking {
+                s.sneak_chutes.push((dim.clone(), pos));
+            }
+            s.chute_updates.insert((dim, pos));
+        });
+        return;
+    }
     let Some(f) = funnel_at(game, pos) else {
         return;
     };
-    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let dim = game.dim.id().to_owned();
     with_state(|s| {
         s.funnels.insert((dim.clone(), pos), FunnelData::default());
@@ -1256,6 +1349,19 @@ pub(super) fn changed(game: &Game<'_>, dimension: &str, positions: &[Pos]) {
         .map(|&p| (p, funnel_at(game, p).is_some(), tunnel_at(game, p).is_some()))
         .collect();
     with_state(|s| {
+        // The chutes whose shape may follow (`onPlace`, `onRemove`,
+        // `updateShape`): its own, the layer below and those above beside.
+        for &p in positions {
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    s.chute_updates.insert((dimension.to_owned(), [p[0] + dx, p[1] - 1, p[2] + dz]));
+                }
+            }
+            s.chute_updates.insert((dimension.to_owned(), p));
+            for d in [Dir::North, Dir::South, Dir::West, Dir::East] {
+                s.chute_updates.insert((dimension.to_owned(), step(above(p), d)));
+            }
+        }
         for (p, funnel, tunnel) in found {
             let key = (dimension.to_owned(), p);
             if funnel {
@@ -1271,6 +1377,92 @@ pub(super) fn changed(game: &Game<'_>, dimension: &str, positions: &[Pos]) {
             }
         }
     });
+}
+
+/// Sets the chute at `pos` to `facing` and `shape`, keeping its item.
+fn set_chute(game: &mut Game<'_>, pos: Pos, facing: Dir, shape: ChuteShape) {
+    use horizon_client::containers::BlockEntity as B;
+    let kept = match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+        Some(B::Mod(m)) => Some((m.items.clone(), m.nbt.clone())),
+        _ => None,
+    };
+    let Some(base) = game.pack.assets.registry.default_state(chute_block(shape)) else {
+        return;
+    };
+    let Some(id) = game.with_props(base, &[("facing", facing.name())]) else {
+        return;
+    };
+    let dimension = game.dim.id().to_owned();
+    game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+    if let Some((items, nbt)) = kept {
+        game.native_with_mod_block_entity(pos, |be| {
+            be.items = items;
+            be.nbt = nbt;
+        });
+    }
+}
+
+/// `AbstractChuteBlock.tick` for the chutes changes were near:
+/// `updateChuteState`, and placed chutes' facing.
+pub(super) fn chutes_update(game: &mut Game<'_>, dimension: &str) {
+    let (todo, sneaked) = with_state(|s| {
+        let mut todo = Vec::new();
+        s.chute_updates.retain(|(d, p)| {
+            if d == dimension {
+                todo.push(*p);
+                false
+            } else {
+                true
+            }
+        });
+        let mut sneaked = Vec::new();
+        s.sneak_chutes.retain(|(d, p)| {
+            if d == dimension {
+                sneaked.push(*p);
+                false
+            } else {
+                true
+            }
+        });
+        (todo, sneaked)
+    });
+    for p in sneaked {
+        if let Some((_, shape)) = chute_at(game, p) {
+            set_chute(game, p, Dir::Down, shape);
+        }
+    }
+    for p in todo {
+        if !game.world.loaded(p[0], p[2]) {
+            continue;
+        }
+        let Some((facing, shape)) = chute_at(game, p) else {
+            continue;
+        };
+        let template_up = prop(game, p, "facing").as_deref() == Some("up");
+        let up = above(p);
+        let around = ChuteAround {
+            target_is_chute: is_chute(game, chute_target(p, facing)),
+            inputs: [Dir::North, Dir::South, Dir::West, Dir::East]
+                .map(|d| chute_at(game, step(up, d)).is_some_and(|(f, _)| f == d)),
+            above_facing_down: chute_at(game, up).is_some_and(|(f, _)| f == Dir::Down)
+                || funnel_at(game, up).is_some_and(|f| f.facing == Dir::Down),
+        };
+        let next = chute_state(facing, shape, around);
+        if next != (facing, shape) || template_up {
+            set_chute(game, p, next.0, next.1);
+        }
+    }
+}
+
+/// `ChuteBlock.onWrenched`: true for every chute.
+pub(super) fn wrench_chute(game: &mut Game<'_>, pos: Pos) -> bool {
+    let Some((facing, shape)) = chute_at(game, pos) else {
+        return false;
+    };
+    if let Some(next) = super::create_chute::wrenched(facing, shape).filter(|n| *n != shape) {
+        set_chute(game, pos, facing, next);
+    }
+    true
 }
 
 /// `FunnelBlockEntity.tick` and `FunnelBlock.entityInside` for every funnel
@@ -1736,7 +1928,7 @@ fn side_insert(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack, simul
     }
     if simulate {
         let free = match block_name(game, pos).as_deref() {
-            Some(super::create_machines::DEPOT) | Some(CHUTE) => {
+            Some(name) if name == super::create_machines::DEPOT || is_chute_block(name) => {
                 use horizon_client::containers::BlockEntity as B;
                 match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
                     Some(B::Mod(m)) => m.items.iter().all(Option::is_none),
@@ -1883,6 +2075,10 @@ pub(super) fn set_chute_item(be: &mut ModBlockEntity, item: Option<ItemStack>, p
 struct ChuteAt<'a, 'g> {
     game: &'a mut Game<'g>,
     pos: Pos,
+    facing: Dir,
+    shape: ChuteShape,
+    /// The input chute `chute_above_accepts` chose.
+    best_input: std::cell::Cell<Option<Pos>>,
 }
 
 impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
@@ -1910,8 +2106,11 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
         }
         Some(insert_into(self.game, below, Dir::Up, stack.clone()))
     }
+    fn facing_down(&self) -> bool {
+        self.facing == Dir::Down
+    }
     fn chute_below_accepts(&self) -> Option<bool> {
-        let below = [self.pos[0], self.pos[1] - 1, self.pos[2]];
+        let below = chute_target(self.pos, self.facing);
         if !is_chute(self.game, below) {
             return None;
         }
@@ -1925,8 +2124,9 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
         Some(empty(self.game))
     }
     fn give_chute_below(&mut self, stack: ItemStack) {
-        let below = [self.pos[0], self.pos[1] - 1, self.pos[2]];
-        self.game.native_with_mod_block_entity(below, |be| set_chute_item(be, Some(stack), 1.0));
+        let below = chute_target(self.pos, self.facing);
+        let position = if self.facing == Dir::Down { 1.0 } else { 0.51 };
+        self.game.native_with_mod_block_entity(below, |be| set_chute_item(be, Some(stack), position));
     }
     fn funnel_below_facing_down(&self) -> bool {
         funnel_at(self.game, [self.pos[0], self.pos[1] - 1, self.pos[2]]).is_some_and(|f| f.facing == Dir::Down)
@@ -1947,8 +2147,11 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
     }
     fn insert_above(&mut self, stack: &ItemStack, simulate: bool) -> Option<Option<ItemStack>> {
         let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
-        // `isOpenChute`: only an open (straight) chute hands items up.
-        if !has_inventory(self.game, above) || belt_at(self.game, above).is_some() {
+        // `isOpenChute`: only an open chute hands items up.
+        if !super::create_chute::is_open(self.facing, self.shape)
+            || !has_inventory(self.game, above)
+            || belt_at(self.game, above).is_some()
+        {
             return None;
         }
         if simulate {
@@ -1957,20 +2160,30 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
         Some(insert_into(self.game, above, Dir::Down, stack.clone()))
     }
     fn chute_above_accepts(&self) -> Option<bool> {
-        let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
-        if !is_chute(self.game, above) {
+        let inputs = input_chutes(self.game, self.pos);
+        if inputs.is_empty() {
             return None;
         }
         use horizon_client::containers::BlockEntity as B;
-        let empty = match self.game.world.block_entities.get(&(above[0], above[1], above[2])) {
-            Some(B::Mod(m)) => m.items.first().is_none_or(Option::is_none),
-            _ => false,
-        };
-        // Its item moving up or standing: the same column's motion.
-        Some(empty && chute_motion(self.game, above) >= 0.0)
+        // The empty input chute whose item moves up fastest (or stands).
+        let mut best: Option<(Pos, f32)> = None;
+        for p in inputs {
+            let empty = match self.game.world.block_entities.get(&(p[0], p[1], p[2])) {
+                Some(B::Mod(m)) => m.items.first().is_none_or(Option::is_none),
+                _ => false,
+            };
+            let motion = chute_motion(self.game, p);
+            if empty && motion >= 0.0 && best.is_none_or(|(_, m)| m < motion) {
+                best = Some((p, motion));
+            }
+        }
+        self.best_input.set(best.map(|(p, _)| p));
+        Some(best.is_some())
     }
     fn give_chute_above(&mut self, stack: ItemStack) {
-        let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
+        let Some(above) = self.best_input.get() else {
+            return;
+        };
         self.game.native_with_mod_block_entity(above, |be| set_chute_item(be, Some(stack), 0.0));
     }
     fn blocked_above(&self) -> bool {
@@ -1994,25 +2207,49 @@ impl ChuteWorld<ItemStack> for ChuteAt<'_, '_> {
     }
 }
 
-/// `calculatePull` and `calculatePush` of a straight chute column: a fan
-/// at its top facing down pulls with its speed, one at its bottom facing
-/// up pushes; every chute of the column shares them (one branch).
+/// `calculatePull` and `calculatePush`: a fan above a chute facing down
+/// pulls with its speed, else the input chutes' pulls add up; a fan below
+/// facing up pushes, else the target chute's push is shared among its
+/// inputs.
 fn chute_fans(game: &Game<'_>, pos: Pos) -> (f32, f32) {
-    let fan = |p: Pos, facing: Dir| match super::create_glue::kind_at(game, p) {
-        Some(Kind::EncasedFan(f)) if f == facing => Some(super::create_glue::with_kinetics(game, |k, level| k.speed_of(level, p))),
+    (chute_push(game, pos, 0), chute_pull(game, pos, 0))
+}
+
+/// Chutes followed at most for a fan (Create keeps each chute's own).
+const CHUTE_REACH: u32 = 64;
+
+fn fan_speed(game: &Game<'_>, p: Pos, facing: Dir) -> Option<f32> {
+    match super::create_glue::kind_at(game, p) {
+        Some(Kind::EncasedFan(f)) if f == facing => {
+            Some(super::create_glue::with_kinetics(game, |k, level| k.speed_of(level, p)))
+        }
         _ => None,
+    }
+}
+
+fn chute_pull(game: &Game<'_>, pos: Pos, depth: u32) -> f32 {
+    if let Some(speed) = fan_speed(game, above(pos), Dir::Down) {
+        return speed;
+    }
+    if depth >= CHUTE_REACH {
+        return 0.0;
+    }
+    input_chutes(game, pos).into_iter().map(|p| chute_pull(game, p, depth + 1)).sum()
+}
+
+fn chute_push(game: &Game<'_>, pos: Pos, depth: u32) -> f32 {
+    if let Some(speed) = fan_speed(game, below(pos), Dir::Up) {
+        return speed;
+    }
+    let Some((facing, _)) = chute_at(game, pos) else {
+        return 0.0;
     };
-    let mut top = pos;
-    while is_chute(game, [top[0], top[1] + 1, top[2]]) {
-        top[1] += 1;
+    let target = chute_target(pos, facing);
+    if depth >= CHUTE_REACH || !is_chute(game, target) {
+        return 0.0;
     }
-    let mut bottom = pos;
-    while is_chute(game, [bottom[0], bottom[1] - 1, bottom[2]]) {
-        bottom[1] -= 1;
-    }
-    let pull = fan([top[0], top[1] + 1, top[2]], Dir::Down).unwrap_or(0.0);
-    let push = fan([bottom[0], bottom[1] - 1, bottom[2]], Dir::Up).unwrap_or(0.0);
-    (push, pull)
+    let branches = input_chutes(game, target).len().max(1) as f32;
+    chute_push(game, target, depth + 1) / branches
 }
 
 /// `updateAirFlow`, `extractFromBelt` and `findEntities` of an empty chute
@@ -2095,7 +2332,8 @@ pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
     if chute.item.is_some() && !seen && motion > 0.0 {
         chute.position = 0.0;
     }
-    if chute.item.is_none() {
+    // updateEntityAfterFallOn, when the chute takes items from above.
+    if chute.item.is_none() && has_direct_input(game, pos) {
         super::create_machines::take_landed(game, pos, 0.75, |_, stack| {
             if chute.item.is_some() {
                 return Some(stack);
@@ -2107,7 +2345,15 @@ pub(super) fn chute_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
     if chute.item.is_none() && motion > 0.0 {
         pull_from_below(game, pos, pull - push, &mut chute);
     }
-    chute.tick(motion, &mut ChuteAt { game, pos });
+    let (facing, shape) = chute_at(game, pos).unwrap_or((Dir::Down, ChuteShape::Normal));
+    let mut world = ChuteAt {
+        game,
+        pos,
+        facing,
+        shape,
+        best_input: std::cell::Cell::new(None),
+    };
+    chute.tick(motion, &mut world);
     set_chute_item(entity, chute.item.clone(), chute.position);
     let mut view = vec![super::create_machines::stack_view(chute.item.as_ref())];
     view.push((String::new(), (chute.position.clamp(0.0, 1.0) * 200.0) as u32));

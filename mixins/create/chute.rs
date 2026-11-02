@@ -5,6 +5,111 @@
 // items fall by gravity, or are blown up or down by fans at the ends of
 // the column (`pull`, `push`, `handleUpwardOutput`, `handleInputFromBelow`).
 
+use super::create_kinetics::Dir;
+
+/// `ChuteBlock.Shape`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ChuteShape {
+    Intersection,
+    Window,
+    #[default]
+    Normal,
+    Encased,
+}
+
+impl ChuteShape {
+    pub const ALL: [ChuteShape; 4] = [
+        ChuteShape::Intersection,
+        ChuteShape::Window,
+        ChuteShape::Normal,
+        ChuteShape::Encased,
+    ];
+}
+
+/// `ChuteBlock.isOpen`: items go up and out of its top.
+pub fn is_open(facing: Dir, shape: ChuteShape) -> bool {
+    facing == Dir::Down || shape == ChuteShape::Intersection
+}
+
+/// What `ChuteBlock.updateChuteState` reads around a chute.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChuteAround {
+    /// A chute at `below().relative(facing.opposite())` (diagonal only).
+    pub target_is_chute: bool,
+    /// For each of north, south, west, east: the chute at `above().relative(d)`
+    /// faces `d` (a diagonal input).
+    pub inputs: [bool; 4],
+    /// A chute above facing down, or a funnel above facing down.
+    pub above_facing_down: bool,
+}
+
+const HORIZONTALS: [Dir; 4] = [Dir::North, Dir::South, Dir::West, Dir::East];
+
+/// `ChuteBlock.updateChuteState`: the facing and shape a chute takes from
+/// the chutes around it.
+pub fn chute_state(facing: Dir, shape: ChuteShape, around: ChuteAround) -> (Dir, ChuteShape) {
+    let vertical = facing == Dir::Down;
+    if !vertical && !around.target_is_chute {
+        return (Dir::Down, ChuteShape::Normal);
+    }
+    let connected = |d: Dir| {
+        HORIZONTALS
+            .iter()
+            .position(|h| *h == d)
+            .is_some_and(|i| around.inputs[i])
+    };
+    let count = around.inputs.iter().filter(|c| **c).count();
+    if vertical {
+        if count == 0 {
+            let shape = if shape == ChuteShape::Intersection {
+                ChuteShape::Normal
+            } else {
+                shape
+            };
+            return (facing, shape);
+        }
+        return (facing, ChuteShape::Intersection);
+    }
+    if count == 0
+        || (connected(Dir::North) && connected(Dir::South))
+        || (connected(Dir::East) && connected(Dir::West))
+    {
+        return (facing, ChuteShape::Intersection);
+    }
+    if count == 1 && connected(facing) && !around.above_facing_down {
+        let shape = if shape == ChuteShape::Encased {
+            ChuteShape::Encased
+        } else {
+            ChuteShape::Normal
+        };
+        return (facing, shape);
+    }
+    (facing, ChuteShape::Intersection)
+}
+
+/// `ChuteBlock.onWrenched`: none when the wrench does nothing.
+pub fn wrenched(facing: Dir, shape: ChuteShape) -> Option<ChuteShape> {
+    match shape {
+        ChuteShape::Intersection => None,
+        ChuteShape::Encased => Some(ChuteShape::Normal),
+        _ if facing == Dir::Down => Some(if shape != ChuteShape::Normal {
+            ChuteShape::Normal
+        } else {
+            ChuteShape::Window
+        }),
+        _ => Some(shape),
+    }
+}
+
+/// `ChuteBlock.useItemOn` with industrial iron: encased, but an
+/// intersection or one already encased.
+pub fn encased(shape: ChuteShape) -> Option<ChuteShape> {
+    match shape {
+        ChuteShape::Intersection | ChuteShape::Encased => None,
+        _ => Some(ChuteShape::Encased),
+    }
+}
+
 /// `ChuteBlockEntity.getExtractionAmount`: up to 16 at a time from above.
 pub const CHUTE_EXTRACTION: u32 = 16;
 
@@ -39,6 +144,10 @@ pub trait ChuteWorld<S> {
     /// `grabCapability(UP)` and `ItemHelper.extract(UPTO, 16)`: what came
     /// out of the inventory above.
     fn extract_above(&mut self, max: u32) -> Option<S>;
+    /// The chute faces straight down (not diagonal).
+    fn facing_down(&self) -> bool {
+        true
+    }
     /// `grabCapability(UP)` and `insertItemStacked` into it, as below.
     fn insert_above(&mut self, _stack: &S, _simulate: bool) -> Option<Option<S>> {
         None
@@ -184,8 +293,11 @@ impl<S: Clone + PartialEq> Chute<S> {
                 let position = self.position;
                 self.set_item(remainder, position);
             }
-            // A chute facing down waits for room below.
-            return took;
+            // A chute facing down waits for room below; a diagonal one
+            // tries the chute it leads to.
+            if took || world.facing_down() {
+                return took;
+            }
         }
         if let Some(accepts) = world.chute_below_accepts() {
             if !simulate && accepts {
@@ -194,7 +306,8 @@ impl<S: Clone + PartialEq> Chute<S> {
             }
             return accepts;
         }
-        if world.funnel_below_facing_down() || world.rigid_below() {
+        // Diagonal chutes cannot drop items.
+        if !world.facing_down() || world.funnel_below_facing_down() || world.rigid_below() {
             return false;
         }
         if !simulate {
@@ -417,5 +530,58 @@ mod tests {
         assert_eq!(w3.above, Some(vec![4]));
         assert_eq!(max_pull_distance(100.0), 2.0);
         assert_eq!(max_pull_distance(16.0), 0.5);
+    }
+
+    #[test]
+    fn chute_shapes_follow_their_neighbours() {
+        let none = ChuteAround::default();
+        // A diagonal chute with no chute to send to turns straight.
+        assert_eq!(
+            chute_state(Dir::North, ChuteShape::Normal, none),
+            (Dir::Down, ChuteShape::Normal)
+        );
+        // A diagonal chute fed by the one behind it, facing the same way.
+        let fed = ChuteAround {
+            target_is_chute: true,
+            inputs: [true, false, false, false],
+            ..ChuteAround::default()
+        };
+        assert_eq!(
+            chute_state(Dir::North, ChuteShape::Normal, fed),
+            (Dir::North, ChuteShape::Normal)
+        );
+        assert_eq!(
+            chute_state(Dir::North, ChuteShape::Encased, fed),
+            (Dir::North, ChuteShape::Encased)
+        );
+        // The first of a diagonal run (nothing feeds it): an intersection.
+        let start = ChuteAround {
+            target_is_chute: true,
+            ..ChuteAround::default()
+        };
+        assert_eq!(
+            chute_state(Dir::East, ChuteShape::Normal, start),
+            (Dir::East, ChuteShape::Intersection)
+        );
+        // A straight chute under a diagonal one, and when it goes.
+        assert_eq!(
+            chute_state(Dir::Down, ChuteShape::Window, fed),
+            (Dir::Down, ChuteShape::Intersection)
+        );
+        assert_eq!(
+            chute_state(Dir::Down, ChuteShape::Intersection, none),
+            (Dir::Down, ChuteShape::Normal)
+        );
+        assert_eq!(
+            chute_state(Dir::Down, ChuteShape::Window, none),
+            (Dir::Down, ChuteShape::Window)
+        );
+        assert!(is_open(Dir::Down, ChuteShape::Normal) && !is_open(Dir::East, ChuteShape::Normal));
+        assert_eq!(
+            wrenched(Dir::Down, ChuteShape::Normal),
+            Some(ChuteShape::Window)
+        );
+        assert_eq!(wrenched(Dir::Down, ChuteShape::Intersection), None);
+        assert_eq!(encased(ChuteShape::Window), Some(ChuteShape::Encased));
     }
 }
