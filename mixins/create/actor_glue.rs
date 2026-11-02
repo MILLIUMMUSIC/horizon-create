@@ -264,9 +264,9 @@ impl Store<'_> {
     }
 }
 
-/// `getAllItems()`: the slots of the structure's chests, barrels and
-/// shulker boxes in its blocks' order, handed to `f` and kept unless
-/// simulating.
+/// `getAllItems()`: the slots of the structure's chests, barrels, shulker
+/// boxes and item vaults (each block's own slots) in its blocks' order,
+/// handed to `f` and kept unless simulating.
 pub(super) fn storage_items<R>(
     game: &Game<'_>,
     states: &[BlockStateId],
@@ -279,7 +279,9 @@ pub(super) fn storage_items<R>(
     let mut all: Vec<Option<ItemStack>> = Vec::new();
     for (i, st) in states.iter().enumerate() {
         let name = game.res.facts().get(*st).name.to_string();
-        if !game.block_in_tag("create:chest_mounted_storage", &name)
+        let vault = name == super::create_arms::VAULT;
+        if !vault
+            && !game.block_in_tag("create:chest_mounted_storage", &name)
             && !game.block_in_tag("create:simple_mounted_storage", &name)
         {
             continue;
@@ -287,21 +289,34 @@ pub(super) fn storage_items<R>(
         let Some(Some(c)) = entities.get(i) else {
             continue;
         };
-        let Some((key, BlockEntity::Chest(items))) =
-            horizon_client::save::decode_block_entity(&Tag::Compound(c.clone()))
-        else {
-            continue;
+        let items = match horizon_client::save::decode_block_entity(&Tag::Compound(c.clone())) {
+            Some((key, BlockEntity::Chest(items))) => {
+                parts.push((i, key, name, items.len(), None));
+                items
+            }
+            Some((key, BlockEntity::Mod(m))) if vault => {
+                let items = m.items.clone();
+                parts.push((i, key, name, items.len(), Some(m)));
+                items
+            }
+            _ => continue,
         };
-        parts.push((i, key, name, items.len()));
         all.extend(items);
     }
     let before = all.clone();
     let r = f(&mut all);
     if !simulate && all != before {
         let mut rest = all.into_iter();
-        for (i, key, name, len) in parts {
+        for (i, key, name, len, vault) in parts {
             let items: Vec<Option<ItemStack>> = rest.by_ref().take(len).collect();
-            if let Tag::Compound(c) = horizon_client::save::encode_block_entity(key, &BlockEntity::Chest(items), &name) {
+            let entity = match vault {
+                Some(mut m) => {
+                    m.items = items;
+                    BlockEntity::Mod(m)
+                }
+                None => BlockEntity::Chest(items),
+            };
+            if let Tag::Compound(c) = horizon_client::save::encode_block_entity(key, &entity, &name) {
                 entities[i] = Some(c);
             }
         }

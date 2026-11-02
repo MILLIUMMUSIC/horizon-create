@@ -1,5 +1,13 @@
 # Validation
 
+## Item vaults as contraption storage (macOS, offscreen)
+
+Built and checked by `tools/horizon.py check`/`build` only: `storage_items` now reads and writes captured item
+vaults' slots (their mod block entities' data) as it does chests'.
+
+Not checked yet: anything in the game (a drill or harvester filling a vault on a moving structure, a portable
+storage interface emptying it, the items still in the vault when it is put back).
+
 ## Tunnel and funnel flaps (macOS, offscreen)
 
 Seen working: an andesite tunnel on a belt shows its four flaps hanging in its openings along the belt; a

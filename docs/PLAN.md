@@ -174,7 +174,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      whole vault in `SameSizeCombinedInvWrapper`'s slot order; hoppers reach one block's 20 slots. Placed against a
      lone vault it takes that vault's axis (the hook doesn't say which face was clicked), else the player's facing's;
      the wrench from above or below takes it out of its vault and turns it. Not yet: `LARGE` and the connected
-     textures (the plain model is drawn for every block), comparators, the vault's mounted storage on contraptions.
+     textures (the plain model is drawn for every block), comparators.
    - Mechanical arm (`arm.rs`: `ArmBlockEntity`, `ArmInteractionPoint` and the types for depots, belts, basins,
      chutes, deployers, millstones and funnels, `ArmAngleTarget`; `arms.rs`): a mod block entity holding its item on
      an enchanting table's template, a kinetic block (`Kind::MechanicalArm`: a small cog, 2 su). Its phases, the
@@ -378,8 +378,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       two blocks ahead, stalls the structure in front of it and hands the structure's storage to whatever reaches
       the stationary one through the item handler (funnels, chutes, arms) until 60 ticks pass without a transfer
       (`PortableStorageInterfaceBlockEntity`'s timer). `actors.rs` has the slot rules (`insertItem`,
-      `ItemHelper.extract`), the interface's timer and the actors' ticks. Not yet: vaults, toolboxes, depots and
-      creative crates as storage, double chests as one, the fluid interface, the interfaces' extension drawn moving, vanilla hoppers reaching a stationary interface (they don't go through
+      `ItemHelper.extract`), the interface's timer and the actors' ticks. Item vaults count as storage too (each
+      captured block's own slots). Not yet: toolboxes, depots and creative crates as storage, double chests as one, the fluid interface, the interfaces' extension drawn moving, vanilla hoppers reaching a stationary interface (they don't go through
       the item handler), the deployer's pole and hand drawn on a moving structure, deployer filters, schematics.
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.
