@@ -2133,44 +2133,6 @@ pub fn filled_bucket(fluid: &str) -> Option<&'static str> {
     }
 }
 
-/// Tanks' contents, saved one per line (`x y z amount fluid`).
-pub fn save_tanks(tanks: &HashMap<Pos, FluidTank>) -> String {
-    let mut lines: Vec<String> = tanks
-        .iter()
-        .filter(|(_, t)| !t.fluid.is_empty())
-        .map(|(p, t)| {
-            format!(
-                "tank {} {} {} {} {}",
-                p[0], p[1], p[2], t.fluid.amount, t.fluid.fluid
-            )
-        })
-        .collect();
-    lines.sort();
-    lines.join("\n")
-}
-
-pub fn load_tanks(text: &str) -> HashMap<Pos, FluidTank> {
-    let mut tanks = HashMap::new();
-    for line in text.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() != 6 || parts[0] != "tank" {
-            continue;
-        }
-        let (Ok(x), Ok(y), Ok(z), Ok(amount)) = (
-            parts[1].parse(),
-            parts[2].parse(),
-            parts[3].parse(),
-            parts[4].parse::<i32>(),
-        ) else {
-            continue;
-        };
-        let mut tank = FluidTank::new(TANK_CAPACITY);
-        tank.fluid = FluidStack::new(parts[5], amount.min(TANK_CAPACITY));
-        tanks.insert([x, y, z], tank);
-    }
-    tanks
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2423,14 +2385,11 @@ mod tests {
     }
 
     #[test]
-    fn saving_keeps_pipes_and_tanks() {
-        let (f, w) = rig();
+    fn saving_keeps_pipes() {
+        let (f, _) = rig();
         let g = Fluids::load(&f.save());
         assert_eq!(g.transports.len(), 3);
         assert_eq!(g.transports[&[1, 0, 0]].block, PipeBlock::straight(Axis::X));
-        let mut tanks = w.tanks.clone();
-        tanks.get_mut(&[5, 0, 0]).unwrap().fluid = FluidStack::new(LAVA, 2500);
-        assert_eq!(load_tanks(&save_tanks(&tanks)), tanks);
     }
 
     #[test]

@@ -152,10 +152,19 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      face on a way to an endpoint within 16 blocks (`mechanicalPumpRange`), split between parallel branches;
      redistributed when its speed changes, a pipe near it changes, or a block in front of a straight pipe's open
      end does. Its cog partial turns with it.
-   - Fluid tank: single tanks (8 buckets), on glass's template; their contents live in the native mod and are saved
-     beside the world; buckets fill and empty them (and basins); the fluid drawn as `FluidTankRenderer` does, as
-     high as it is full. Not yet: tanks joining into multiblocks (`ConnectivityHandler`), the boiler, windows by
-     the wrench, the creative tank, comparators.
+   - Fluid tank (`FluidTankBlockEntity`, `ConnectivityHandler` in `tank.rs`): tanks join into multiblocks up to 3
+     wide and 32 high (`formMulti`, largest first; different fluids and the creative tank stay apart), split when a
+     block goes (`splitMulti`: the controller keeps a block's worth, the rest handed out bottom up, all of it when the
+     controller went), and look again for a multiblock the next tick. Their parts and fluid live in the native mod and
+     are saved beside the world; each block is drawn with `FluidTankGenerator`'s model for its place and window
+     (blank blockstate, hidden `hz_tank_*` holders), the fluid as one box through the windows (`FluidTankRenderer`,
+     none with windows shut), tiled a block at a time. The wrench toggles the whole tank's windows. Buckets only in
+     creative, as `FluidTankBlock.useItemOn`. The creative fluid tank (`CreativeSmartFluidTank`): a bucket sets its
+     fluid, pipes drain it endlessly and fills are voided; in survival an empty bucket takes it out and clears it.
+     Not yet: the boiler (milestone 7, with the steam engine), tanks on moving structures (`FluidTankMovementBehavior`),
+     connected textures (`FluidTankModel`'s CT: engine gap, a model a mod builds per state), light from glowing fluids
+     (`luminosity`: engine gap, a template's light is fixed), comparators (engine gap: no block entity on the
+     template), the fluid level's easing (`LerpedFloat`), sounds and particles on buckets.
    - Basin fluids: two input and two output tanks of 1000 mB (`SmartFluidTankBehaviour`, inputs keeping their
      fluids apart, outputs taking nothing from outside), filled by pipes and buckets; `create:mixing` recipes with
      water and lava as ingredients or results run (dough, cardboard pulp; the heated ones still wait for the blaze
@@ -466,6 +475,11 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
   fluids (honey, chocolate, tea, milk via NeoForge, potions) are at most names in a tank (honey drained from a
   hive), can't be poured, have no textures to draw by, and the recipes that use or make them are skipped. Fluid
   tags (`c:milk`) have nothing to name either.
+- Mod blocks can't take a `UseItem` back: Create's client answers SUCCESS to a click its block took and sends no
+  `UseItem`; Horizon's client sends it anyway, so `glue::use_item` drops the main hand's use in the tick of a click a
+  Create block took (one global note, not per player).
+- No connected textures for mod blocks (Create's `CTModel`, the tank's `FluidTankModel`): multiblock tanks show each
+  block's own frame.
 - The fluid tank's template (glass) has no block entity: its contents live in the native mod beside the world
   (lost if the native mod is removed), hoppers and comparators see nothing. Drawn fluids are opaque (the native
   draw hook takes vertices on one layer) and water takes the plains' colour, not the biome's.

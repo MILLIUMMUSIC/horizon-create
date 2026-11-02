@@ -65,7 +65,7 @@ Adding a block:
 Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 `create:depots` (D1: items held by depots, basins, millstones),
 `create:values` (client → server value box changes, checked by the server),
-`create:fluids` (F1: tanks' and basins' fluids),
+`create:fluids` (F2: tank blocks' controllers, sizes, windows and fluids; basins' fluids),
 `create:contraptions` (C1: running pistons' offsets and speeds, their blocks when they change, then the glue,
 then turning bearings' angles and blocks, then running rope pulleys' lengths and loads, then moving gantries),
 `create:chassis` (client → server: a chassis' range scrolled with the wrench).
@@ -87,6 +87,10 @@ deployer's state rides along as `HzDeployer` text in its block's data;
 stationary portable storage interfaces are kept in `actor_glue.rs` and reached
 through `arms.rs`'s item handler (`Inv::Psi`).
 
+Fluid tanks join into multiblocks in `tank.rs` (ConnectivityHandler with
+fluids, windows, the creative tank; the vault's copy in `vault.rs` has no
+fluids); their blockstates are blank and `fluid_glue.rs` draws each block's
+model from hidden `hz_tank_*` holders.
 Fluids: `fluids.rs` (rules) reaches every fluid holder through the
 `FluidAccess` trait; `fluid_glue.rs` answers it (tanks kept in the native
 mod, basins' tanks in their block entity's data). Pipes and pumps tick from

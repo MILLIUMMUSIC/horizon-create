@@ -492,6 +492,20 @@ pub(super) fn right_click(
     }
 }
 
+/// `native_use_item`: Create's client answers SUCCESS to a click its block
+/// took and sends no `UseItem` after it; Horizon's client sends one (a
+/// bucket would then pour beside a tank). The use of the hand whose click
+/// a Create block took this tick or the last is dropped.
+pub(super) fn use_item(game: &mut Game<'_>, _stack: &horizon_client::items::ItemStack, claimed: &mut bool) {
+    if game.hand != horizon_client::first_person::Hand::Main {
+        return;
+    }
+    let taken = *TAKEN_CLICK.lock().unwrap_or_else(|e| e.into_inner());
+    if taken.is_some_and(|(t, _)| game.ticks.saturating_sub(t) <= 1) {
+        *claimed = true;
+    }
+}
+
 fn right_click_hand(
     game: &mut Game<'_>,
     pos: [i32; 3],
@@ -657,6 +671,7 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
         && (super::create_logistics::wrench_funnel(game, pos)
             || super::create_logistics::wrench_tunnel(game, pos)
             || super::create_logistics::wrench_chute(game, pos)
+            || super::create_fluid_glue::wrench(game, pos)
             || super::create_arms::wrench(game, pos, face))
     {
         return true;
@@ -664,6 +679,7 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     let machine = name == super::create_machines::DEPOT
         || name == super::create_machines::BASIN
         || super::create_logistics::is_ours(&name)
+        || super::create_fluid_glue::is_tank_block(&name)
         || super::create_arms::is_ours(&name);
     if kind.is_none() && !machine {
         return false;

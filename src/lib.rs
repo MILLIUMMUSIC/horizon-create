@@ -28,6 +28,8 @@ pub mod create_obj;
 pub mod create_processing;
 #[path = "../mixins/create/saw.rs"]
 pub mod create_saw;
+#[path = "../mixins/create/tank.rs"]
+pub mod create_tank;
 #[path = "../mixins/create/tunnel.rs"]
 pub mod create_tunnel;
 #[path = "../mixins/create/vault.rs"]

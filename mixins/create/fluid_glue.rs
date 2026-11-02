@@ -9,10 +9,10 @@
 
 use super::Game;
 use super::create_fluids::{
-    BasinTanks, FluidAccess, FluidHandler, FluidStack, FluidTank, FluidWorld, Fluids, PipeBlock, Space,
-    SpaceChange, TANK_CAPACITY, VanillaTarget, basin_fluid_boxes, bucket_fluid, filled_bucket, load_tanks,
-    save_tanks, tank_fluid_box,
+    BasinTanks, FluidAccess, FluidHandler, FluidStack, FluidWorld, Fluids, PipeBlock, Space,
+    SpaceChange, TANK_CAPACITY, VanillaTarget, basin_fluid_boxes, bucket_fluid, filled_bucket, tank_fluid_box,
 };
+use super::create_tank::{TankPart, Tanks};
 use horizon_client::containers::{BlockEntity, ModBlockEntity};
 use horizon_world::nbt::{JavaString, Tag};
 use super::create_kinetics::{Axis, Dir, Pos};
@@ -27,6 +27,7 @@ pub(super) const FLUIDS: &str = "create:fluids";
 pub(super) const PIPE: &str = "create:fluid_pipe";
 pub(super) const PUMP: &str = "create:mechanical_pump";
 pub(super) const TANK: &str = "create:fluid_tank";
+pub(super) const CREATIVE_TANK: &str = "create:creative_fluid_tank";
 /// Ticks between full updates to clients and between saves.
 const SNAPSHOT_EVERY: u64 = 100;
 const SAVE_EVERY: u64 = 1200;
@@ -38,7 +39,7 @@ const WATER_TINT: u32 = 0x3F76E4;
 #[derive(Default)]
 struct State {
     dims: HashMap<String, Fluids>,
-    tanks: HashMap<String, HashMap<Pos, FluidTank>>,
+    tanks: HashMap<String, Tanks>,
     loaded: HashSet<String>,
     root: Option<PathBuf>,
     /// Basins' tanks as their last tick saw them (input tanks, then output
@@ -52,8 +53,42 @@ struct State {
 /// A fluid holder as clients draw it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Shown {
-    Tank(FluidStack),
+    Tank(ShownTank),
     Basin(Vec<FluidStack>),
+}
+
+/// A tank block as clients see it: its controller and, at the controller,
+/// the multiblock's size, windows and fluid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShownTank {
+    controller: Pos,
+    width: i32,
+    height: i32,
+    window: bool,
+    creative: bool,
+    fluid: FluidStack,
+}
+
+impl ShownTank {
+    fn of(pos: Pos, part: &TankPart) -> ShownTank {
+        let fluid = if part.tank.fluid.is_empty() {
+            FluidStack::empty()
+        } else {
+            part.tank.fluid.with_amount(part.amount())
+        };
+        ShownTank {
+            controller: part.controller_of(pos),
+            width: part.width,
+            height: part.height,
+            window: part.window,
+            creative: part.creative,
+            fluid,
+        }
+    }
+    /// The tank's capacity (`getTotalTankSize` buckets of 8).
+    fn capacity(&self) -> i32 {
+        self.width * self.width * self.height * TANK_CAPACITY
+    }
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -76,7 +111,11 @@ fn pending() -> MutexGuard<'static, Vec<(String, Pos, bool)>> {
 
 /// Blocks of ours outside the kinetics (the pump is a kinetic block).
 pub(super) fn is_ours(name: &str) -> bool {
-    name == PIPE || name == TANK
+    name == PIPE || is_tank_block(name)
+}
+
+pub(super) fn is_tank_block(name: &str) -> bool {
+    name == TANK || name == CREATIVE_TANK
 }
 
 fn dim_code(id: &str) -> u8 {
@@ -115,7 +154,25 @@ fn pipe_block(game: &Game<'_>, pos: Pos) -> Option<PipeBlock> {
 }
 
 fn is_tank(game: &Game<'_>, pos: Pos) -> bool {
-    block_name(game, pos).as_deref() == Some(TANK)
+    block_name(game, pos).is_some_and(|n| is_tank_block(&n))
+}
+
+fn is_creative_tank(game: &Game<'_>, pos: Pos) -> bool {
+    block_name(game, pos).as_deref() == Some(CREATIVE_TANK)
+}
+
+/// The tank blocks changed at `pos`: placed (`onPlace`), removed
+/// (`onRemove`) or swapped for the other kind.
+fn tank_changed(game: &Game<'_>, tanks: &mut Tanks, pos: Pos) {
+    let creative = is_creative_tank(game, pos);
+    let now = is_tank(game, pos);
+    let had = tanks.parts.get(&pos).map(|p| p.creative);
+    if had.is_some() && (!now || had != Some(creative)) {
+        tanks.remove(pos);
+    }
+    if now && !tanks.parts.contains_key(&pos) {
+        tanks.place(pos, creative);
+    }
 }
 
 fn is_basin(game: &Game<'_>, pos: Pos) -> bool {
@@ -190,7 +247,7 @@ fn save(s: &State) {
     let dims: HashSet<&String> = s.dims.keys().chain(s.tanks.keys()).collect();
     for dimension in dims {
         let pipes = s.dims.get(dimension).map(Fluids::save).unwrap_or_default();
-        let tanks = s.tanks.get(dimension).map(save_tanks).unwrap_or_default();
+        let tanks = s.tanks.get(dimension).map(Tanks::save).unwrap_or_default();
         let text = format!("{pipes}\n{tanks}\n");
         if let Err(e) = std::fs::write(save_path(root, dimension), text) {
             log::warn!("Create: can't save the fluids of {dimension}: {e}");
@@ -206,16 +263,22 @@ fn save(s: &State) {
 struct Access<'a, 'g> {
     game: &'a mut Game<'g>,
     dimension: &'a str,
-    tanks: &'a mut HashMap<Pos, FluidTank>,
+    tanks: &'a mut Tanks,
 }
 
 impl Access<'_, '_> {
-    /// The tank at `pos` (a new, empty one if it was never filled).
-    fn tank(&mut self, pos: Pos) -> Option<&mut FluidTank> {
+    /// Whether `pos` is a tank, its part made if the native mod never saw
+    /// it placed (looking for a multiblock on its next tick).
+    fn tank(&mut self, pos: Pos) -> bool {
         if !is_tank(self.game, pos) {
-            return None;
+            return false;
         }
-        Some(self.tanks.entry(pos).or_insert_with(|| FluidTank::new(TANK_CAPACITY)))
+        if !self.tanks.parts.contains_key(&pos) {
+            let mut part = TankPart::new(is_creative_tank(self.game, pos));
+            part.update_connectivity = true;
+            self.tanks.parts.insert(pos, part);
+        }
+        true
     }
 
     fn set(&mut self, pos: Pos, state: Option<horizon_world::registry::BlockStateId>) {
@@ -230,8 +293,14 @@ impl Access<'_, '_> {
     /// `op` on the fluid holder at `pos`: a tank, or a basin's tanks (kept in
     /// its block entity, written back unless simulating).
     fn with_handler<R>(&mut self, pos: Pos, simulate: bool, op: impl FnOnce(&mut dyn FluidHandler) -> R) -> Option<R> {
-        if let Some(t) = self.tank(pos) {
-            return Some(op(t));
+        if self.tank(pos) {
+            let c = self.tanks.controller(pos)?;
+            let mut h = self.tanks.handler(pos)?;
+            let r = op(&mut h);
+            if !simulate {
+                self.tanks.changed.insert(c);
+            }
+            return Some(r);
         }
         if !is_basin(self.game, pos) {
             return None;
@@ -255,7 +324,14 @@ impl FluidAccess for Access<'_, '_> {
     }
     fn handler_tanks(&self, pos: Pos, _: Dir) -> Vec<FluidStack> {
         if is_tank(self.game, pos) {
-            return vec![self.tanks.get(&pos).map(|t| t.fluid.clone()).unwrap_or_default()];
+            let fluid = self.tanks.controller_part(pos).map(|p| {
+                if p.tank.fluid.is_empty() {
+                    FluidStack::empty()
+                } else {
+                    p.tank.fluid.with_amount(p.amount())
+                }
+            });
+            return vec![fluid.unwrap_or_default()];
         }
         if !is_basin(self.game, pos) {
             return Vec::new();
@@ -392,7 +468,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
                 .and_then(|r| std::fs::read_to_string(save_path(r, dimension)).ok());
             if let Some(text) = saved {
                 s.dims.insert(dimension.to_owned(), Fluids::load(&text));
-                s.tanks.insert(dimension.to_owned(), load_tanks(&text));
+                s.tanks.insert(dimension.to_owned(), Tanks::load(&text));
             }
         }
         s.ticks += 1;
@@ -416,11 +492,12 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
                     continue;
                 }
             }
-            if !is_tank(world.game, pos) {
-                world.tanks.remove(&pos);
+            if ours && in_world(world.game, pos) {
+                tank_changed(world.game, world.tanks, pos);
             }
             fluids.block_changed(&mut world, pos);
         }
+        world.tanks.tick();
         for &(pos, _, speed) in pumps {
             fluids.pump_speed(&mut world, pos, speed);
         }
@@ -468,18 +545,27 @@ pub(super) fn note_basin(dimension: &str, pos: Pos, tanks: &BasinTanks) {
 fn updates(
     game: &Game<'_>,
     dimension: &str,
-    tanks: &mut HashMap<Pos, FluidTank>,
+    tanks: &mut Tanks,
     basins: &mut HashMap<Pos, Vec<FluidStack>>,
     shown: &mut HashMap<Pos, Shown>,
     ticks: u64,
 ) -> Option<Vec<u8>> {
-    // Tanks that are no tank any more lose their contents.
-    tanks.retain(|p, _| !in_world(game, *p) || is_tank(game, *p));
+    // Tanks that are no tank any more go (a change the level didn't tell).
+    let gone: Vec<Pos> = tanks
+        .parts
+        .keys()
+        .filter(|p| in_world(game, **p) && !is_tank(game, **p))
+        .copied()
+        .collect();
+    for p in gone {
+        tanks.remove(p);
+    }
+    tanks.changed.clear();
     basins.retain(|p, _| !in_world(game, *p) || is_basin(game, *p));
     let now: HashMap<Pos, Shown> = tanks
+        .parts
         .iter()
-        .filter(|(_, t)| !t.fluid.is_empty())
-        .map(|(p, t)| (*p, Shown::Tank(t.fluid.clone())))
+        .map(|(p, t)| (*p, Shown::Tank(ShownTank::of(*p, t))))
         .chain(basins.iter().map(|(p, b)| (*p, Shown::Basin(b.clone()))))
         .collect();
     let full = ticks % SNAPSHOT_EVERY == 0;
@@ -497,11 +583,12 @@ fn updates(
     Some(encode(dim_code(dimension), full, &entries))
 }
 
-/// F1: the dimension, whether it replaces all, then per holder its position,
-/// kind (0 gone, 1 tank, 2 basin) and fluids (amount, id).
+/// F2: the dimension, whether it replaces all, then per holder its position,
+/// kind (0 gone, 1 tank, 2 basin), a tank's controller, width, height and
+/// flags (1 window, 2 creative), and fluids (amount, id).
 fn encode(dim: u8, full: bool, entries: &[(Pos, Option<Shown>)]) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(b"F1");
+    out.extend_from_slice(b"F2");
     out.push(dim);
     out.push(u8::from(full));
     for (pos, shown) in entries {
@@ -510,10 +597,18 @@ fn encode(dim: u8, full: bool, entries: &[(Pos, Option<Shown>)]) -> Vec<u8> {
         }
         let (kind, fluids): (u8, &[FluidStack]) = match shown {
             None => (0, &[]),
-            Some(Shown::Tank(f)) => (1, std::slice::from_ref(f)),
+            Some(Shown::Tank(t)) => (1, std::slice::from_ref(&t.fluid)),
             Some(Shown::Basin(b)) => (2, b),
         };
         out.push(kind);
+        if let Some(Shown::Tank(t)) = shown {
+            for v in t.controller {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            out.push(t.width.clamp(0, 255) as u8);
+            out.push(t.height.clamp(0, 255) as u8);
+            out.push(u8::from(t.window) | u8::from(t.creative) << 1);
+        }
         out.push(fluids.len().min(255) as u8);
         for fluid in fluids.iter().take(255) {
             let amount = if fluid.is_empty() { 0 } else { fluid.amount };
@@ -530,16 +625,32 @@ fn encode(dim: u8, full: bool, entries: &[(Pos, Option<Shown>)]) -> Vec<u8> {
 type Decoded = (u8, bool, Vec<(Pos, Option<Shown>)>);
 
 fn decode(data: &[u8]) -> Option<Decoded> {
-    let rest = data.strip_prefix(b"F1")?;
+    let rest = data.strip_prefix(b"F2")?;
     let (&dim, rest) = rest.split_first()?;
     let (&full, mut rest) = rest.split_first()?;
     let int = |b: &[u8]| i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
     let mut entries = Vec::new();
     while !rest.is_empty() {
-        let head = rest.get(..14)?;
+        let head = rest.get(..13)?;
         let pos = [int(&head[0..4]), int(&head[4..8]), int(&head[8..12])];
-        let (kind, n) = (head[12], usize::from(head[13]));
-        rest = &rest[14..];
+        let kind = head[12];
+        rest = &rest[13..];
+        let mut tank = None;
+        if kind == 1 {
+            let t = rest.get(..15)?;
+            tank = Some(ShownTank {
+                controller: [int(&t[0..4]), int(&t[4..8]), int(&t[8..12])],
+                width: i32::from(t[12]),
+                height: i32::from(t[13]),
+                window: t[14] & 1 != 0,
+                creative: t[14] & 2 != 0,
+                fluid: FluidStack::empty(),
+            });
+            rest = &rest[15..];
+        }
+        let (&n, after) = rest.split_first()?;
+        let n = usize::from(n);
+        rest = after;
         let mut fluids = Vec::new();
         for _ in 0..n {
             let h = rest.get(..5)?;
@@ -553,7 +664,11 @@ fn decode(data: &[u8]) -> Option<Decoded> {
             rest = &rest[5 + len..];
         }
         let shown = match kind {
-            1 => Some(Shown::Tank(fluids.into_iter().next()?)),
+            1 => {
+                let mut t = tank?;
+                t.fluid = fluids.into_iter().next().unwrap_or_default();
+                Some(Shown::Tank(t))
+            }
             2 => Some(Shown::Basin(fluids)),
             _ => None,
         };
@@ -567,7 +682,8 @@ fn decode(data: &[u8]) -> Option<Decoded> {
 /// block's fluid handler: a full bucket empties into it, an empty one takes
 /// a bucket's worth out. True when it took the click.
 pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
-    if !is_tank(game, pos) && !is_basin(game, pos) {
+    let tank = is_tank(game, pos);
+    if !tank && !is_basin(game, pos) {
         return false;
     }
     let Some(held) = game.held().map(|s| s.item.to_string()) else {
@@ -577,7 +693,15 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
     if full.is_none() && held != "minecraft:bucket" {
         return false;
     }
-    let creative = game.native_acting_player().is_some_and(|p| p.game_mode == 1);
+    // The acting player's mode, or the window's own player's (no player is
+    // swapped in for the host's clicks).
+    let creative = game.native_acting_player().map_or(game.mode_id(), |p| p.game_mode) == 1;
+    // FluidTankBlock.useItemOn: in survival only the creative tank takes
+    // buckets ("in Survival Mode Fluids cannot be added or taken manually").
+    let creative_tank = is_creative_tank(game, pos);
+    if tank && !creative && !creative_tank {
+        return false;
+    }
     let dimension = game.dim.id().to_owned();
     let mut guard = state();
     let s = guard.get_or_insert_with(State::default);
@@ -594,6 +718,10 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
             return true;
         }
         access.fill(pos, side, &stack, false);
+        // CreativeSmartFluidTank.setContainedFluid: the bucket's fluid, for good.
+        if creative_tank && let Some(p) = access.tanks.controller_part_mut(pos) {
+            p.set_contained_fluid(&stack);
+        }
         Some("minecraft:bucket")
     } else {
         // The first tank holding a bucket's worth of a fluid a bucket takes.
@@ -606,6 +734,9 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
         };
         if access.drain(pos, side, &f.with_amount(1000), false).amount != 1000 {
             return true;
+        }
+        if creative_tank && let Some(p) = access.tanks.controller_part_mut(pos) {
+            p.set_contained_fluid(&FluidStack::empty());
         }
         filled_bucket(&f.fluid)
     };
@@ -623,6 +754,23 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
             _ => *hand = Some(ItemStack::new(item, 1)),
         }
     }
+    true
+}
+
+/// `FluidTankBlock.onWrenched`: the wrench toggles the whole tank's windows
+/// (`toggleWindows`; boilers keep theirs shut). True when it took the click.
+pub(super) fn wrench(game: &mut Game<'_>, pos: Pos) -> bool {
+    if !is_tank(game, pos) {
+        return false;
+    }
+    let dimension = game.dim.id().to_owned();
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let tanks = s.tanks.entry(dimension).or_default();
+    if !tanks.parts.contains_key(&pos) {
+        tank_changed(game, tanks, pos);
+    }
+    tanks.toggle_windows(pos);
     true
 }
 
@@ -659,7 +807,18 @@ pub(super) fn client_fluids(dimension: u8, pos: Pos) -> Option<(Vec<(FluidStack,
         return None;
     }
     Some(match shown.get(&pos)? {
-        Shown::Tank(f) => (vec![(f.clone(), TANK_CAPACITY)], 1),
+        // The controller's tank (`FluidTankBlockEntity.addToGoggleTooltip`);
+        // the creative tank shows nothing.
+        Shown::Tank(t) => {
+            let c = match shown.get(&t.controller) {
+                Some(Shown::Tank(c)) => c,
+                _ => t,
+            };
+            if c.creative {
+                return None;
+            }
+            (vec![(c.fluid.clone(), c.capacity())], 1)
+        }
         // Two input and two output tanks.
         Shown::Basin(fs) => (fs.iter().map(|f| (f.clone(), super::create_fluids::BASIN_TANK)).collect(), 4),
     })
@@ -707,23 +866,127 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
             _ => return,
         }
     };
+    let tanks: HashMap<Pos, ShownTank> = holders
+        .iter()
+        .filter_map(|(p, v)| match v {
+            Shown::Tank(t) => Some((*p, t.clone())),
+            Shown::Basin(_) => None,
+        })
+        .collect();
     for (pos, shown) in holders {
         let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
         if (corner + glam::DVec3::splat(0.5)).distance_squared(camera) > VIEW_DISTANCE * VIEW_DISTANCE {
             continue;
         }
+        let packed = packed_light(game, pos);
+        let origin = (corner - camera).as_vec3();
         let boxes: Vec<(FluidStack, [f32; 6])> = match shown {
-            Shown::Tank(fluid) => {
-                let fill = fluid.amount as f32 / TANK_CAPACITY as f32;
-                tank_fluid_box(fill, 1.0, 1.0).map(|b| (fluid, b)).into_iter().collect()
+            Shown::Tank(t) => {
+                draw_tank_block(game, &tanks, pos, &t, origin, packed, out);
+                // FluidTankRenderer: the controller draws the fluid, through
+                // its windows only.
+                if t.controller != pos || !t.window || t.fluid.is_empty() {
+                    continue;
+                }
+                let fill = t.fluid.amount as f32 / t.capacity().max(1) as f32;
+                if let Some(b) = tank_fluid_box(fill, t.width as f32, t.height as f32) {
+                    draw_tiled_fluid_box(game, &t.fluid.fluid, b, pos, camera, out);
+                }
+                continue;
             }
             Shown::Basin(stacks) => basin_fluid_boxes(&stacks),
         };
-        let light = game.world.light(pos[0], pos[1], pos[2]);
-        let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-        let origin = (corner - camera).as_vec3();
         for (fluid, b) in boxes {
-            draw_fluid_box(game, &fluid.fluid, b, origin, packed, out);
+            draw_fluid_box(game, &fluid.fluid, b, origin, packed, out, [true; 6]);
+        }
+    }
+}
+
+fn packed_light(game: &Game<'_>, pos: Pos) -> u32 {
+    let light = game.world.light(pos[0], pos[1], pos[2]);
+    (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8)
+}
+
+/// Model holders of the tank's looks, by name.
+static TANK_MODELS: Mutex<Option<HashMap<String, Option<horizon_world::registry::BlockStateId>>>> = Mutex::new(None);
+
+/// The tank block's model as `FluidTankGenerator` picks it (`TOP`,
+/// `BOTTOM`, `SHAPE` from its controller), held by a hidden
+/// `create:hz_tank_*` block: the tank's own blockstate is blank, as no
+/// template has those properties.
+fn draw_tank_block(
+    game: &Game<'_>,
+    tanks: &HashMap<Pos, ShownTank>,
+    pos: Pos,
+    t: &ShownTank,
+    origin: glam::Vec3,
+    light: u32,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    let c = tanks.get(&t.controller).unwrap_or(t);
+    let look = super::create_tank::Look {
+        bottom: t.controller[1] == pos[1],
+        top: t.controller[1] + c.height - 1 == pos[1],
+        shape: super::create_tank::window_shape(c.window, c.width, pos[0] - t.controller[0], pos[2] - t.controller[2]),
+    };
+    let prefix = if t.creative { "hz_creative_tank_" } else { "hz_tank_" };
+    let name = format!("create:{prefix}{}", look.model());
+    let state = {
+        let mut guard = TANK_MODELS.lock().unwrap_or_else(|e| e.into_inner());
+        *guard
+            .get_or_insert_with(HashMap::new)
+            .entry(name)
+            .or_insert_with_key(|n| game.pack.assets.registry.default_state(n))
+    };
+    let Some(state) = state else {
+        return;
+    };
+    let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]));
+    game.block_model_vertices(state, seed, glam::Mat4::from_translation(origin), light, false, out);
+}
+
+/// `FluidRenderer.renderFluidBox` over a box many blocks wide and high
+/// (`renderTiledFace`): the texture repeats each block, each block's piece
+/// lit by its own cell, only the box's outer faces drawn.
+fn draw_tiled_fluid_box(
+    game: &Game<'_>,
+    fluid: &str,
+    b: [f32; 6],
+    controller: Pos,
+    camera: glam::DVec3,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    let [x0, y0, z0, x1, y1, z1] = b;
+    let cells = |lo: f32, hi: f32| (lo.floor() as i32)..(hi.ceil() as i32);
+    for cx in cells(x0, x1) {
+        for cy in cells(y0, y1) {
+            for cz in cells(z0, z1) {
+                let (fx, fy, fz) = (cx as f32, cy as f32, cz as f32);
+                let piece = [
+                    x0.max(fx) - fx,
+                    y0.max(fy) - fy,
+                    z0.max(fz) - fz,
+                    x1.min(fx + 1.0) - fx,
+                    y1.min(fy + 1.0) - fy,
+                    z1.min(fz + 1.0) - fz,
+                ];
+                if piece[0] >= piece[3] || piece[1] >= piece[4] || piece[2] >= piece[5] {
+                    continue;
+                }
+                // Up, down, north, south, west, east: outer faces only.
+                let outer = [
+                    y1 <= fy + 1.0,
+                    y0 >= fy,
+                    z0 >= fz,
+                    z1 <= fz + 1.0,
+                    x0 >= fx,
+                    x1 <= fx + 1.0,
+                ];
+                let cell = [controller[0] + cx, controller[1] + cy, controller[2] + cz];
+                let corner = glam::DVec3::new(f64::from(cell[0]), f64::from(cell[1]), f64::from(cell[2]));
+                let origin = (corner - camera).as_vec3();
+                draw_fluid_box(game, fluid, piece, origin, packed_light(game, cell), out, outer);
+            }
         }
     }
 }
@@ -737,6 +1000,7 @@ fn draw_fluid_box(
     origin: glam::Vec3,
     light: u32,
     out: &mut Vec<horizon_client::mesher::Vertex>,
+    faces: [bool; 6],
 ) {
     let (sprite, tint) = fluid_sprite(fluid);
     let Some(s) = game.gui.atlas.sprites.get(&sprite) else {
@@ -747,7 +1011,7 @@ fn draw_fluid_box(
         return;
     };
     let (u0, v0, du, dv) = (s.u0, s.v0, s.u1 - s.u0, s.v1 - s.v0);
-    for (corners, shade) in box_faces(b) {
+    for ((corners, shade), _) in box_faces(b).into_iter().zip(faces).filter(|(_, f)| *f) {
         let color = 0xFF00_0000 | shaded(tint, shade);
         for c in corners {
             // Each face's texture follows the block's own coordinates.

@@ -758,6 +758,7 @@ def straight_pipe_states(original):
 def fit_fluids(content):
     blocks = content / "data" / "create" / "horizon" / "block"
     states = content / "assets" / "create" / "blockstates"
+    models = content / "assets" / "create" / "models" / "block"
     pipe = blocks / "fluid_pipe.json"
     decl = read_json(pipe) if pipe.exists() else {}
     decl["template"] = "minecraft:iron_chain"
@@ -767,18 +768,41 @@ def fit_fluids(content):
     write_json(pipe, decl)
     if (states / "fluid_pipe.json").exists():
         write_json(states / "fluid_pipe.json", straight_pipe_states(read_json(states / "fluid_pipe.json")))
-    # The fluid tank: a single block on glass's template (a full block that
-    # hides nothing next to it, cutout), with no block entity: its fluid
-    # lives in the native mod. Single tanks only: always the one-block
-    # window model (FluidTankBlock's `top`, `bottom`, `shape`).
-    tank = blocks / "fluid_tank.json"
-    decl = read_json(tank) if tank.exists() else {}
-    decl["template"] = "minecraft:glass"
-    decl.pop("default_state", None)
-    decl.pop("shapes", None)
-    decl.setdefault("properties", {})["light"] = 0
-    write_json(tank, decl)
-    write_json(states / "fluid_tank.json", {"variants": {"": {"model": "create:block/fluid_tank/block_single_window"}}})
+    # The fluid tank and the creative tank: blocks on glass's template (a
+    # full block that hides nothing next to it, cutout), with no block
+    # entity: their parts and fluid live in the native mod. No template has
+    # FluidTankBlock's `top`, `bottom` and `shape`, so their blockstates are
+    # blank and the native mod draws each block's model (FluidTankGenerator's
+    # names) from hidden holder blocks, `hz_tank_<model>` and
+    # `hz_creative_tank_<model>`.
+    for name, particle, holder, model_of in (
+        ("fluid_tank", "create:block/fluid_tank", "hz_tank_", lambda m: f"create:block/fluid_tank/block_{m}"),
+        ("creative_fluid_tank", "create:block/creative_fluid_tank", "hz_creative_tank_",
+         lambda m: f"create:block/creative_{m}"),
+    ):
+        tank = blocks / f"{name}.json"
+        decl = read_json(tank) if tank.exists() else {}
+        decl["template"] = "minecraft:glass"
+        decl.pop("default_state", None)
+        decl.pop("shapes", None)
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(tank, decl)
+        write_json(models / f"hz_blank_{name}.json", {"textures": {"particle": particle}})
+        write_json(states / f"{name}.json", {"variants": {"": {"model": f"create:block/hz_blank_{name}"}}})
+        for model in TANK_MODELS:
+            write_json(blocks / f"{holder}{model}.json", {"template": "minecraft:stone", "item": False})
+            write_json(states / f"{holder}{model}.json", {"variants": {"": {"model": model_of(model)}}})
+
+
+# FluidTankGenerator's model names: the block's place in the tank, then its
+# window's shape unless plain.
+TANK_MODELS = [
+    part + ("" if shape == "plain" else f"_{shape}")
+    for part in ("single", "top", "middle", "bottom")
+    for shape in ("plain", "window", "window_nw", "window_sw", "window_ne", "window_se")
+]
+
+
 def fit_arms(content, names):
     """The item vault, and the deployer's blocks (the arm is a container)."""
     blocks = content / "data" / "create" / "horizon" / "block"

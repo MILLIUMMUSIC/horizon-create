@@ -1,5 +1,21 @@
 # Validation
 
+## Fluid tank multiblocks (macOS, offscreen)
+
+Seen working: twelve tanks placed by `setblock` as a 2×2 base three high join into one tank (the goggles show
+"Capacity: 96000mB"), drawn with Create's models for each block's place (a window across the seam of each 2-wide
+face, caps at the top and bottom); two stacked tanks join as a 1×1×2 tank (16000 mB). Water buckets (creative) fill
+the big tank and the water is drawn through its windows as one box as high as it is full; the contents are kept
+over a restart (`create_fluids_*.txt`, new `tank` lines). The wrench toggles a whole tank's windows off. Removing a
+block of the top layer splits the tank: the lower 2×2×2 forms again with the water, the three top blocks stay single
+tanks. The creative fluid tank (its own purple models) takes a lava bucket's fluid for good; in survival an empty
+bucket takes a lava bucket out once and empties it, and a water bucket on a regular tank pours beside it instead
+(Create: "in Survival Mode Fluids cannot be added or taken manually"). A bucket's click on a tank no longer also
+pours a source next to it (the client's `UseItem` after a click Create took is dropped).
+
+Not checked yet: 3-wide tanks, two tanks of different fluids side by side staying apart, pipes and pumps on a
+multiblock tank (they reach the controller's tank through any block), a tank 32 high.
+
 ## Goggles on tanks (macOS, offscreen)
 
 Seen working: a fluid tank filled with a water bucket, looked at with the goggles, shows "Fluid Container",
@@ -534,8 +550,9 @@ Seen working after the fixes:
 
 - Fluids: a mechanical pump driven by a cogwheel beside it (−16 RPM) between an open pipe end in a water source and a
   fluid tank: the source drained and its 1000 mB went into the tank within a few seconds, saved and loaded with the
-  world (`create_fluids_*.txt`). Buckets: a water bucket fills the tank and an empty one takes it back in survival;
-  in creative the bucket is kept and the tank still fills or drains, as Create's `FluidHelper` does. The water is
+  world (`create_fluids_*.txt`). Buckets: a water bucket fills the tank and an empty one takes it back in creative
+  (the bucket is kept, as Create's `FluidHelper` does); since the multiblock pass, survival buckets on tanks pass
+  as in Create. The water is
   drawn in the tank's window, tinted.
 - Arm: the arm item selects a depot ("Extract from depot") and another ("Deposit to depot", after a second click),
   the placed arm takes both points, turns with a cogwheel beside it and carries iron ingots from one depot to the

@@ -40,6 +40,12 @@ name = "create_fan"
 source = "fan.rs"
 
 [[module]]
+id = "tank"
+file = "crates/horizon-client/src/game.rs"
+name = "create_tank"
+source = "tank.rs"
+
+[[module]]
 id = "vault"
 file = "crates/horizon-client/src/game.rs"
 name = "create_vault"
@@ -276,6 +282,17 @@ bindings = [
   { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "face", ty = "[i32; 3]", value = "face" },
+  { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
+[[injection]]
+id = "use-item"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+helper = "use_item.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
   { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
 ]
 
