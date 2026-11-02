@@ -850,6 +850,10 @@ fn carry_mobs(game: &mut Game<'_>, dimension: &str) {
             let (pos, state) = belt_standing(game, m.pos)?;
             let speed = belt_speed(game, pos);
             let motion = super::create_belt::entity_motion(state, pos, speed, m.pos, false)?;
+            let mine = game.mobs.iter().find(|x| x.id == m.id).map(|x| aabb(x.bounds()))?;
+            if rider_blocked(game, mine, motion, speed, Some(m.id)) {
+                return None;
+            }
             let to = [0, 1, 2].map(|i| m.pos[i] + motion[i]);
             (!belt_blocked(game, to)).then_some((m.id, to))
         })
@@ -857,6 +861,23 @@ fn carry_mobs(game: &mut Game<'_>, dimension: &str) {
     for (id, to) in moves {
         game.native_teleport_mob(dimension, id, to);
     }
+}
+
+fn aabb(b: horizon_core::geometry::Aabb) -> [f64; 6] {
+    let (lo, hi) = (b.min_position(), b.max_position());
+    [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]
+}
+
+/// `BeltMovementHandler`'s entity collisions: another mob (or the window's
+/// player, for a mob) in the way stops a rider on a slow belt (`mob` the
+/// rider itself, none for the player).
+fn rider_blocked(game: &Game<'_>, mine: [f64; 6], motion: [f64; 3], speed: f32, mob: Option<u32>) -> bool {
+    let Some(ahead) = super::create_belt::blocking_box(mine, motion, speed) else {
+        return false;
+    };
+    let meets = |b: horizon_core::geometry::Aabb| super::create_belt::boxes_meet(ahead, aabb(b));
+    game.mobs.iter().any(|m| Some(m.id) != mob && meets(m.bounds()))
+        || (mob.is_some() && game.player.as_ref().is_some_and(|p| meets(p.bounds())))
 }
 
 /// `BeltMovementHandler` for the window's own player (as Create moves it on
@@ -880,6 +901,10 @@ pub(super) fn belt_client_tick(game: &mut Game<'_>) {
     let Some(motion) = super::create_belt::entity_motion(state, pos, speed, at, walking) else {
         return;
     };
+    let mine = aabb(p.bounds());
+    if rider_blocked(game, mine, motion, speed, None) {
+        return;
+    }
     let to = [0, 1, 2].map(|i| at[i] + motion[i]);
     if belt_blocked(game, to) {
         return;
@@ -1298,7 +1323,16 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
     let held = game.held().cloned();
     // applyColor: a dye colours the whole belt, water washes it (the item
     // isn't used up).
-    if let Some(dye) = held.as_ref().and_then(|h| super::create_belt::belt_dye(&h.item)) {
+    // GenericItemEmptying: a water bottle empties water too
+    // (`PotionFluidHandler`: a plain potion of water).
+    let water_bottle = held
+        .as_ref()
+        .is_some_and(|h| &*h.item == "minecraft:potion" && h.potion() == Some("minecraft:water"));
+    let dye = held
+        .as_ref()
+        .and_then(|h| super::create_belt::belt_dye(&h.item))
+        .or(water_bottle.then_some(0));
+    if let Some(dye) = dye {
         if let Chain::Belt { segments, .. } = find_chain(&World { game }, pos) {
             super::create_glue::with_kinetics(game, |k, _| {
                 for p in &segments {

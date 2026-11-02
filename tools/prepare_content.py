@@ -239,6 +239,9 @@ PARTIALS = {
     # The cased belt's blockstate models (BeltGenerator), drawn over the belt.
     **{f"belt_casing_{slope}_{part}": f"create:block/belt_casing/{slope}_{part}"
        for slope in ("horizontal", "diagonal") for part in ("start", "middle", "end", "pulley")},
+    # BeltModel's covers, under a block over a cased belt.
+    **{f"belt_cover_{c}_{a}": f"create:block/belt_cover/{c}_belt_cover_{a}"
+       for c in ("andesite", "brass") for a in ("x", "z")},
     "belt_start": "create:block/belt/start",
     "belt_middle": "create:block/belt/middle",
     "belt_end": "create:block/belt/end",

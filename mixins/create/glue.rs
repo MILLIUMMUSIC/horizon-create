@@ -1342,6 +1342,36 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                     scrolls.push(None);
                 }
                 want.push((casing_holder(model), None, orient, Axis::Y, 0.0, 0.0));
+                // BeltModel's cover, under a block covering the belt
+                // (`BeltBlock.isBlockCoveringBelt`).
+                let above = [pos[0], pos[1] + 1, pos[2]];
+                let name = game
+                    .pack
+                    .assets
+                    .registry
+                    .state(game.world.block(above[0], above[1], above[2]))
+                    .map(|s| (s.name.clone(), s.properties.get("facing").cloned()));
+                let covered = name.is_some_and(|(n, facing)| {
+                    let bounds = game.block_collision_shape(above).bounds().map(|b| {
+                        let (lo, hi) = (b.min_position(), b.max_position());
+                        [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]
+                    });
+                    let funnel_not_up = super::create_funnel::is_funnel(&n) && facing.as_deref() != Some("up");
+                    let tunnel = n.starts_with("create:") && n.contains("_tunnel");
+                    super::create_belt::covers_belt(bounds, funnel_not_up, tunnel)
+                });
+                if covered {
+                    let along_x = b.facing.axis() == Axis::X;
+                    let cover = match super::create_belt::cover_model(casing, along_x) {
+                        "brass_x" => "create:hz_part_belt_cover_brass_x",
+                        "brass_z" => "create:hz_part_belt_cover_brass_z",
+                        "andesite_x" => "create:hz_part_belt_cover_andesite_x",
+                        _ => "create:hz_part_belt_cover_andesite_z",
+                    };
+                    scrolls.resize(want.len(), None);
+                    scrolls.push(None);
+                    want.push((cover, None, glam::Mat4::IDENTITY, Axis::Y, 0.0, 0.0));
+                }
             }
             if b.has_pulley() {
                 let dir = if sideways { Dir::Up } else { b.facing.clockwise(Axis::Y) };

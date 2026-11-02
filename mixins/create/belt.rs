@@ -2056,8 +2056,96 @@ fn downward(state: BeltState) -> bool {
     state.slope == Slope::Downward
 }
 
+/// `BeltMovementHandler.transportEntity`'s entity collisions: on a belt
+/// slower than half a block a tick, the box (`[x0, y0, z0, x1, y1, z1]`) of
+/// a rider moving by `motion` is looked ahead half a block (and shrunk as
+/// far across); another entity in it stops the rider. None when too fast
+/// to check.
+pub fn blocking_box(b: [f64; 6], motion: [f64; 3], speed: f32) -> Option<[f64; 6]> {
+    if (speed / 480.0).abs() >= 0.5 {
+        return None;
+    }
+    let len = (motion[0] * motion[0] + motion[1] * motion[1] + motion[2] * motion[2]).sqrt();
+    if len < 1e-4 {
+        return None;
+    }
+    let c = motion.map(|m| m / len * 0.5);
+    let mut out = [0.0; 6];
+    for k in 0..3 {
+        // `new AABB` orders each axis' ends again.
+        let (lo, hi) = (b[k] + c[k] + c[k].abs(), b[k + 3] + c[k] - c[k].abs());
+        out[k] = lo.min(hi);
+        out[k + 3] = lo.max(hi);
+    }
+    Some(out)
+}
+
+/// Whether two boxes overlap (`AABB.intersects`).
+pub fn boxes_meet(a: [f64; 6], b: [f64; 6]) -> bool {
+    (0..3).all(|k| a[k] < b[k + 3] && a[k + 3] > b[k])
+}
+
+/// `BeltBlock.isBlockCoveringBelt` for the block above a belt: its
+/// collision box (`[x0, y0, z0, x1, y1, z1]` within the block, none when
+/// empty), whether it is a funnel not facing up, and whether a tunnel.
+pub fn covers_belt(bounds: Option<[f64; 6]>, funnel_not_up: bool, tunnel: bool) -> bool {
+    let Some(b) = bounds else {
+        return false;
+    };
+    if b[3] - b[0] < 0.5 || b[5] - b[2] < 0.5 || b[1] > 0.0 {
+        return false;
+    }
+    !funnel_not_up && !tunnel
+}
+
+/// `BeltModel`'s cover partial for a cased belt along `along_x`.
+pub fn cover_model(casing: u8, along_x: bool) -> &'static str {
+    match (casing == CASING_BRASS, along_x) {
+        (true, true) => "brass_x",
+        (true, false) => "brass_z",
+        (false, true) => "andesite_x",
+        (false, false) => "andesite_z",
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn riders_stop_behind_other_entities() {
+        use super::{blocking_box, boxes_meet};
+        let me = [0.2, 1.0, 0.2, 0.8, 2.8, 0.8];
+        let ahead = blocking_box(me, [0.0, 0.0, 0.1], 32.0).unwrap();
+        assert!(boxes_meet(ahead, [0.2, 1.0, 1.0, 0.8, 2.0, 1.6]));
+        assert!(!boxes_meet(ahead, [0.2, 1.0, -1.0, 0.8, 2.0, -0.4]));
+        assert_eq!(blocking_box(me, [0.0, 0.0, 0.1], 256.0), None);
+    }
+
+    #[test]
+    fn blocks_cover_a_belt_from_the_floor_up() {
+        use super::covers_belt;
+        assert!(covers_belt(
+            Some([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+            false,
+            false
+        ));
+        assert!(!covers_belt(
+            Some([0.0, 0.5, 0.0, 1.0, 1.0, 1.0]),
+            false,
+            false
+        ));
+        assert!(!covers_belt(
+            Some([0.4, 0.0, 0.0, 0.6, 1.0, 1.0]),
+            false,
+            false
+        ));
+        assert!(!covers_belt(None, false, false));
+        assert!(!covers_belt(
+            Some([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+            true,
+            false
+        ));
+        assert_eq!(super::cover_model(super::CASING_BRASS, true), "brass_x");
+    }
     use super::*;
     use std::collections::HashMap;
 

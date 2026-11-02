@@ -105,9 +105,13 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      down slopes, centred unless the player walks; not while sneaking; the server moves mobs, the window moves its
      player as Create's client does). Vertical belts (between shafts one above the other) and sideways belts
      (between upright shafts) have blocks of their own (`hz_belt_<part>_vertical`/`_sideways`, BeltShapes' upright
-     boxes) and are drawn turned as `BeltRenderer` turns them, their pulleys too. Not yet: covers (`setCovered`), the cased shapes, riders slowed and blocked by other
-     entities, LAN guests riding belts, tunnels, crushers, water
-     bottles washing it, the slicer's outline feedback, sounds.
+     boxes) and are drawn turned as `BeltRenderer` turns them, their pulleys too. A cased belt under a block covering it (`isBlockCoveringBelt`) draws
+     `BeltModel`'s cover; on a belt slower than half a block a tick, a rider stops behind another entity half a block
+     ahead (`transportEntity`'s collisions: mobs on the server, the window's player on its side); a water bottle
+     washes a belt as a water bucket does (`GenericItemEmptying`). The slicer shows nothing while hovering: Create
+     6.0.10's `Feedback` is never filled ("TODO: Populate feedback"). Crushing wheels' controllers (not covering it)
+     come with the crushers (milestone 7). Engine gaps: the cased shapes (shapes only by a template property; the
+     casing lives in the kinetics), LAN guests riding belts (no hook moves a guest player), sounds (mod sound events).
    - Chute (`chute.rs`: `ChuteBlockEntity`'s item and `handleDownwardOutput`/`handleInputFromAbove`; a mod block
      entity): items fall at 4 blocks a second, into the inventory below (containers, depots, belt segments), into
      the chute below, or out of the bottom onto the ground; an empty chute takes up to 16 from the inventory above

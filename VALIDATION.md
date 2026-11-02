@@ -1,5 +1,13 @@
 # Validation
 
+## Belt covers and riders (macOS, offscreen)
+
+Seen working: a belt along X (seven blocks, a creative motor at 16 RPM) with three segments cased in andesite and
+stone on one of them: the cover's frame drawn under the stone. A cow and a pig (no AI) put on it, the pig behind: the
+cow stops at the belt's end (x 40.0) and the pig stops behind it at x 41.0 (half a block from the cow's box).
+
+Not checked yet: brass covers, a water bottle washing a dyed belt, the window's player stopped behind a mob.
+
 ## Arm selection outlines (macOS, offscreen)
 
 Seen working: with the mechanical arm item held, two depots clicked are outlined, one blue (extract), one yellow
