@@ -1,5 +1,14 @@
 # Validation
 
+## Belt dyeing, stacked and upright items (macOS, offscreen)
+
+Seen working: blue dye clicked on a six-block belt turns all of it blue (its scrolling sprite swapped); a water
+bucket washes it back (the bucket stays full, no water is placed). On the stopped belt a stack of 16 cobblestone
+from a chute lies as a pile of cubes spread a little, and a potion stands upright. 176 unit tests pass (2 new).
+
+Not checked yet: the colour after reloading and on a sloped belt, a dyed belt broken in two, upright items on a
+slope.
+
 ## Smart chute (macOS, offscreen)
 
 Seen working: a smart chute between two chests, its filter set to an iron ingot by clicking its side, takes the

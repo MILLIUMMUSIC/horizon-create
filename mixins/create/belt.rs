@@ -1510,6 +1510,47 @@ pub fn belt_partials(state: BeltState) -> (Vec<(&'static str, bool, bool)>, f32)
 }
 
 /// `BeltRenderer`'s texture scroll, as a fraction of the scrolling
+/// `DyeColor`, in order: a dyed belt keeps its index plus one (none: 0).
+pub const DYES: [&str; 16] = [
+    "white",
+    "orange",
+    "magenta",
+    "light_blue",
+    "yellow",
+    "lime",
+    "pink",
+    "gray",
+    "light_gray",
+    "cyan",
+    "purple",
+    "blue",
+    "brown",
+    "green",
+    "red",
+    "black",
+];
+
+/// `BeltBlock.useItemOn`'s dye or water: the belt's colour it gives (a dye
+/// its index plus one, water 0 to wash it), none for another item.
+pub fn belt_dye(item: &str) -> Option<u8> {
+    if item == "minecraft:water_bucket" {
+        return Some(0);
+    }
+    let colour = item.strip_prefix("minecraft:")?.strip_suffix("_dye")?;
+    DYES.iter().position(|d| *d == colour).map(|i| i as u8 + 1)
+}
+
+/// `BeltRenderer.getSpriteShiftEntry`: the scrolling sprite of a belt dyed
+/// `dye` (0: none).
+pub fn belt_scroll_sprite(dye: u8, diagonal: bool) -> String {
+    match DYES.get(usize::from(dye).wrapping_sub(1)) {
+        Some(c) if diagonal => format!("create:block/belt/{c}_diagonal_scroll"),
+        Some(c) => format!("create:block/belt/{c}_scroll"),
+        None if diagonal => "create:block/belt_diagonal_scroll".to_owned(),
+        None => "create:block/belt_scroll".to_owned(),
+    }
+}
+
 /// sprite's height, at `time` ticks and `speed` rpm.
 pub fn belt_scroll(state: BeltState, speed: f32, time: f32, bottom: bool) -> f32 {
     let diagonal = matches!(state.slope, Slope::Upward | Slope::Downward);
@@ -1528,6 +1569,34 @@ pub fn belt_scroll(state: BeltState, speed: f32, time: f32, bottom: bool) -> f32
     let scroll =
         f64::from(speed) * f64::from(time) / (31.5 * 16.0) + if bottom { 0.5 } else { 0.0 };
     ((scroll - scroll.floor()) as f32) * mult
+}
+
+/// `BeltRenderer.renderItem`'s copies of a stack: `log2(count) / 2` more
+/// than one (drawn within 16 blocks of the eye).
+pub fn stacked_copies(count: u32) -> u32 {
+    if count == 0 { 0 } else { count.ilog2() / 2 }
+}
+
+/// `java.util.Random`, for the spread of stacked block items
+/// (`new Random(transported.angle)`).
+pub struct JavaRandom(u64);
+
+impl JavaRandom {
+    const MULTIPLIER: u64 = 0x5_DEEC_E66D;
+    const MASK: u64 = (1 << 48) - 1;
+
+    pub fn new(seed: i64) -> Self {
+        JavaRandom((seed as u64 ^ Self::MULTIPLIER) & Self::MASK)
+    }
+
+    fn next(&mut self, bits: u32) -> u32 {
+        self.0 = (self.0.wrapping_mul(Self::MULTIPLIER).wrapping_add(0xB)) & Self::MASK;
+        (self.0 >> (48 - bits)) as u32
+    }
+
+    pub fn next_float(&mut self) -> f32 {
+        self.next(24) as f32 / (1u32 << 24) as f32
+    }
 }
 
 /// `BeltRenderer.renderItem`: where an item at `offset` (and `side`)
@@ -2133,5 +2202,30 @@ mod tests {
         let (p, tilt) = item_place([0, 0, 0], s, 3, 1.0, 0.0);
         assert_eq!(p, [0.5, 15.0 / 16.0, 1.0]);
         assert_eq!(tilt, 0.0);
+    }
+
+    #[test]
+    fn dyes_colour_belts() {
+        assert_eq!(belt_dye("minecraft:white_dye"), Some(1));
+        assert_eq!(belt_dye("minecraft:black_dye"), Some(16));
+        assert_eq!(belt_dye("minecraft:water_bucket"), Some(0));
+        assert_eq!(belt_dye("minecraft:stone"), None);
+        assert_eq!(
+            belt_scroll_sprite(4, false),
+            "create:block/belt/light_blue_scroll"
+        );
+        assert_eq!(
+            belt_scroll_sprite(0, true),
+            "create:block/belt_diagonal_scroll"
+        );
+    }
+
+    #[test]
+    fn stacks_look_stacked() {
+        assert_eq!(stacked_copies(1), 0);
+        assert_eq!(stacked_copies(4), 1);
+        assert_eq!(stacked_copies(64), 3);
+        // new Random(0).nextFloat(), as Java gives it.
+        assert!((JavaRandom::new(0).next_float() - 0.730_967_8).abs() < 1e-6);
     }
 }

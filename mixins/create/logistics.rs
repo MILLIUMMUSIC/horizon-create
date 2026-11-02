@@ -1057,12 +1057,6 @@ pub(super) fn draw_belts(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<hor
             let along_x = state.facing.axis() == Axis::X;
             let tilt_axis = if along_x { glam::Vec3::Z } else { glam::Vec3::X };
             let at = glam::DVec3::from_array(p);
-            let m = glam::Mat4::from_translation((at - camera).as_vec3())
-                * glam::Mat4::from_axis_angle(tilt_axis, tilt.to_radians())
-                * glam::Mat4::from_rotation_y((f32::from(t.angle)).to_radians())
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.09375, 0.0))
-                * glam::Mat4::from_rotation_x(90f32.to_radians())
-                * glam::Mat4::from_scale(glam::Vec3::splat(0.5));
             let stack = ItemStack::new(&t.id, t.count);
             let owner = super::item_draw::owner_at(p, 0.0, "create:belt");
             let resolved = game.resolve_item(
@@ -1071,7 +1065,46 @@ pub(super) fn draw_belts(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<hor
                 Some(&owner),
                 pos[0] ^ pos[2] ^ i as i32,
             );
-            game.submit_item_world(&resolved, m, horizon_client::block_entity_render::vertex_light(light), out);
+            // isGui3d: block items stand, others lie flat; upright ones
+            // (`create:upright_on_belt`) stand facing the camera, untilted.
+            let block = game.pack.assets.registry.default_state(&t.id).is_some();
+            let upright = game.items().item_in_tag("create:upright_on_belt", &t.id);
+            let copies = if at.distance(camera) < 16.0 { super::create_belt::stacked_copies(t.count) } else { 0 };
+            let mut random = super::create_belt::JavaRandom::new(i64::from(t.angle));
+            let mut base = glam::Mat4::from_translation((at - camera).as_vec3());
+            if upright {
+                let diff = at - camera;
+                let y_rot = diff.x.atan2(diff.z) as f32 + std::f32::consts::PI;
+                base = base
+                    * glam::Mat4::from_rotation_y(y_rot)
+                    * glam::Mat4::from_translation(glam::Vec3::new(0.0, 3.0 / 32.0, 1.0 / 16.0));
+            } else {
+                base *= glam::Mat4::from_axis_angle(tilt_axis, tilt.to_radians());
+            }
+            for copy in 0..=copies {
+                let mut m = base * glam::Mat4::from_rotation_y((f32::from(t.angle)).to_radians());
+                if !block && !upright {
+                    m = m
+                        * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.09375, 0.0))
+                        * glam::Mat4::from_rotation_x(90f32.to_radians());
+                }
+                if block {
+                    let x = random.next_float() * 0.0625 * copy as f32;
+                    let z = random.next_float() * 0.0625 * copy as f32;
+                    m *= glam::Mat4::from_translation(glam::Vec3::new(x, 0.0, z));
+                }
+                m *= glam::Mat4::from_scale(glam::Vec3::splat(0.5));
+                game.submit_item_world(&resolved, m, horizon_client::block_entity_render::vertex_light(light), out);
+                if upright {
+                    base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -1.0 / 16.0));
+                } else {
+                    if !block {
+                        base *= glam::Mat4::from_rotation_y(10f32.to_radians());
+                    }
+                    let up = if block { 1.0 / 64.0 } else { 1.0 / 16.0 };
+                    base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, up, 0.0));
+                }
+            }
         }
     }
 }
@@ -1184,6 +1217,18 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         return true;
     }
     let held = game.held().cloned();
+    // applyColor: a dye colours the whole belt, water washes it (the item
+    // isn't used up).
+    if let Some(dye) = held.as_ref().and_then(|h| super::create_belt::belt_dye(&h.item)) {
+        if let Chain::Belt { segments, .. } = find_chain(&World { game }, pos) {
+            super::create_glue::with_kinetics(game, |k, _| {
+                for p in &segments {
+                    k.set_wheel_material(*p, dye);
+                }
+            });
+        }
+        return true;
+    }
     match held {
         None => {
             let Some((controller, index)) = segment_of(game, pos) else {

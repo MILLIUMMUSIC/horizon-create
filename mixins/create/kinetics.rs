@@ -667,7 +667,8 @@ pub struct Kinetic {
     pub pressing: Pressing,
     /// `MechanicalMixerBlockEntity`'s cycle.
     pub mixing: Mixing,
-    /// `WaterWheelBlockEntity.material`: its index in `WHEEL_WOODS`.
+    /// `WaterWheelBlockEntity.material`: its index in `WHEEL_WOODS`; a belt
+    /// segment's dye (`BeltBlockEntity.color`, `DYES`' index plus one).
     pub material: u8,
 }
 
@@ -871,8 +872,10 @@ impl Kinetics {
                 }
                 // The scroll value box shows the motor's setting.
                 Kind::CreativeMotor(_) => e.motor_speed as i16,
-                // The wheel's wood.
-                Kind::WaterWheel(_) | Kind::LargeWaterWheel(_) => i16::from(e.material),
+                // The wheel's wood, the belt's dye.
+                Kind::WaterWheel(_) | Kind::LargeWaterWheel(_) | Kind::Belt(_) => {
+                    i16::from(e.material)
+                }
                 _ => -1,
             },
             press_belt: e.pressing.mode == PressMode::Belt,
@@ -1811,8 +1814,8 @@ impl Kinetics {
         e.flow_score = score;
         self.update_generated_rotation(level, pos);
     }
-    /// `applyMaterialIfValid`: the wheel at `pos` is made of `material`;
-    /// false when it already was.
+    /// `applyMaterialIfValid`: the wheel at `pos` is made of `material`
+    /// (or the belt segment dyed so); false when it already was.
     pub fn set_wheel_material(&mut self, pos: Pos, material: u8) -> bool {
         let Some(e) = self.entities.get_mut(&pos) else {
             return false;

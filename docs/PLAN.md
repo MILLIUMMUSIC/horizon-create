@@ -89,10 +89,12 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      it had a pulley. Drawn as `BeltRenderer` does: its partials turned its way, their texture swapped for the
      scrolling sprite and moved with the speed (`shiftUVScrolling`), the pulley turning, and the items lying
      along it, moved on between the server's updates (`create:belts` channel). Saved beside the world
-     (`data/create_logistics_*.txt`). Not yet: vertical and sideways belts, casings and covers, dyeing, the
-     wrench (`BeltSlicer`), extending belts with the connector, entities and players riding belts
-     (`BeltMovementHandler`), upright items (`create:upright_on_belt`), tunnels, crushers, the item's
-     stacked look (`renderItem`'s count), sounds.
+     (`data/create_logistics_*.txt`). A dye clicked on a belt colours all of it, a water bucket washes it
+     (`applyColor`; kept per segment as the kinetic entity's `material`, sent in K3's `aux`, drawn with the dyed
+     scrolling sprites). Items lie in a stack of `log2(count) / 2` more copies within 16 blocks (block items spread
+     by `new Random(angle)`), and `create:upright_on_belt` items stand facing the camera. Not yet: vertical and
+     sideways belts, casings and covers, the wrench (`BeltSlicer`), extending belts with the connector, entities
+     and players riding belts (`BeltMovementHandler`), tunnels, crushers, water bottles washing it, sounds.
    - Chute (`chute.rs`: `ChuteBlockEntity`'s item and `handleDownwardOutput`/`handleInputFromAbove`; a mod block
      entity): items fall at 4 blocks a second, into the inventory below (containers, depots, belt segments), into
      the chute below, or out of the bottom onto the ground; an empty chute takes up to 16 from the inventory above

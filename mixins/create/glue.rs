@@ -994,7 +994,7 @@ struct Part {
     drop: f32,
     /// `SpriteShiftEntry` and scroll (`shiftUVScrolling`): the belt's
     /// texture swapped for its scrolling one, moved this far along it.
-    scroll: Option<(&'static str, &'static str, f32)>,
+    scroll: Option<(&'static str, String, f32)>,
 }
 
 type Want = (&'static str, Option<(&'static str, &'static str)>, glam::Mat4, Axis, f32, f32);
@@ -1005,7 +1005,7 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
     let id = glam::Mat4::IDENTITY;
     // (holder, property, orientation, spin axis, angle, drop)
     let mut want: Vec<Want> = Vec::new();
-    let mut scrolls: Vec<Option<(&'static str, &'static str, f32)>> = Vec::new();
+    let mut scrolls: Vec<Option<(&'static str, String, f32)>> = Vec::new();
     match view.kind {
         Kind::Shaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
         Kind::Cogwheel(a) => {
@@ -1124,11 +1124,8 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                 } else {
                     "create:block/belt"
                 };
-                let target = if diagonal {
-                    "create:block/belt_diagonal_scroll"
-                } else {
-                    "create:block/belt_scroll"
-                };
+                // A dyed belt's own scrolling sprite.
+                let target = super::create_belt::belt_scroll_sprite(view.aux.max(0) as u8, diagonal);
                 let scroll = belt_scroll(b, view.speed, time, bottom);
                 scrolls.resize(want.len(), None);
                 scrolls.push(Some((original, target, scroll)));
@@ -1278,7 +1275,7 @@ pub(super) fn draw(
             let start = out.len();
             game.block_model_vertices(part.state, seed, m, packed, false, out);
             if let Some((original, target, scroll)) = part.scroll {
-                shift_uv(game, &mut out[start..], original, target, scroll);
+                shift_uv(game, &mut out[start..], original, &target, scroll);
             }
         }
         if let Kind::WaterWheel(f) = view.kind {
