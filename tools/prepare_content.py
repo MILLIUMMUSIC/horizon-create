@@ -486,6 +486,16 @@ def fit(content):
         existing = read_json(path)["values"] if path.exists() else []
         write_json(path, {"values": sorted(set(existing) | set(items))})
 
+    # Outlines (catnip's Outliner) are drawn with a white sprite; Create's is
+    # ponder's `special/blank`, not in the content. A plain white texture
+    # made here, on a hidden block so it is in the block atlas.
+    (content / "assets" / "create" / "textures" / "block").mkdir(parents=True, exist_ok=True)
+    (content / "assets" / "create" / "textures" / "block" / "hz_blank.png").write_bytes(white_png(16))
+    write_json(content / "assets" / "create" / "models" / "block" / "hz_blank.json",
+               {"parent": "block/cube_all", "textures": {"all": "create:block/hz_blank"}})
+    write_json(blocks / "hz_part_blank.json", {"template": "minecraft:stone", "item": False})
+    write_json(states / "hz_part_blank.json", {"variants": {"": {"model": "create:block/hz_blank"}}})
+
     for name, model in PARTIALS.items():
         block = f"hz_part_{name}"
         write_json(blocks / f"{block}.json", {"template": "minecraft:stone", "item": False})
@@ -497,6 +507,18 @@ def fit(content):
 
     if names:
         write_json(lang, names)
+
+
+def white_png(size):
+    """A `size` square opaque white PNG."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    rows = b"".join(b"\0" + b"\xff" * (size * 4) for _ in range(size))
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
 def turn_y(b, quarter_turns):

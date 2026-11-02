@@ -26,6 +26,8 @@ pub mod create_funnel;
 pub mod create_kinetics;
 #[path = "../mixins/create/obj.rs"]
 pub mod create_obj;
+#[path = "../mixins/create/outline.rs"]
+pub mod create_outline;
 #[path = "../mixins/create/processing.rs"]
 pub mod create_processing;
 #[path = "../mixins/create/saw.rs"]

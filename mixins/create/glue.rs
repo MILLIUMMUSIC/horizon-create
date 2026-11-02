@@ -762,6 +762,18 @@ fn large_wheel_blocked(game: &mut Game<'_>, stack: &horizon_client::items::ItemS
         let line = horizon_client::text::Text::translate("create.large_water_wheel.not_enough_space", &[])
             .with_color(0xFF5D6C);
         game.native_action_bar(player.uuid, line);
+        // showBounds: the block grown by one, but one thick along the axis.
+        let mut b = [0.0; 6];
+        for k in 0..3 {
+            let grow = if k == axis as usize { 0.0 } else { 1.0 };
+            b[k] = f64::from(at[k]) - grow;
+            b[k + 3] = f64::from(at[k]) + 1.0 + grow;
+        }
+        let params = super::create_outline::Params {
+            rgb: 0xFF5D6C,
+            ..Default::default()
+        };
+        send_outline(game, player.uuid, &format!("waterwheel {at:?}"), b, params, 1);
     }
     true
 }
@@ -1081,6 +1093,10 @@ pub(super) fn from_server(channel: &str, data: &[u8]) {
     }
     if channel == super::create_arms::ARMS {
         super::create_arms::from_server(data);
+        return;
+    }
+    if channel == OUTLINES {
+        outlines_from_server(data);
         return;
     }
     if channel != CHANNEL {
@@ -1568,6 +1584,136 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);
     super::create_contraptions::draw(game, camera, out);
+    draw_outlines(game, camera, out);
+}
+
+// ---- Outlines (catnip's Outliner) ---------------------------------------------
+
+/// Outlines for a player's client (format O1).
+pub(super) const OUTLINES: &str = "create:outlines";
+/// The white sprite outlines are drawn with (`ponder:special/blank`'s
+/// stand-in, made by prepare_content.py).
+const BLANK: &str = "create:block/hz_blank";
+
+/// The outlines this client shows.
+static CLIENT_OUTLINES: Mutex<Option<super::create_outline::Outliner>> = Mutex::new(None);
+
+/// Tells `player`'s client to show an outline in `slot` for `ticks` ticks
+/// (`Outliner.showAABB` on Create's client side).
+pub(super) fn send_outline(
+    game: &mut Game<'_>,
+    player: u128,
+    slot: &str,
+    bounds: [f64; 6],
+    params: super::create_outline::Params,
+    ticks: i32,
+) {
+    let mut out = Vec::from(&b"O1"[..]);
+    let id = slot.as_bytes();
+    out.push(id.len().min(255) as u8);
+    out.extend_from_slice(&id[..id.len().min(255)]);
+    for v in bounds {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&params.rgb.to_le_bytes());
+    out.extend_from_slice(&params.width.to_le_bytes());
+    out.extend_from_slice(&ticks.to_le_bytes());
+    if let Err(e) = game.native_net_send_to_player(player, OUTLINES, &out) {
+        log::debug!("Create: outline: {e}");
+    }
+}
+
+fn outlines_from_server(data: &[u8]) {
+    let Some(rest) = data.strip_prefix(b"O1") else {
+        return;
+    };
+    let Some((&n, rest)) = rest.split_first() else {
+        return;
+    };
+    let n = usize::from(n);
+    let (Some(id), Some(tail)) = (rest.get(..n), rest.get(n..n + 60)) else {
+        return;
+    };
+    let f = |i: usize| f64::from_le_bytes(tail[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
+    let bounds = [f(0), f(1), f(2), f(3), f(4), f(5)];
+    let int = |i: usize| u32::from_le_bytes(tail[i..i + 4].try_into().unwrap_or([0; 4]));
+    let params = super::create_outline::Params {
+        rgb: int(48),
+        width: f32::from_bits(int(52)),
+    };
+    let ticks = int(56) as i32;
+    let slot = String::from_utf8_lossy(id).into_owned();
+    CLIENT_OUTLINES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .show_aabb(&slot, bounds, params, ticks);
+}
+
+/// `Outliner.tickOutlines`, each tick of the window's game.
+pub(super) fn outlines_tick(game: &Game<'_>) {
+    if !game.native_window() {
+        return;
+    }
+    if let Some(o) = CLIENT_OUTLINES.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        o.tick();
+    }
+}
+
+/// `Outliner.renderOutlines`: each outline's edges as thin boxes, full
+/// bright, in its colour (a fading one until it is gone: the frame's
+/// vertices take no alpha).
+fn draw_outlines(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
+    let boxes: Vec<([f64; 6], u32)> = {
+        let guard = CLIENT_OUTLINES.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(o) = guard.as_ref() else {
+            return;
+        };
+        o.entries
+            .values()
+            .flat_map(|e| {
+                super::create_outline::edge_boxes(e.bounds, e.params.width)
+                    .into_iter()
+                    .map(|b| (b, e.params.rgb))
+            })
+            .collect()
+    };
+    if boxes.is_empty() {
+        return;
+    }
+    let Some(s) = game.gui.atlas.sprites.get(BLANK) else {
+        return;
+    };
+    let light = 0xF0 | 0xF0 << 8;
+    for (b, rgb) in boxes {
+        let origin = (glam::DVec3::new(b[0], b[1], b[2]) - camera).as_vec3();
+        let size = [(b[3] - b[0]) as f32, (b[4] - b[1]) as f32, (b[5] - b[2]) as f32];
+        let color = 0xFF00_0000 | (rgb >> 16 & 0xFF) | (rgb >> 8 & 0xFF) << 8 | (rgb & 0xFF) << 16;
+        // Six faces, wound counter-clockwise seen from outside.
+        let [x, y, z] = size;
+        let faces: [[[f32; 3]; 4]; 6] = [
+            [[0.0, y, 0.0], [0.0, y, z], [x, y, z], [x, y, 0.0]],
+            [[0.0, 0.0, 0.0], [x, 0.0, 0.0], [x, 0.0, z], [0.0, 0.0, z]],
+            [[0.0, 0.0, 0.0], [0.0, y, 0.0], [x, y, 0.0], [x, 0.0, 0.0]],
+            [[0.0, 0.0, z], [x, 0.0, z], [x, y, z], [0.0, y, z]],
+            [[0.0, 0.0, 0.0], [0.0, 0.0, z], [0.0, y, z], [0.0, y, 0.0]],
+            [[x, 0.0, 0.0], [x, y, 0.0], [x, y, z], [x, 0.0, z]],
+        ];
+        let uv = [[s.u0, s.v0], [s.u0, s.v1], [s.u1, s.v1], [s.u1, s.v0]];
+        for face in faces {
+            for (k, p) in face.iter().enumerate() {
+                out.push(horizon_client::mesher::Vertex {
+                    normal: [0; 4],
+                    pos: (origin + glam::Vec3::from_array(*p)).to_array(),
+                    uv: uv[k],
+                    layer: 0,
+                    color,
+                    light,
+                    glint_uv: [0.0, 0.0],
+                });
+            }
+        }
+    }
 }
 
 /// `WaterWheelBlockEntity.material`'s default, spruce planks, as

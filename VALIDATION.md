@@ -6,6 +6,8 @@ Seen working: two large wheels along X side by side drawn (the second with the e
 wheel clicked onto the stone floor with room around it is placed with its structure; one clicked where a stone
 block stands in its ring is not placed, the item stays in hand and "Clear Blocks for Placement" shows in red.
 
+The space a blocked wheel needs is outlined in red (3×3 across its axis) for a moment.
+
 Not checked yet: the extension's axle seen closely against the plain one, a wheel placed against a wall's side.
 
 ## The wrench on minecarts (macOS, offscreen)

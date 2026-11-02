@@ -70,7 +70,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      `water_wheel.obj` and `.mtl` from the game's resources (the content mod made from the player's jar) at
      runtime, client side, and draws it turned with `rotateToFaceVertical` and spun with the network, in spruce
      (the default material: oak planks and log swapped for spruce's). The block's own model (its frame) stays in
-     the chunk mesh. Planks (vanilla woods) clicked on a wheel make it of their wood. The large water wheel (`LargeWaterWheelBlock`, 128 su, 4 RPM from the flow around it at two blocks) keeps its eight invisible structure blocks (`WaterWheelStructuralBlock`, passing clicks on); broken or blocked, it breaks. Another large wheel on its negative side draws the longer axle (`EXTENSION`, `WaterWheelRenderer`'s `LARGE_EXTENSION`), and it is placed only where the eight blocks around it across its axis can be replaced (`getStateForPlacement`; else nothing is placed and "Clear Blocks for Placement" shows in red on the action bar, `LargeWaterWheelBlockItem`). Not yet: the red outline of the space it needs (`showBounds`, with the outlines below).
+     the chunk mesh. Planks (vanilla woods) clicked on a wheel make it of their wood. The large water wheel (`LargeWaterWheelBlock`, 128 su, 4 RPM from the flow around it at two blocks) keeps its eight invisible structure blocks (`WaterWheelStructuralBlock`, passing clicks on); broken or blocked, it breaks. Another large wheel on its negative side draws the longer axle (`EXTENSION`, `WaterWheelRenderer`'s `LARGE_EXTENSION`), and it is placed only where the eight blocks around it across its axis can be replaced (`getStateForPlacement`; else nothing is placed and "Clear Blocks for Placement" shows in red on the action bar, `LargeWaterWheelBlockItem`). The space it needs is outlined in red (`showBounds`), through the outlines below.
 4. **Logistics**. Part 1 (**compiled and unit-tested only, not yet run in the game**):
    - Mechanical belt (`belt.rs`: `BeltBlock`, `BeltBlockEntity`, `BeltInventory`, `TransportedItemStack`,
      `BeltHelper`, `ItemHandlerBeltSegment`, `BeltConnectorItem`; `logistics.rs`): the belt connector joins two
@@ -401,6 +401,14 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.
 7. **Everything else**: Ponder scenes, schematics and the schematicannon, decoration sets, Create's
    compatibility with other mods.
+
+## Outlines
+
+Catnip's `Outliner` (`outline.rs`: slots kept alive each tick, eight ticks of fading, `AABBOutline`'s edges as thin
+boxes) is drawn by the native mod in the frame's own pass with a white sprite (`create:block/hz_blank`, made by
+`prepare_content.py`; Create's is ponder's `special/blank`). The server tells a player's client what to show over
+`create:outlines` (O1: slot, box, colour, line width, ticks). Fading outlines are drawn whole until they go (the frame
+takes no alpha). Used by: the large water wheel's `showBounds`.
 
 ## Engine gaps to raise upstream (as hook point requests)
 
