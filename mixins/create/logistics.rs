@@ -143,7 +143,7 @@ fn prop(game: &Game<'_>, pos: Pos, key: &str) -> Option<String> {
 }
 
 pub(super) fn is_belt(name: &str) -> bool {
-    super::create_belt::BELT_BLOCKS.iter().any(|(n, _)| *n == name)
+    super::create_belt::is_belt_block(name)
 }
 
 /// Blocks of ours outside the kinetics, whose changes the glue reports.
@@ -1737,14 +1737,7 @@ pub(super) fn use_connector(game: &mut Game<'_>, stack: &ItemStack, pos: Pos) ->
             let state = game.world.block(p[0], p[1], p[2]);
             game.res.facts().get(state).hardness < 0.0
         });
-        let placeable = belts.iter().all(|(_, s)| s.block().is_some());
-        if unbreakable || !placeable {
-            if !placeable {
-                game.native_action_bar(
-                    player.uuid,
-                    horizon_client::text::Text::literal("Vertical and sideways belts aren't ported yet".to_owned()),
-                );
-            }
+        if unbreakable {
             with_state(|s| s.first_shaft.remove(&player.uuid));
             return true;
         }

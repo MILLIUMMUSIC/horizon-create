@@ -103,8 +103,9 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      the items of both moved to the joined belt's start, the two shafts and the connector given back). Mobs and the window's player
      standing on a belt ride it (`BeltMovementHandler.transportEntity`: `speed / 480` a tick along its axis, up and
      down slopes, centred unless the player walks; not while sneaking; the server moves mobs, the window moves its
-     player as Create's client does). Not yet:
-     vertical and sideways belts, covers (`setCovered`), the cased shapes, riders slowed and blocked by other
+     player as Create's client does). Vertical belts (between shafts one above the other) and sideways belts
+     (between upright shafts) have blocks of their own (`hz_belt_<part>_vertical`/`_sideways`, BeltShapes' upright
+     boxes) and are drawn turned as `BeltRenderer` turns them, their pulleys too. Not yet: covers (`setCovered`), the cased shapes, riders slowed and blocked by other
      entities, LAN guests riding belts, tunnels, crushers, water
      bottles washing it, the slicer's outline feedback, sounds.
    - Chute (`chute.rs`: `ChuteBlockEntity`'s item and `handleDownwardOutput`/`handleInputFromAbove`; a mod block

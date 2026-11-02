@@ -256,6 +256,15 @@ PARTIALS = {
 # stop. Vertical and sideways belts have no block. Shapes can only follow one
 # property: the flat belt's slab (both ways) and a lower half for slopes.
 BELT_PARTS = {"belt": "start", "hz_belt_middle": "middle", "hz_belt_end": "end", "hz_belt_pulley": "pulley"}
+# Vertical and sideways belts: a block per part and slope (the grindstone's
+# `face` holds only three slopes), shaped by `facing` (BeltShapes' full
+# parts, upright).
+UPRIGHT_BELT_PARTS = {f"hz_belt_{part}_{slope}": (part, slope)
+                      for slope in ("vertical", "sideways") for part in ("start", "middle", "end", "pulley")}
+UPRIGHT_BELT_SHAPES = {
+    "vertical": {"x": [box(3, 0, 1, 13, 16, 15)], "z": [box(1, 0, 3, 15, 16, 13)]},
+    "sideways": {"x": [box(0, 1, 3, 16, 15, 13)], "z": [box(3, 1, 0, 13, 15, 16)]},
+}
 BELT_SHAPES = {
     "floor": [box(0, 3, 0, 16, 13, 16)],
     "wall": [box(0, 0, 0, 16, 8, 16)],
@@ -488,6 +497,21 @@ def fit_logistics(content, names):
         if name != "belt":
             names[f"block.create.{name}"] = names.get("block.create.belt", "Mechanical Belt")
 
+    for name, (part, slope) in UPRIGHT_BELT_PARTS.items():
+        decl = dict(base)
+        decl["template"] = "minecraft:grindstone"
+        decl["item"] = False
+        decl["default_state"] = {"face": "floor"}
+        by_axis = UPRIGHT_BELT_SHAPES[slope]
+        decl["shapes"] = {"property": "facing", "values": {
+            f: by_axis["x" if f in ("east", "west") else "z"] for f in ("north", "south", "west", "east")}}
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+        write_json(states / f"{name}.json", {"variants": {"": {"model": "create:block/belt/particle"}}})
+        items = ["create:belt_connector"] + ([] if part == "middle" else ["create:shaft"])
+        write_json(loot_tables / f"{name}.json", loot(name, items))
+        names[f"block.create.{name}"] = names.get("block.create.belt", "Mechanical Belt")
+
     turns = {"north": 0, "east": 1, "south": 2, "west": 3}
     shapes = dict(FUNNEL_SHAPES)
     for f, q in turns.items():
@@ -563,6 +587,7 @@ def fit_logistics(content, names):
     # whether the template's required tool drops them at all.
     share_block_tags(content, {
         **{name: "create:belt" for name in BELT_PARTS if name != "belt"},
+        **{name: "create:belt" for name in UPRIGHT_BELT_PARTS},
         **{name: f"create:{item}" for item, funnels in FUNNEL_KINDS.items() for name in funnels if name != item},
         **{name: f"create:{kind}_tunnel" for kind in ("andesite", "brass")
            for name in tunnel_blocks(kind) if name != f"{kind}_tunnel"},

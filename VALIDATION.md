@@ -1,5 +1,14 @@
 # Validation
 
+## Vertical and sideways belts (macOS, offscreen)
+
+Seen working: the connector between two shafts along X one above the other (four apart) makes a vertical belt
+(start, middles, end), drawn upright with its pulleys at both ends; between two upright shafts four apart it
+makes a sideways belt, drawn standing on its edge. 179 unit tests pass.
+
+Not checked yet: their speed passed on and scrolling, breaking them, casings or the wrench on them, a pulley in
+the middle of one.
+
 ## Riding belts (macOS, offscreen)
 
 Seen working: on a belt turned by a creative motor at 16 RPM, a pig and the player standing on it move along

@@ -1120,7 +1120,13 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             // BeltRenderer: the belt's partials turned its way, their texture
             // scrolling with its speed; the pulley turning at pulleys.
             let (partials, angle) = belt_partials(b);
-            let turn = glam::Mat4::from_rotation_y(angle.to_radians());
+            // localTransforms: about Y, then Z for a sideways belt, then X
+            // for a vertical or sideways one.
+            let sideways = b.slope == super::create_belt::Slope::Sideways;
+            let upright = sideways || b.slope == super::create_belt::Slope::Vertical;
+            let turn = glam::Mat4::from_rotation_y(angle.to_radians())
+                * glam::Mat4::from_rotation_z(if sideways { 90f32 } else { 0.0 }.to_radians())
+                * glam::Mat4::from_rotation_x(if upright { 90f32 } else { 0.0 }.to_radians());
             for (name, bottom, diagonal) in partials {
                 let holder = belt_holder(name);
                 let original = if diagonal {
@@ -1158,11 +1164,11 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                 want.push((casing_holder(model), None, orient, Axis::Y, 0.0, 0.0));
             }
             if b.has_pulley() {
-                let dir = b.facing.clockwise(Axis::Y);
-                let orient = if dir.axis() == Axis::X {
-                    glam::Mat4::from_rotation_y(90f32.to_radians())
-                } else {
-                    glam::Mat4::IDENTITY
+                let dir = if sideways { Dir::Up } else { b.facing.clockwise(Axis::Y) };
+                let orient = match dir.axis() {
+                    Axis::X => glam::Mat4::from_rotation_y(90f32.to_radians()),
+                    Axis::Y => glam::Mat4::from_rotation_x(90f32.to_radians()),
+                    Axis::Z => glam::Mat4::IDENTITY,
                 } * glam::Mat4::from_rotation_x(90f32.to_radians());
                 want.push(("create:hz_part_belt_pulley", None, orient, b.rotation_axis(), standard, 0.0));
             }

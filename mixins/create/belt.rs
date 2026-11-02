@@ -48,13 +48,55 @@ impl Part {
 /// belt's state properties, so each part is a block of its own on a
 /// grindstone's (`face` and `facing`): its `face` is the slope (floor
 /// horizontal, wall upward, ceiling downward); vertical and sideways belts
-/// have no block yet.
+/// have blocks of their own (`UPRIGHT_BELT_BLOCKS`, only `facing` read).
 pub const BELT_BLOCKS: [(&str, Part); 4] = [
     ("create:belt", Part::Start),
     ("create:hz_belt_middle", Part::Middle),
     ("create:hz_belt_end", Part::End),
     ("create:hz_belt_pulley", Part::Pulley),
 ];
+
+/// The vertical and sideways belts' blocks.
+pub const UPRIGHT_BELT_BLOCKS: [(&str, Part, Slope); 8] = [
+    (
+        "create:hz_belt_start_vertical",
+        Part::Start,
+        Slope::Vertical,
+    ),
+    (
+        "create:hz_belt_middle_vertical",
+        Part::Middle,
+        Slope::Vertical,
+    ),
+    ("create:hz_belt_end_vertical", Part::End, Slope::Vertical),
+    (
+        "create:hz_belt_pulley_vertical",
+        Part::Pulley,
+        Slope::Vertical,
+    ),
+    (
+        "create:hz_belt_start_sideways",
+        Part::Start,
+        Slope::Sideways,
+    ),
+    (
+        "create:hz_belt_middle_sideways",
+        Part::Middle,
+        Slope::Sideways,
+    ),
+    ("create:hz_belt_end_sideways", Part::End, Slope::Sideways),
+    (
+        "create:hz_belt_pulley_sideways",
+        Part::Pulley,
+        Slope::Sideways,
+    ),
+];
+
+/// Whether `name` is one of a belt's blocks.
+pub fn is_belt_block(name: &str) -> bool {
+    BELT_BLOCKS.iter().any(|(n, _)| *n == name)
+        || UPRIGHT_BELT_BLOCKS.iter().any(|(n, ..)| *n == name)
+}
 
 /// A belt segment's block state (`BeltBlock`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -68,6 +110,14 @@ pub struct BeltState {
 impl BeltState {
     /// The belt segment of block `name` with its properties.
     pub fn from_block<'a>(name: &str, prop: impl Fn(&str) -> Option<&'a str>) -> Option<BeltState> {
+        if let Some((_, part, slope)) = UPRIGHT_BELT_BLOCKS.iter().find(|(n, ..)| *n == name) {
+            let facing = Dir::parse(prop("facing")?).filter(|f| f.axis() != Axis::Y)?;
+            return Some(BeltState {
+                facing,
+                slope: *slope,
+                part: *part,
+            });
+        }
         let part = BELT_BLOCKS.iter().find(|(n, _)| *n == name)?.1;
         let facing = Dir::parse(prop("facing")?)?;
         if facing.axis() == Axis::Y {
@@ -85,14 +135,20 @@ impl BeltState {
             part,
         })
     }
-    /// Its block and the `face` property that holds its slope; none for
-    /// the slopes that have no block here.
+    /// Its block and the `face` property that holds its slope (`floor` on
+    /// the upright belts' own blocks).
     pub fn block(self) -> Option<(&'static str, &'static str)> {
         let face = match self.slope {
             Slope::Horizontal => "floor",
             Slope::Upward => "wall",
             Slope::Downward => "ceiling",
-            Slope::Vertical | Slope::Sideways => return None,
+            Slope::Vertical | Slope::Sideways => {
+                let name = UPRIGHT_BELT_BLOCKS
+                    .iter()
+                    .find(|(_, p, s)| *p == self.part && *s == self.slope)?
+                    .0;
+                return Some((name, "floor"));
+            }
         };
         let name = BELT_BLOCKS.iter().find(|(_, p)| *p == self.part)?.0;
         Some((name, face))
@@ -2181,7 +2237,7 @@ mod tests {
     #[test]
     fn blocks_round_trip() {
         for part in Part::ALL {
-            for slope in [Slope::Horizontal, Slope::Upward, Slope::Downward] {
+            for slope in Slope::ALL {
                 let s = st(Dir::West, slope, part);
                 let (name, face) = s.block().unwrap();
                 let back = BeltState::from_block(name, |k| match k {
@@ -2192,7 +2248,7 @@ mod tests {
                 assert_eq!(back, Some(s));
             }
         }
-        assert_eq!(st(Dir::North, Slope::Vertical, Part::Start).block(), None);
+        assert!(is_belt_block("create:hz_belt_pulley_sideways"));
     }
 
     #[test]
