@@ -407,10 +407,22 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       `ItemHelper.extract`), the interface's timer and the actors' ticks. Item vaults count as storage too (each
       captured block's own slots). Not yet: toolboxes, depots and creative crates as storage, double chests as one, the fluid interface, the interfaces' extension drawn moving, vanilla hoppers reaching a stationary interface (they don't go through
       the item handler), the deployer's pole and hand drawn on a moving structure, schematics. The deployer's filter works (`DeployerItemHandler.isItemValid`, a held item it doesn't take goes to the overflow, a taken held item isn't extracted; set by a click on a side face with the item, saved with its state) but isn't drawn (`DeployerFilterSlot`'s value box).
-   5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
-6. **Trains**: track graph, signals, stations, schedules. Depends on 5.
-7. **Everything else**: Ponder scenes, schematics and the schematicannon, decoration sets, Create's
-   compatibility with other mods.
+   5. Minecart contraptions (cart assembler): **blocked on the engine**, not done: they need mod entities riding
+      vanilla carts and a moving group of blocks bound to an entity; upstream: horizon-rust/horizon#5556 (fake
+      players, mod entity types, moving groups of blocks, open) and #5212 / #6300 (mod entity types from code, open).
+6. **Trains**: track graph, signals, stations, schedules. **Blocked on the engine** (checked 2026-11-04): a carriage
+   is a contraption entity that runs on tracks across chunks with its own collision and bogeys that follow curved
+   track blocks, and trains need mod entity types (#5556, #5212, #6300, all open), curved track shapes keyed by
+   more than a template's properties (#5550, open) and a map screen for the station and schedule screens
+   (no issue: a mod-drawn screen outside a container menu has no hook, see the gap below). Not started; the
+   track graph and signal rules could be written as pure modules but nothing of them could be seen or used without
+   the carriage entity, so they wait for it.
+7. **Everything else**: Ponder scenes (**blocked on the engine**: mod-drawn screens with a free cursor and an
+   offscreen scene renderer; no issue), schematics and the schematicannon (**blocked on the engine** for the
+   schematic table and the schematic selection screens; the cannon's firing could be ported after them), decoration
+   sets, Create's compatibility with other mods (**blocked on the engine**: no shared capabilities, #1040 for item
+   storage only, nothing for fluids or energy). The rest of this milestone is ported item by item below; what is
+   done is in the README's estimate.
 
 ## Rework onto Horizon's hooks (pin 674948d)
 
