@@ -368,9 +368,8 @@ pub fn provide_to_space(
 /// A block with a `FluidTransportBehaviour`, as its state says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PipeBlock {
-    /// `FluidPipeBlock`: the sides it is open at
-    /// (`PROPERTY_BY_DIRECTION`). Straight pipes only here: a pipe along
-    /// an axis, open at both ends.
+    /// `FluidPipeBlock`: the sides it is open at (`PROPERTY_BY_DIRECTION`,
+    /// indexed by `Dir`).
     Pipe([bool; 6]),
     /// `PumpBlock`: its `FACING` (where it pushes to).
     Pump(Dir),
@@ -1741,6 +1740,132 @@ impl Fluids {
     }
 }
 
+/// What a pipe sees beside it, for `FluidPipeBlock.canConnectTo`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipeNeighbour {
+    /// Another fluid pipe (no brackets here).
+    Pipe,
+    /// A block with a fluid handler (`hasFluidCapability`: tanks, basins).
+    Holder,
+    /// `VanillaFluidTargets.canProvideFluidWithoutCapability`: cauldrons and
+    /// honey levels.
+    Vanilla,
+    /// A pump facing this way (`canHaveFlowToward`: along its axis).
+    Pump(Dir),
+    Other,
+}
+
+/// `FluidPipeBlock.canConnectTo` the neighbour on side `d`.
+pub fn pipe_connects(n: PipeNeighbour, d: Dir) -> bool {
+    match n {
+        PipeNeighbour::Pipe | PipeNeighbour::Holder | PipeNeighbour::Vanilla => true,
+        PipeNeighbour::Pump(f) => f.axis() == d.axis(),
+        PipeNeighbour::Other => false,
+    }
+}
+
+/// What a pipe draws on a side (`FluidTransportBehaviour.AttachmentTypes`
+/// as `FluidPipeBlockEntity`'s behaviour renders it), kept as the side's
+/// state property: `Closed` for a side it isn't open at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipeSide {
+    Closed,
+    Rim,
+    Drain,
+    Connection,
+    DetailedConnection,
+}
+
+impl PipeSide {
+    pub const ALL: [PipeSide; 5] = [
+        PipeSide::Closed,
+        PipeSide::Rim,
+        PipeSide::Drain,
+        PipeSide::Connection,
+        PipeSide::DetailedConnection,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            PipeSide::Closed => "closed",
+            PipeSide::Rim => "rim",
+            PipeSide::Drain => "drain",
+            PipeSide::Connection => "connection",
+            PipeSide::DetailedConnection => "detailed",
+        }
+    }
+    pub fn parse(s: &str) -> Option<PipeSide> {
+        PipeSide::ALL.into_iter().find(|p| p.name() == s)
+    }
+}
+
+/// `getRenderedRimAttachment` of a pipe open as `open` on side `d`, whose
+/// neighbour there is `n`.
+pub fn pipe_attachment(open: [bool; 6], d: Dir, n: PipeNeighbour) -> PipeSide {
+    if !open[d as usize] {
+        return PipeSide::Closed;
+    }
+    let straight = |a: Axis| {
+        let along: Vec<Dir> = Dir::ALL.into_iter().filter(|x| open[*x as usize]).collect();
+        along.len() == 2 && along.iter().all(|x| x.axis() == a)
+    };
+    match n {
+        // A pump pushing into this pipe: nothing, so a detailed connection.
+        PipeNeighbour::Pump(f) if f == d.opposite() => PipeSide::DetailedConnection,
+        PipeNeighbour::Holder => PipeSide::Drain,
+        // Another pipe it connects to: no rim.
+        PipeNeighbour::Pipe => {
+            if straight(d.axis()) {
+                PipeSide::Connection
+            } else {
+                PipeSide::DetailedConnection
+            }
+        }
+        // A pump it can flow into.
+        PipeNeighbour::Pump(f) if f.axis() == d.axis() => PipeSide::DetailedConnection,
+        _ => PipeSide::Rim,
+    }
+}
+
+/// `FluidPipeBlock.updateBlockState`: the sides a pipe opens, from what it
+/// was (`prev`), the sides that connect, the side it leaves alone
+/// (`ignore`) and the way it prefers when nothing connects.
+pub fn update_pipe(
+    prev: [bool; 6],
+    preferred: Dir,
+    ignore: Option<Dir>,
+    connects: impl Fn(Dir) -> bool,
+) -> [bool; 6] {
+    let prev_sides = prev.iter().filter(|o| **o).count();
+    let mut open = prev;
+    for d in Dir::ALL {
+        if Some(d) != ignore {
+            open[d as usize] = connects(d);
+        }
+    }
+    // Enough connections: two or more stay as they are.
+    let mut connected = None;
+    for d in Dir::ALL {
+        if open[d as usize] {
+            if connected.is_some() {
+                return open;
+            }
+            connected = Some(d);
+        }
+    }
+    // One: the opposite end opens too.
+    if let Some(d) = connected {
+        open[d.opposite() as usize] = true;
+        return open;
+    }
+    // None, and it was a straight pipe before: as it was.
+    if prev_sides == 2 {
+        return prev;
+    }
+    open[preferred as usize] = true;
+    open[preferred.opposite() as usize] = true;
+    open
+}
+
 /// `PumpBlockEntity.searchForEndpointRecursively`.
 fn search_for_endpoint(
     graph: &HashMap<Pos, (i32, [Option<bool>; 6])>,
@@ -2382,6 +2507,47 @@ mod tests {
         f.block_changed(&mut w, [4, 0, 0]);
         assert!(!f.transports.contains_key(&[4, 0, 0]));
         assert!(!f.transports[&[3, 0, 0]].has_any_pressure());
+    }
+
+    #[test]
+    fn pipes_turn_corners_towards_what_they_connect_to() {
+        let none = [false; 6];
+        // Nothing around: straight along the placer's look.
+        let p = update_pipe(none, Dir::North, None, |_| false);
+        assert!(p[Dir::North as usize] && p[Dir::South as usize]);
+        // A tank to the east and a pipe above: a corner.
+        let c = update_pipe(none, Dir::North, None, |d| d == Dir::East || d == Dir::Up);
+        assert_eq!(c.iter().filter(|o| **o).count(), 2);
+        assert!(c[Dir::East as usize] && c[Dir::Up as usize]);
+        // One connection: the far end opens.
+        let one = update_pipe(none, Dir::North, None, |d| d == Dir::West);
+        assert!(one[Dir::West as usize] && one[Dir::East as usize]);
+        // A straight pipe whose neighbours went keeps its way.
+        let kept = update_pipe(p, Dir::Up, None, |_| false);
+        assert_eq!(kept, p);
+        assert!(pipe_connects(PipeNeighbour::Pump(Dir::East), Dir::West));
+        // Rims on open ends, drains into tanks, plain joins along a line.
+        assert_eq!(
+            pipe_attachment(p, Dir::North, PipeNeighbour::Other),
+            PipeSide::Rim
+        );
+        assert_eq!(
+            pipe_attachment(p, Dir::North, PipeNeighbour::Holder),
+            PipeSide::Drain
+        );
+        assert_eq!(
+            pipe_attachment(p, Dir::North, PipeNeighbour::Pipe),
+            PipeSide::Connection
+        );
+        assert_eq!(
+            pipe_attachment(c, Dir::East, PipeNeighbour::Pipe),
+            PipeSide::DetailedConnection
+        );
+        assert_eq!(
+            pipe_attachment(p, Dir::East, PipeNeighbour::Pipe),
+            PipeSide::Closed
+        );
+        assert!(!pipe_connects(PipeNeighbour::Pump(Dir::East), Dir::Up));
     }
 
     #[test]

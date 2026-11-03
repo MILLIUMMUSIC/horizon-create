@@ -148,11 +148,82 @@ fn block_name(game: &Game<'_>, pos: Pos) -> Option<String> {
 fn pipe_block(game: &Game<'_>, pos: Pos) -> Option<PipeBlock> {
     let s = block_state(game, pos)?;
     match s.name.as_str() {
-        // Straight pipes on a chain's template: open at both ends of its axis.
-        PIPE => s.properties.get("axis").and_then(|a| Axis::parse(a)).map(PipeBlock::straight),
+        // FluidPipeBlock's six sides (its own state properties).
+        PIPE => Some(PipeBlock::Pipe(pipe_sides(&s.properties))),
         PUMP => s.properties.get("facing").and_then(|f| Dir::parse(f)).map(PipeBlock::Pump),
         _ => None,
     }
+}
+
+/// A pipe state's open sides, by `Dir`.
+pub(super) fn pipe_sides(props: &horizon_world::block_state_properties::BlockProperties) -> [bool; 6] {
+    Dir::ALL.map(|d| props.get(d.name()).is_some_and(|v| v != "closed"))
+}
+
+/// The pipe state `state` at `pos` with its sides opened as `open`, each
+/// with what it draws there (`getRenderedRimAttachment`).
+fn with_sides(
+    level: &super::GameLevel<'_>,
+    state: horizon_world::registry::BlockStateId,
+    pos: Pos,
+    open: [bool; 6],
+) -> Option<horizon_world::registry::BlockStateId> {
+    let mut s = state;
+    for d in Dir::ALL {
+        let side = super::create_fluids::pipe_attachment(open, d, pipe_neighbour(level, pos, d));
+        s = level.native_state_with_property(s, d.name(), side.name())?;
+    }
+    Some(s)
+}
+
+/// What the pipe at `pos` sees on side `d` (`FluidPipeBlock.canConnectTo`).
+fn pipe_neighbour(level: &super::GameLevel<'_>, pos: Pos, d: Dir) -> super::create_fluids::PipeNeighbour {
+    use super::create_fluids::PipeNeighbour as N;
+    let n = d.normal();
+    let p = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+    let Some(s) = level.registry.state(level.world.block(p[0], p[1], p[2])) else {
+        return N::Other;
+    };
+    match s.name.as_str() {
+        PIPE => N::Pipe,
+        PUMP => s.properties.get("facing").and_then(|f| Dir::parse(f)).map_or(N::Other, N::Pump),
+        n if is_tank_block(n) || n == super::create_machines::BASIN => N::Holder,
+        "minecraft:cauldron" | "minecraft:lava_cauldron" | "minecraft:water_cauldron" => N::Vanilla,
+        _ if s.properties.contains_key("honey_level") => N::Vanilla,
+        _ => N::Other,
+    }
+}
+
+/// `FluidPipeBlock.getStateForPlacement`: its sides towards what it
+/// connects to, else straight along the placer's look.
+pub(super) fn pipe_placement(
+    level: &super::GameLevel<'_>,
+    state: horizon_world::registry::BlockStateId,
+    pos: Pos,
+    looking: Dir,
+) -> Option<horizon_world::registry::BlockStateId> {
+    let open = super::create_fluids::update_pipe([false; 6], looking, None, |d| {
+        super::create_fluids::pipe_connects(pipe_neighbour(level, pos, d), d)
+    });
+    with_sides(level, state, pos, open)
+}
+
+/// `FluidPipeBlock.updateShape`: a neighbour on `direction` changed; the
+/// side opposite it is left alone.
+pub(super) fn pipe_update_shape(
+    level: &super::GameLevel<'_>,
+    state: horizon_world::registry::BlockStateId,
+    pos: Pos,
+    direction: Dir,
+) -> Option<horizon_world::registry::BlockStateId> {
+    let s = level.registry.state(state)?;
+    if s.name != PIPE {
+        return None;
+    }
+    let open = super::create_fluids::update_pipe(pipe_sides(&s.properties), direction, Some(direction.opposite()), |d| {
+        super::create_fluids::pipe_connects(pipe_neighbour(level, pos, d), d)
+    });
+    with_sides(level, state, pos, open)
 }
 
 fn is_tank(game: &Game<'_>, pos: Pos) -> bool {

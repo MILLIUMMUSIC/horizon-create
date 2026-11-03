@@ -579,10 +579,17 @@ pub(super) fn state_for_placement(
     let Some(s) = registry.state(state) else {
         return;
     };
+    let pos = [context.pos.x, context.pos.y, context.pos.z];
+    if s.name == super::create_fluid_glue::PIPE {
+        let looking = super::create_placement::nearest_looking(context.yaw, context.pitch);
+        if let Some(next) = super::create_fluid_glue::pipe_placement(level, state, pos, looking) {
+            *answer = Some(Some(next));
+        }
+        return;
+    }
     let Some(kind) = Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str)) else {
         return;
     };
-    let pos = [context.pos.x, context.pos.y, context.pos.z];
     struct Near<'a, 'w> {
         level: &'a super::GameLevel<'w>,
         pos: Pos,
@@ -618,6 +625,21 @@ pub(super) fn state_for_placement(
     };
     if let Some(next) = level.native_state_with_property(state, key, value) {
         *answer = Some(Some(next));
+    }
+}
+
+/// `BlockBehaviour.updateShape` of Create's blocks: a neighbour on
+/// `direction` changed.
+pub(super) fn update_shape(
+    level: &super::GameLevel<'_>,
+    pos: Pos,
+    state: BlockStateId,
+    direction: horizon_core::geometry::Direction,
+    new: &mut Option<BlockStateId>,
+) {
+    let d = Dir::nearest(direction.normal());
+    if let Some(next) = super::create_fluid_glue::pipe_update_shape(level, state, pos, d) {
+        *new = Some(next);
     }
 }
 

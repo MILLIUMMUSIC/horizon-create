@@ -28,6 +28,7 @@ The result, `target/content/create`, is a content mod folder: run the game
 with `--dev-mod target/content/create`, or copy it into `horizon-mods/`.
 """
 import argparse
+import itertools
 import json
 import os
 from pathlib import Path
@@ -765,7 +766,18 @@ def fit_chutes(content, names):
 # its neighbours) is straight here, on a chain's template: `axis` from the
 # clicked face, open at both ends. FluidPipeBlock's core and arms
 # (`PipeBlock` with an apothem of 4/16).
-PIPE_SHAPE = box(4, 0, 4, 12, 16, 12)
+PIPE_SIDES = ["down", "up", "north", "south", "west", "east"]
+PIPE_SIDE_VALUES = ["closed", "rim", "drain", "connection", "detailed"]
+PIPE_OPEN = "rim|drain|connection|detailed"
+# AttachmentTypes' partials (`fluid_pipe/<partial>/<side>`).
+PIPE_PARTIALS = {"rim": ["rim_connector", "rim"], "drain": ["rim_connector", "drain"],
+                 "connection": ["connection"], "detailed": ["rim_connector"]}
+PIPE_CORE = box(4, 4, 4, 12, 12, 12)
+PIPE_ARMS = {
+    "down": box(4, 0, 4, 12, 4, 12), "up": box(4, 12, 4, 12, 16, 12),
+    "north": box(4, 4, 0, 12, 12, 4), "south": box(4, 4, 12, 12, 12, 16),
+    "west": box(0, 4, 4, 4, 12, 12), "east": box(12, 4, 4, 16, 12, 12),
+}
 SIDES = {"x": ("west", "east"), "y": ("down", "up"), "z": ("north", "south")}
 
 
@@ -778,16 +790,28 @@ def matches(when, props):
     return all(props.get(k) in str(v).split("|") for k, v in when.items())
 
 
-def straight_pipe_states(original):
-    """The carried six-way pipe blockstate, for straight pipes by `axis`."""
+def pipe_states(original):
+    """Create's pipe blockstate on the six side properties: its core models
+    by plane (open for any attachment), each side's partials, and the casing
+    where three or four sides across an axis are open."""
     parts = []
-    for axis in AXES:
-        props = {d: "false" for d in FACINGS}
-        props.update({d: "true" for d in SIDES[axis]})
-        props["waterlogged"] = "false"
-        for part in original.get("multipart", []):
-            if "when" not in part or matches(part["when"], props):
-                parts.append({"when": {"axis": axis}, "apply": part["apply"]})
+    for part in original.get("multipart", []):
+        when = {k: (PIPE_OPEN if v == "true" else "closed") for k, v in part.get("when", {}).items()
+                if k in PIPE_SIDES}
+        parts.append({"when": when, "apply": part["apply"]})
+    for side in PIPE_SIDES:
+        for value, partials in PIPE_PARTIALS.items():
+            for partial in partials:
+                parts.append({"when": {side: value},
+                              "apply": {"model": f"create:block/fluid_pipe/{partial}/{side}"}})
+    across = {"x": ["down", "up", "north", "south"], "y": ["north", "south", "west", "east"],
+              "z": ["down", "up", "west", "east"]}
+    junctions = []
+    for sides in across.values():
+        for n in (3, 4):
+            for chosen in itertools.combinations(sides, n):
+                junctions.append({d: PIPE_OPEN for d in chosen})
+    parts.append({"when": {"OR": junctions}, "apply": {"model": "create:block/fluid_pipe/casing"}})
     return {"multipart": parts}
 
 
@@ -795,15 +819,27 @@ def fit_fluids(content):
     blocks = content / "data" / "create" / "horizon" / "block"
     states = content / "assets" / "create" / "blockstates"
     models = content / "assets" / "create" / "models" / "block"
+    # FluidPipeBlock's six sides as the block's own state properties, on a
+    # chain's template (not occluding, no use; its `axis` is left alone).
+    # Each side holds what the pipe draws there (`AttachmentTypes` as
+    # PipeAttachmentModel takes them from the block entity), `closed` when
+    # it isn't open: Create's core models by plane, then each side's
+    # partials (rim, its connector, the drain, the connection) and the
+    # casing over a junction (`shouldDrawCasing`). Shapes from PipeBlock's
+    # core and arms (apothem 4/16).
     pipe = blocks / "fluid_pipe.json"
     decl = read_json(pipe) if pipe.exists() else {}
     decl["template"] = "minecraft:iron_chain"
-    decl.pop("default_state", None)
-    decl["shapes"] = {"property": "axis", "values": {a: [along(a, PIPE_SHAPE)] for a in AXES}}
+    decl["state_properties"] = {d: {"type": "enum", "values": PIPE_SIDE_VALUES} for d in PIPE_SIDES}
+    decl["default_state"] = {d: "closed" for d in PIPE_SIDES}
+    values = {}
+    for combo in itertools.product(PIPE_SIDE_VALUES, repeat=6):
+        values[",".join(combo)] = [PIPE_CORE] + [PIPE_ARMS[d] for d, v in zip(PIPE_SIDES, combo) if v != "closed"]
+    decl["shapes"] = {"properties": PIPE_SIDES, "values": values}
     decl.setdefault("properties", {})["light"] = 0
     write_json(pipe, decl)
-    if (states / "fluid_pipe.json").exists():
-        write_json(states / "fluid_pipe.json", straight_pipe_states(read_json(states / "fluid_pipe.json")))
+    original = read_json(states / "fluid_pipe.json") if (states / "fluid_pipe.json").exists() else {}
+    write_json(states / "fluid_pipe.json", pipe_states(original))
     # The fluid tank and the creative tank: blocks on glass's template (a
     # full block that hides nothing next to it, cutout), with no block
     # entity: their parts and fluid live in the native mod. No template has

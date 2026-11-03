@@ -12,6 +12,10 @@ Create's sounds: the client hears `create:wrench_rotate` when a shaft is wrenche
 when a slimeball makes a mechanical piston sticky (it turns into a sticky one, a slimeball used up in survival).
 Not checked yet: the contraption, depot and press sounds.
 
+Fluid pipes on their own properties: a pipe placed by a tank opens towards it with a drain, a second placed on top
+turns the first into a junction once a third goes beside it (casing drawn), open ends have rims and joined pipes
+join without them, as Create's `PipeAttachmentModel` draws them.
+
 Placement (`native_state_for_placement`): a shaft placed on the floor beside a shaft along X lies along X, one with
 nothing beside it takes the look's axis (Z, looking north), and a fan placed beside the first shaft blows away from
 it (east). The checks below this

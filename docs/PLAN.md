@@ -143,8 +143,12 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      and flap offsets, the flaps moving (`FunnelFlapPacket`). Brass funnels: part 3.
    Fluids (run in the game: see VALIDATION.md):
    - Fluid pipes (`fluids.rs`: `FluidTransportBehaviour`, `PipeConnection` with its three layers, `FlowSource`,
-     `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`; `fluid_glue.rs`): straight pipes only, placed like a chain
-     along the clicked face's axis (engine gap below), open at both ends. Flows start where there is pressure, take
+     `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`; `fluid_glue.rs`): pipes open on the six sides
+     `FluidPipeBlock.updateBlockState` gives them (their own state properties, a chain's template): placed towards
+     what they connect to (pipes, tanks, basins, pumps along their axis, cauldrons, hives) or along the placer's look
+     (`getStateForPlacement`), turned as neighbours change (`updateShape`, `native_update_shape`). Each side also holds
+     what it draws (`getRenderedRimAttachment`: rim, drain, connection, detailed connection), so Create's blockstate,
+     its rims, drains and connections and the casing over a junction (`PipeAttachmentModel`) are drawn in the chunk. Flows start where there is pressure, take
      `1/32 + pressure/128` of a block a tick to fill a pipe, flip when the pressure does, and two fluids meeting break
      the pipe (water and lava leave cobblestone). A network from each endpoint feeding a pipe walks the flows to the
      endpoints they reach and moves `pressure / 2` mB a tick, split between them as Create does
@@ -178,8 +182,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      burner), each fluid ingredient from one tank as `BasinRecipe.apply` does; the fluids drawn side by side as
      `BasinRenderer` does.
    - Not yet: fluids without a block in Horizon (Create's honey, chocolate, tea, builder's tea, milk, potions) and
-     their pipe effects (`OpenPipeEffectHandler`), corners, junctions and encased, glass and smart pipes, valves,
-     pipe rims and connection pieces (`PipeAttachmentModel`), particles and sounds, the item drain, the spout, the
+     their pipe effects (`OpenPipeEffectHandler`), encased, glass and smart pipes, valves, brackets, particles and sounds, the item drain, the spout, the
      hose pulley, portable fluid interfaces. The goggles show a tank's and a basin's fluids and amounts
      (`containedFluidTooltip`).
    Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
@@ -526,11 +529,9 @@ hooks before the remaining "Not yet" items are ported.
   NeoForge 21.1's values for vanilla's items (`CONVENTION_TAGS`); tags only other mods fill stay empty.
 - Horizon's client doesn't run native mods, so a click on a block whose template has no use of its own also sends
   the off hand's use (Create's client answers SUCCESS and sends none): `glue::right_click` drops it.
-- No template has a fluid pipe's six connection booleans without needing support or hiding its neighbours (the
-  chorus plant breaks unsupported, mushroom blocks occlude, glow lichen and sculk veins need a face): pipes are
-  straight on a chain's template (`axis`). Corners and junctions need a template with the six booleans (or
-  `getStateForPlacement` and `updateShape` for mod blocks), and pipe rims need a model a mod can build per state
-  (`PipeAttachmentModel` wraps the baked model).
+- Fixed on the new pin: fluid pipes take their six sides as state properties (#5290), placed and turned through
+  `native_state_for_placement` and `native_update_shape`. Their shape table lists every combination of the six sides'
+  five values (15625 entries, an 11 MB block file): shapes can only be keyed by whole property tuples.
 - Fluids exist in Horizon only as water and lava blocks: there is no fluid registry a mod can add to, so Create's
   fluids (honey, chocolate, tea, milk via NeoForge, potions) are at most names in a tank (honey drained from a
   hive), can't be poured, have no textures to draw by, and the recipes that use or make them are skipped. Fluid
