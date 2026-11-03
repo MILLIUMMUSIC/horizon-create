@@ -406,7 +406,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       (`PortableStorageInterfaceBlockEntity`'s timer). `actors.rs` has the slot rules (`insertItem`,
       `ItemHelper.extract`), the interface's timer and the actors' ticks. Item vaults count as storage too (each
       captured block's own slots). Not yet: toolboxes, depots and creative crates as storage, double chests as one, the fluid interface, the interfaces' extension drawn moving, vanilla hoppers reaching a stationary interface (they don't go through
-      the item handler), the deployer's pole and hand drawn on a moving structure, schematics. The deployer's filter works (`DeployerItemHandler.isItemValid`, a held item it doesn't take goes to the overflow, a taken held item isn't extracted; set by a click on a side face with the item, saved with its state) but isn't drawn (`DeployerFilterSlot`'s value box).
+      the item handler), the deployer's pole and hand drawn on a moving structure, schematics. The deployer's filter works (`DeployerItemHandler.isItemValid`, a held item it doesn't take goes to the overflow, a taken held item isn't extracted; set by a click on a side face with the item, saved with its state) and is drawn on its two filter sides (`DeployerFilterSlot`'s item, without the value box's frame).
    5. Minecart contraptions (cart assembler): **blocked on the engine**, not done: they need mod entities riding
       vanilla carts and a moving group of blocks bound to an entity; upstream: horizon-rust/horizon#5556 (fake
       players, mod entity types, moving groups of blocks, open) and #5212 / #6300 (mod entity types from code, open).

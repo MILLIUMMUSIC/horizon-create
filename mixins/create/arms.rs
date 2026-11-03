@@ -2483,6 +2483,9 @@ fn encode_deployer(d: &Deployer<ItemStack>, speed: f32) -> Vec<u8> {
     out.extend_from_slice(&d.reach.to_le_bytes());
     push_item(&mut out, d.held.as_ref());
     out.push(d.held.as_ref().map_or(0, |s| s.count.min(255) as u8));
+    let filter = d.filter.as_deref().unwrap_or("");
+    out.push(filter.len().min(255) as u8);
+    out.extend_from_slice(&filter.as_bytes()[..filter.len().min(255)]);
     out
 }
 
@@ -2714,6 +2717,7 @@ enum ClientView {
         reach: f32,
         held: String,
         held_count: u32,
+        filter: String,
     },
     Vault {
         along_x: bool,
@@ -2792,6 +2796,7 @@ pub(super) fn from_server(data: &[u8]) {
                 reach: float(&v[11..]),
                 held: item(&v[15..]),
                 held_count: v.get(16 + usize::from(v[15])).map_or(0, |c| u32::from(*c)),
+                filter: v.get(17 + usize::from(v[15])..).map(item).unwrap_or_default(),
             },
             _ => continue,
         };
@@ -3012,11 +3017,31 @@ pub(super) fn draw(
                 timer_speed,
                 reach,
                 held,
+                filter,
                 ..
             } => {
                 let Some((facing, along)) = deployer_at(game, *pos) else {
                     continue;
                 };
+                // DeployerFilterSlot: the filter item on each side that is
+                // neither the front nor along the rotation axis.
+                if !filter.is_empty() {
+                    let rotation = super::create_deployer::rotation_axis(facing, along);
+                    for side in Dir::ALL.into_iter().filter(|d| d.axis() != facing.axis() && d.axis() != rotation) {
+                        let local = glam::Vec3::new(0.5, 0.5, 15.5 / 16.0) - glam::Vec3::splat(0.5);
+                        let turned = glam::Mat4::from_rotation_x(side.vertical_angle().to_radians())
+                            * glam::Mat4::from_rotation_y(side.horizontal_angle().to_radians());
+                        let n = facing.normal();
+                        let at = turned.transform_vector3(local) + glam::Vec3::splat(0.5)
+                            - glam::Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32) * (2.0 / 16.0);
+                        let x_rot = if side == Dir::Up { 90.0 } else if side == Dir::Down { 270.0 } else { 0.0 };
+                        let mut y_rot = side.horizontal_angle() + 180.0;
+                        if side.axis() == super::create_kinetics::Axis::Y {
+                            y_rot += 180.0 + facing.horizontal_angle();
+                        }
+                        super::create_logistics::draw_filter_item(game, camera, *pos, filter, at.to_array(), y_rot, x_rot, DEPLOYER, out);
+                    }
+                }
                 // The client's own timer runs on between updates.
                 let whole = ticks.floor();
                 let mut t = *timer;

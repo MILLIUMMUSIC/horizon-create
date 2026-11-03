@@ -926,4 +926,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A creative motor, a clutch and a speedometer in a line: 16 RPM on the goggles; a redstone block beside the clutch
   (`powered=true`) drops the speedometer to 0 RPM (screenshots). The gearshift's reversal is covered by a unit test
   only; the shaft halves' turning was not looked at.
+- The deployer's filter item (an iron ingot) shows lying on its top face (screenshot); the other filter side and the
+  orientation on sides other than the top were not compared with Create's.
 
