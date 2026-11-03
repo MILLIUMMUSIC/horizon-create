@@ -183,7 +183,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      burner), each fluid ingredient from one tank as `BasinRecipe.apply` does; the fluids drawn side by side as
      `BasinRenderer` does.
    - Not yet: fluids without a block in Horizon (Create's honey, chocolate, tea, builder's tea, milk, potions) and
-     their pipe effects (`OpenPipeEffectHandler`), encased, glass and smart pipes, valves, brackets, particles and sounds, the
+     their pipe effects (`OpenPipeEffectHandler`), smart pipes, brackets, particles and sounds, the
      hose pulley, portable fluid interfaces. The goggles show a tank's and a basin's fluids and amounts
      (`containedFluidTooltip`).
    Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
@@ -530,6 +530,20 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    connecting only along a diode's axis (`canConnectRedstone`), the clipboard.
    Blocks that aren't full (the link, the blaze burner, the turntable, the diodes) stand on a chain's template, which
    hides nothing: on stone's they cut holes in the block under them.
+   Glass and encased pipes and the fluid valve (`fluids.rs`, `fluid_glue.rs`, `Kind::FluidValve`): the wrench takes a
+   pipe to glass along its straight axis (a corner: the axis of the side nearest the click, a click along that axis
+   passing) and glass or an encased pipe back to a pipe (`updateBlockState`); copper casing on a pipe or glass makes an
+   encased pipe keeping its sides, not used up; flows stay through all of these (`cacheFlows`, `loadFlows`). The valve:
+   `DirectionalAxisKineticBlock` placed by shafts and pipes beside it, `getPipeAxis`, no stress, the pointer chasing open
+   at a positive speed and closed at a negative one at speed / 320 a tick and standing still at none, `ENABLED` following
+   it; closed it keeps its pressure and pulls nothing (`canPullFluidFrom`). Glass pipes draw their flows
+   (`TransparentStraightPipeRenderer`, sent in `create:fluids` as kind 5). `PipeAttachmentModel`'s attachments are state
+   properties, as the fluid pipe's are: `end_negative` and `end_positive` on glass and valves, `false`, `true` or `drain`
+   on an encased pipe's sides. Decisions: a valve's pointer is not saved, it starts from `ENABLED` (Create's `Pointer`
+   tag only differs for a valve left turning); a guest's wrench on a corner pipe counts as a click in the middle, as the
+   native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
+   these blocks, brackets, the `GLASS_PIPE` advancement.
+
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that
    pipes drain from every side but the top and can't fill. Items come in from belts and chutes

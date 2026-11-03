@@ -9,7 +9,7 @@
 
 use super::Game;
 use super::create_fluids::{
-    BasinTanks, FluidAccess, FluidHandler, FluidStack, FluidWorld, Fluids, PipeBlock, Space,
+    BasinTanks, FluidAccess, FluidHandler, FluidStack, FluidWorld, Fluids, PipeBlock, PipeStream, Space,
     SpaceChange, TANK_CAPACITY, VanillaTarget, basin_fluid_boxes, bucket_fluid, filled_bucket, tank_fluid_box,
 };
 use super::create_tank::{TankPart, Tanks};
@@ -26,6 +26,9 @@ use std::sync::{Mutex, MutexGuard};
 pub(super) const FLUIDS: &str = "create:fluids";
 pub(super) const PIPE: &str = "create:fluid_pipe";
 pub(super) const PUMP: &str = "create:mechanical_pump";
+pub(super) const GLASS: &str = "create:glass_fluid_pipe";
+pub(super) const ENCASED: &str = "create:encased_fluid_pipe";
+pub(super) const VALVE: &str = "create:fluid_valve";
 pub(super) const TANK: &str = "create:fluid_tank";
 pub(super) const CREATIVE_TANK: &str = "create:creative_fluid_tank";
 /// Ticks between full updates to clients and between saves.
@@ -63,6 +66,8 @@ enum Shown {
     Spout(FluidStack, i32),
     /// An item drain's fluid.
     Drain(FluidStack),
+    /// A glass pipe's flows.
+    Glass(Vec<PipeStream>),
 }
 
 /// A tank block as clients see it: its controller and, at the controller,
@@ -121,7 +126,7 @@ fn pending() -> MutexGuard<'static, Vec<(String, Pos, bool)>> {
 
 /// Blocks of ours outside the kinetics (the pump is a kinetic block).
 pub(super) fn is_ours(name: &str) -> bool {
-    name == PIPE || is_tank_block(name)
+    name == PIPE || name == GLASS || name == ENCASED || is_tank_block(name)
 }
 
 pub(super) fn is_tank_block(name: &str) -> bool {
@@ -159,7 +164,222 @@ fn pipe_block(game: &Game<'_>, pos: Pos) -> Option<PipeBlock> {
         // FluidPipeBlock's six sides (its own state properties).
         PIPE => Some(PipeBlock::Pipe(pipe_sides(&s.properties))),
         PUMP => s.properties.get("facing").and_then(|f| Dir::parse(f)).map(PipeBlock::Pump),
+        ENCASED => Some(PipeBlock::Encased(encased_sides(&s.properties))),
+        GLASS => glass_axis(&s.properties).map(PipeBlock::Glass),
+        VALVE => valve_axis(&s.properties).map(|a| PipeBlock::Valve(a, s.properties.get("enabled").is_some_and(|v| v == "true"))),
         _ => None,
+    }
+}
+
+fn glass_axis(props: &horizon_world::block_state_properties::BlockProperties) -> Option<Axis> {
+    props.get("axis").and_then(|a| Axis::parse(a))
+}
+
+/// `FluidValveBlock.getPipeAxis`.
+fn valve_axis(props: &horizon_world::block_state_properties::BlockProperties) -> Option<Axis> {
+    let facing = props.get("facing").and_then(|f| Dir::parse(f))?;
+    let along = props.get("axis_along_first").is_some_and(|v| v == "true");
+    Some(super::create_fluids::valve_pipe_axis(facing, along))
+}
+
+/// An encased pipe state's open sides, by `Dir`.
+fn encased_sides(props: &horizon_world::block_state_properties::BlockProperties) -> [bool; 6] {
+    Dir::ALL.map(|d| props.get(d.name()).is_some_and(|v| v != "false"))
+}
+
+/// `state` of a glass pipe or valve with its ends as its neighbours make
+/// them, or of an encased pipe with its sides open as `open` (its drains
+/// from its neighbours).
+pub(super) fn with_attachments(
+    level: &super::GameLevel<'_>,
+    state: horizon_world::registry::BlockStateId,
+    pos: Pos,
+) -> Option<horizon_world::registry::BlockStateId> {
+    let s = level.registry.state(state)?;
+    let (glass, axis) = match s.name.as_str() {
+        GLASS => (true, glass_axis(&s.properties)?),
+        VALVE => (false, valve_axis(&s.properties)?),
+        ENCASED => {
+            let open = encased_sides(&s.properties);
+            let mut next = state;
+            for d in Dir::ALL {
+                let side = super::create_fluids::encased_side(open[d as usize], d, pipe_neighbour(level, pos, d));
+                next = level.native_state_with_property(next, d.name(), side)?;
+            }
+            return Some(next);
+        }
+        _ => return None,
+    };
+    let mut next = state;
+    for (property, d) in [("end_negative", Dir::positive_of(axis).opposite()), ("end_positive", Dir::positive_of(axis))] {
+        let end = super::create_fluids::straight_end(glass, axis, d, pipe_neighbour(level, pos, d));
+        next = level.native_state_with_property(next, property, end.name())?;
+    }
+    Some(next)
+}
+
+/// `FluidValveBlockEntity.tick`: the pointer of the valve at `pos` a tick on,
+/// `ENABLED` following it. Its first tick takes the pointer from the state.
+pub(super) fn valve_tick(game: &mut Game<'_>, pos: Pos, speed: f32) {
+    let enabled = block_state(game, pos).is_some_and(|s| s.properties.get("enabled").is_some_and(|v| v == "true"));
+    let dimension = game.dim.id().to_owned();
+    let pointer = {
+        let mut map = valve_pointers().lock().unwrap_or_else(|e| e.into_inner());
+        let entry = map.entry((dimension, pos)).or_insert(if enabled { 1.0 } else { 0.0 });
+        *entry = super::create_fluids::valve_pointer(*entry, speed);
+        *entry
+    };
+    if enabled && pointer == 0.0 {
+        game.native_set_block_property(pos, "enabled", "false");
+    } else if !enabled && pointer == 1.0 {
+        game.native_set_block_property(pos, "enabled", "true");
+    }
+}
+
+/// Valves' pointers on the server, by dimension and position.
+fn valve_pointers() -> &'static Mutex<HashMap<(String, Pos), f32>> {
+    static POINTERS: std::sync::OnceLock<Mutex<HashMap<(String, Pos), f32>>> = std::sync::OnceLock::new();
+    POINTERS.get_or_init(Default::default)
+}
+
+/// Clients' valve pointers (this tick's and the last).
+static CLIENT_VALVES: Mutex<Option<HashMap<Pos, (f32, f32)>>> = Mutex::new(None);
+
+/// `FluidValveRenderer`: the pointer drawn, `0` closed to `1` open.
+pub(super) fn client_valve_pointer(pos: Pos, enabled: bool, partial: f32) -> f32 {
+    let mut guard = CLIENT_VALVES.lock().unwrap_or_else(|e| e.into_inner());
+    let start = if enabled { 1.0 } else { 0.0 };
+    let (last, now) = *guard.get_or_insert_with(HashMap::new).entry(pos).or_insert((start, start));
+    last + (now - last) * partial
+}
+
+/// The clients' pointers a tick on, by the speeds they are told.
+pub(super) fn valves_client_tick() {
+    // The drawing holds the client's lock while it asks for a pointer, so the
+    // speeds are read with this lock free.
+    let positions: Vec<Pos> = {
+        let guard = CLIENT_VALVES.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().map_or_else(Vec::new, |m| m.keys().copied().collect())
+    };
+    let speeds: Vec<(Pos, Option<f32>)> = positions.into_iter().map(|p| (p, super::create_glue::client_speed(p))).collect();
+    let mut guard = CLIENT_VALVES.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+    for (pos, speed) in speeds {
+        match speed {
+            Some(speed) => {
+                if let Some((last, now)) = map.get_mut(&pos) {
+                    *last = *now;
+                    *now = super::create_fluids::valve_pointer(*now, speed);
+                }
+            }
+            None => {
+                map.remove(&pos);
+            }
+        }
+    }
+}
+
+/// `FluidPipeBlock.onWrenched`, `GlassFluidPipeBlock.onWrenched`,
+/// `EncasedPipeBlock.onWrenched`: `true` when `pos` was one of them. A pipe
+/// clicked along its axis passes.
+pub(super) fn wrench_pipe(game: &mut Game<'_>, pos: Pos, face: Dir) -> Option<bool> {
+    let block = pipe_block(game, pos)?;
+    let local = game.pick().filter(|h| h.pos == pos).map_or([0.5; 3], |h| {
+        [0, 1, 2].map(|k| h.point[k] - f64::from(pos[k]))
+    });
+    let registry = game.pack.assets.registry;
+    let next = match block {
+        PipeBlock::Pipe(_) => {
+            let axis = super::create_fluids::pipe_wrench_axis(block.straight_axis(), face, local);
+            let Some(axis) = axis else {
+                return Some(false);
+            };
+            let base = registry.default_state(GLASS)?;
+            game.with_level(|_, level, _| {
+                let s = level.native_state_with_property(base, "axis", axis.name())?;
+                with_attachments(level, s, pos)
+            })
+        }
+        PipeBlock::Glass(axis) => {
+            let side = Dir::positive_of(axis);
+            let mut open = [false; 6];
+            open[side as usize] = true;
+            open[side.opposite() as usize] = true;
+            regular_pipe(game, pos, open, side)
+        }
+        PipeBlock::Encased(open) => {
+            let first = Dir::ALL.into_iter().find(|d| open[*d as usize]).unwrap_or(Dir::Up);
+            regular_pipe(game, pos, open, first)
+        }
+        _ => return None,
+    };
+    if let Some(next) = next {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, next, super::native_hooks::flags::UPDATE_ALL);
+    }
+    Some(true)
+}
+
+/// `FluidPipeBlock.updateBlockState` from `open`, the state a pipe at `pos`
+/// goes back to.
+fn regular_pipe(game: &mut Game<'_>, pos: Pos, open: [bool; 6], preferred: Dir) -> Option<horizon_world::registry::BlockStateId> {
+    let base = game.pack.assets.registry.default_state(PIPE)?;
+    game.with_level(|_, level, _| {
+        let open = super::create_fluids::update_pipe(open, preferred, None, |d| {
+            super::create_fluids::pipe_connects(pipe_neighbour(level, pos, d), d)
+        });
+        with_sides(level, base, pos, open)
+    })
+}
+
+/// `EncasedPipeBlock.handleEncasing` and `AxisPipeBlock.useItemOn`: copper
+/// casing on a pipe or a glass pipe, not used up.
+pub(super) fn try_encase(game: &mut Game<'_>, pos: Pos) -> bool {
+    if game.held().is_none_or(|s| &*s.item != "create:copper_casing")
+        || game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+    {
+        return false;
+    }
+    let open = match pipe_block(game, pos) {
+        Some(PipeBlock::Pipe(open)) => open,
+        Some(b @ PipeBlock::Glass(_)) => Dir::ALL.map(|d| b.open(d)),
+        _ => return false,
+    };
+    let Some(base) = game.pack.assets.registry.default_state(ENCASED) else {
+        return false;
+    };
+    let next = game.with_level(|_, level, _| {
+        let mut s = base;
+        for d in Dir::ALL {
+            s = level.native_state_with_property(s, d.name(), if open[d as usize] { "true" } else { "false" })?;
+        }
+        with_attachments(level, s, pos)
+    });
+    if let Some(next) = next {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, next, super::native_hooks::flags::UPDATE_ALL);
+        // EncasableBlock.playEncaseSound: copper's place sound.
+        let at = pos.map(|v| f64::from(v) + 0.5);
+        game.with_level(|_, level, _| {
+            level.native_play_sound("minecraft:block.copper.place", at, super::create_sounds::BLOCKS, 1.0, 0.8);
+        });
+    }
+    true
+}
+
+/// A valve turned by the wrench: its facing and shaft set, its ends again.
+pub(super) fn set_valve(game: &mut Game<'_>, pos: Pos, facing: Dir, along: bool) {
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    let next = game.with_level(|_, level, _| {
+        let s = level.native_state_with_property(id, "facing", facing.name())?;
+        let s = level.native_state_with_property(s, "axis_along_first", if along { "true" } else { "false" })?;
+        with_attachments(level, s, pos)
+    });
+    if let Some(next) = next {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, next, super::native_hooks::flags::UPDATE_ALL);
     }
 }
 
@@ -195,6 +415,9 @@ pub(super) fn pipe_neighbour(level: &super::GameLevel<'_>, pos: Pos, d: Dir) -> 
     match s.name.as_str() {
         PIPE => N::Pipe,
         PUMP => s.properties.get("facing").and_then(|f| Dir::parse(f)).map_or(N::Other, N::Pump),
+        ENCASED => N::Encased(encased_sides(&s.properties)[d.opposite() as usize]),
+        GLASS => glass_axis(&s.properties).map_or(N::Other, N::Glass),
+        VALVE => valve_axis(&s.properties).map_or(N::Other, N::Valve),
         n if is_tank_block(n) || n == super::create_machines::BASIN => N::Holder,
         "minecraft:cauldron" | "minecraft:lava_cauldron" | "minecraft:water_cauldron" => N::Vanilla,
         _ if s.properties.contains_key("honey_level") => N::Vanilla,
@@ -225,6 +448,9 @@ pub(super) fn pipe_update_shape(
     direction: Dir,
 ) -> Option<horizon_world::registry::BlockStateId> {
     let s = level.registry.state(state)?;
+    if s.name == GLASS || s.name == ENCASED || s.name == VALVE {
+        return with_attachments(level, state, pos);
+    }
     if s.name != PIPE {
         return None;
     }
@@ -626,7 +852,8 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
         let spouts = spouts.entry(dimension.to_owned()).or_default();
         let drains = drains.entry(dimension.to_owned()).or_default();
         let shown = shown.entry(dimension.to_owned()).or_default();
-        message = updates(game, dimension, tanks, basins, spouts, drains, shown, ticks);
+        let streams = dims.get(dimension).map_or_else(Vec::new, Fluids::glass_streams);
+        message = updates(game, dimension, tanks, basins, spouts, drains, streams, shown, ticks);
         if ticks % SAVE_EVERY == 0 {
             save(s);
         }
@@ -703,6 +930,7 @@ fn updates(
     basins: &mut HashMap<Pos, Vec<FluidStack>>,
     spouts: &mut HashMap<Pos, (FluidStack, i32)>,
     drains: &mut HashMap<Pos, FluidStack>,
+    streams: Vec<(Pos, Vec<PipeStream>)>,
     shown: &mut HashMap<Pos, Shown>,
     ticks: u64,
 ) -> Option<Vec<u8>> {
@@ -733,6 +961,7 @@ fn updates(
         .chain(basins.iter().map(|(p, b)| (*p, Shown::Basin(b.clone()))))
         .chain(spouts.iter().map(|(p, (f, t))| (*p, Shown::Spout(f.clone(), *t))))
         .chain(drains.iter().map(|(p, f)| (*p, Shown::Drain(f.clone()))))
+        .chain(streams.into_iter().map(|(p, s)| (p, Shown::Glass(s))))
         .collect();
     let full = ticks % SNAPSHOT_EVERY == 0;
     let mut entries: Vec<(Pos, Option<Shown>)> = now
@@ -761,8 +990,23 @@ fn encode(dim: u8, full: bool, entries: &[(Pos, Option<Shown>)]) -> Vec<u8> {
         for v in pos {
             out.extend_from_slice(&v.to_le_bytes());
         }
+        // A glass pipe's flows, each sent as side (with inbound on top),
+        // progress and then its fluid among the fluids.
+        if let Some(Shown::Glass(streams)) = shown {
+            out.push(5);
+            out.push(streams.len().min(6) as u8);
+            for s in streams.iter().take(6) {
+                out.push(s.side as u8 | u8::from(s.inbound) << 3);
+                out.push(s.progress);
+                let id = s.fluid.fluid.as_bytes();
+                let len = id.len().min(255);
+                out.push(len as u8);
+                out.extend_from_slice(&id[..len]);
+            }
+            continue;
+        }
         let (kind, fluids): (u8, &[FluidStack]) = match shown {
-            None => (0, &[]),
+            None | Some(Shown::Glass(_)) => (0, &[]),
             Some(Shown::Tank(t)) => (1, std::slice::from_ref(&t.fluid)),
             Some(Shown::Basin(b)) => (2, b),
             Some(Shown::Spout(f, _)) => (3, std::slice::from_ref(f)),
@@ -806,6 +1050,28 @@ fn decode(data: &[u8]) -> Option<Decoded> {
         let pos = [int(&head[0..4]), int(&head[4..8]), int(&head[8..12])];
         let kind = head[12];
         rest = &rest[13..];
+        if kind == 5 {
+            let (&n, mut after) = rest.split_first()?;
+            let mut streams = Vec::new();
+            for _ in 0..n {
+                let h = after.get(..3)?;
+                let len = usize::from(h[2]);
+                let id = after.get(3..3 + len)?;
+                streams.push(PipeStream {
+                    side: Dir::ALL.get(usize::from(h[0] & 7)).copied()?,
+                    inbound: h[0] & 8 != 0,
+                    progress: h[1],
+                    fluid: FluidStack {
+                        fluid: String::from_utf8(id.to_vec()).ok()?,
+                        amount: 1,
+                    },
+                });
+                after = &after[3 + len..];
+            }
+            rest = after;
+            entries.push((pos, Some(Shown::Glass(streams))));
+            continue;
+        }
         let mut tank = None;
         if kind == 1 {
             let t = rest.get(..15)?;
@@ -1020,6 +1286,8 @@ pub(super) fn client_fluids(dimension: u8, pos: Pos) -> Option<(Vec<(FluidStack,
         Shown::Basin(fs) => (fs.iter().map(|f| (f.clone(), super::create_fluids::BASIN_TANK)).collect(), 4),
         Shown::Spout(f, _) => (vec![(f.clone(), super::create_spout::SPOUT_CAPACITY)], 1),
         Shown::Drain(f) => (vec![(f.clone(), super::create_spout::DRAIN_CAPACITY)], 1),
+        // A pipe holds nothing for the goggles.
+        Shown::Glass(_) => return None,
     })
 }
 
@@ -1083,7 +1351,7 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
         .iter()
         .filter_map(|(p, v)| match v {
             Shown::Tank(t) => Some((*p, t.clone())),
-            Shown::Basin(_) | Shown::Spout(..) | Shown::Drain(_) => None,
+            Shown::Basin(_) | Shown::Spout(..) | Shown::Drain(_) | Shown::Glass(_) => None,
         })
         .collect();
     for (pos, shown) in holders {
@@ -1114,6 +1382,11 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
                 let tank = if fluid.is_empty() { None } else { super::create_spout::tank_box(level) };
                 let stream = super::create_spout_glue::client_stream(pos, ticks, !fluid.is_empty());
                 tank.into_iter().chain(stream).map(|b| (fluid.clone(), b)).collect()
+            }
+            // TransparentStraightPipeRenderer: FluidRenderer.renderFluidStream
+            // for each flow.
+            Shown::Glass(streams) => {
+                streams.iter().map(|s| (s.fluid.clone(), super::create_fluids::pipe_stream_box(s))).collect()
             }
             // ItemDrainRenderer.renderFluid. Not yet: the stream over an
             // item being emptied.

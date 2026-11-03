@@ -65,7 +65,7 @@ Adding a block:
 Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 `create:depots` (D1: items held by depots, basins, millstones),
 `create:values` (client → server value box changes, checked by the server),
-`create:fluids` (F2: tank blocks' controllers, sizes, windows and fluids; basins' fluids),
+`create:fluids` (F2: tank blocks' controllers, sizes, windows and fluids; basins', spouts' and drains' fluids; glass pipes' flows),
 `create:contraptions` (C1: running pistons' offsets and speeds, their blocks when they change, then the glue,
 then turning bearings' angles and blocks, then running rope pulleys' lengths and loads, then moving gantries),
 `create:chassis` (client → server: a chassis' range scrolled with the wrench),

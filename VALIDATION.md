@@ -1058,3 +1058,16 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   0.3 second input: the wire stayed at 15 about 1.5 seconds more, then 0. Pulse repeater: the wire pulsed to 15 once and went back to 0.
 - The models show on the floor with no hole under them.
   Not tried: the powered latch, inverted diodes (a click), the wheel on an interval, a lever on a wall or ceiling.
+
+## Glass and encased pipes, fluid valve (macOS, offscreen)
+
+- Water, pump, pipe, valve, glass, encased pipe, tank in a line: with the valve's motor on the side giving a positive speed,
+  `enabled` turned true in about a second, and the goggles read 1000 mB of water in the tank after the source block went.
+  With the motor on the other side (negative) it went back to `enabled=false`.
+- The wrench took a straight pipe to glass (`axis=x`) and back to a pipe, and an encased pipe back to a pipe, with the
+  rims and connections as Create's rules give them; copper casing took a pipe to an encased pipe with `east` and `west` open,
+  and `east=drain` beside the tank.
+- Placed by hand between two pipes the valve was `facing=north`, its pipe axis along them. The wrench turned it about the
+  clicked face. Its pointer lay across the pipe closed and along it open, its lamps following the model.
+- Glass pipes showed water flowing while the source was refilled; the unit test covers a closed valve stopping a flow.
+  Not tried in the game: a corner pipe to glass (click point), a flow stopped by closing the valve, a guest's wrench.

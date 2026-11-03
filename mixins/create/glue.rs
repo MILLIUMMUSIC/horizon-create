@@ -242,6 +242,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut split_shafts: Vec<(Pos, Kind)> = Vec::new();
     let mut crushing_wheels: Vec<(Pos, Axis, f32)> = Vec::new();
     let mut chain_gearshifts: Vec<(Pos, Kind)> = Vec::new();
+    let mut valves: Vec<(Pos, f32)> = Vec::new();
     let mut turntables: Vec<(Pos, f32)> = Vec::new();
     let mut amounts: Vec<(Pos, i32)> = Vec::new();
     let save_now;
@@ -389,6 +390,9 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             {
                 chain_gearshifts.push((p, k));
             }
+            if matches!(kinetics.get(p).map(|e| e.kind), Some(Kind::FluidValve(..))) && level.is_loaded(p) {
+                valves.push((p, kinetics.speed_of(&level, p)));
+            }
             if matches!(kinetics.get(p).map(|e| e.kind), Some(Kind::Turntable)) && level.is_loaded(p) {
                 turntables.push((p, kinetics.speed_of(&level, p)));
             }
@@ -475,6 +479,9 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_crusher_glue::level_tick(game, dimension, &crushing_wheels);
     chain_gearshifts_tick(game, dimension, &chain_gearshifts);
     turntables_tick(game, dimension, &turntables);
+    for (p, speed) in valves {
+        super::create_fluid_glue::valve_tick(game, p, speed);
+    }
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
     super::create_actor_glue::breakers_tick(game, dimension, &drills);
@@ -787,6 +794,14 @@ pub(super) fn state_for_placement(
     }
     // ChainDriveBlock.getStateForPlacement: its part from its neighbours, and
     // a gearshift's `powered` follows at its first tick.
+    if let Kind::FluidValve(f, along) = placed {
+        let next = level
+            .native_state_with_property(state, "facing", f.name())
+            .and_then(|s| level.native_state_with_property(s, "axis_along_first", if along { "true" } else { "false" }))
+            .and_then(|s| super::create_fluid_glue::with_attachments(level, s, pos));
+        *answer = next.map(Some);
+        return;
+    }
     if let Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) = placed {
         *answer = chain_state(level, state, chain_with_neighbours(level, pos, c.axis)).map(Some);
         return;
@@ -1053,7 +1068,10 @@ fn right_click_hand(
         *canceled = true;
         return;
     }
-    if try_encase(game, pos) || super::create_redstone_glue::right_click(game, pos) {
+    if try_encase(game, pos)
+        || super::create_fluid_glue::try_encase(game, pos)
+        || super::create_redstone_glue::right_click(game, pos)
+    {
         *canceled = true;
         return;
     }
@@ -1328,6 +1346,7 @@ fn turntables_tick(game: &mut Game<'_>, dimension: &str, tables: &[(Pos, f32)]) 
 /// window's player: on a table its view turns (less toward the edge); only
 /// its box over a table's edge carries it round.
 pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
+    super::create_fluid_glue::valves_client_tick();
     let Some(p) = game.player.as_ref() else {
         return;
     };
@@ -1483,7 +1502,11 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     {
         return true;
     }
+    if !sneaking && let Some(done) = super::create_fluid_glue::wrench_pipe(game, pos, Dir::nearest(face)) {
+        return done;
+    }
     let machine = name == super::create_machines::DEPOT
+        || super::create_fluid_glue::is_ours(&name)
         || name == super::create_machines::BASIN
         || super::create_logistics::is_ours(&name)
         || super::create_fluid_glue::is_tank_block(&name)
@@ -1528,6 +1551,8 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
             // change at the tick's end.
             if matches!(turned, Kind::EncasedCog(..)) {
                 set_kind(game, pos, turned);
+            } else if let Kind::FluidValve(f, along) = turned {
+                super::create_fluid_glue::set_valve(game, pos, f, along);
             } else {
                 game.native_set_block_property(pos, key, value);
             }
@@ -2132,6 +2157,30 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             // MechanicalCrafterRenderer.renderFast: the shaftless cog about
             // the facing's axis.
             want.push(("create:hz_part_cogwheel_shaftless", None, rotate_to_face_vertical(f), f.axis(), standard, 0.0));
+        }
+        // FluidValveRenderer: a shaft, and the pointer turned as far as it is
+        // open.
+        Kind::FluidValve(f, along) => {
+            let a = view.kind.rotation_axis();
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+            let enabled = game
+                .pack
+                .assets
+                .registry
+                .state(game.world.block(pos[0], pos[1], pos[2]))
+                .is_some_and(|s| s.properties.get("enabled").is_some_and(|v| v == "true"));
+            let pointer = super::create_fluid_glue::client_valve_pointer(pos, enabled, time.fract());
+            let pipe = super::create_fluids::valve_pipe_axis(f, along);
+            let offset = if (pipe != Axis::Y && a == Axis::X) || pipe == Axis::Y { 90.0f32 } else { 0.0 };
+            let tilt = match f {
+                Dir::Up => 0.0f32,
+                Dir::Down => 180.0,
+                _ => 90.0,
+            };
+            let orient = glam::Mat4::from_rotation_y(f.horizontal_angle().to_radians())
+                * glam::Mat4::from_rotation_x(tilt.to_radians())
+                * glam::Mat4::from_rotation_y((offset - 90.0 * pointer).to_radians());
+            want.push(("create:hz_part_fluid_valve_pointer", None, orient, Axis::Y, 0.0, 0.0));
         }
         Kind::MechanicalPump(f) => {
             // PumpRenderer: its cog, turned to face its way.

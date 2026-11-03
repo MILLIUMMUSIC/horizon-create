@@ -199,6 +199,47 @@ pub fn cog_axis(ctx: &Ctx, around: &dyn Around) -> Axis {
 /// the clicked face, turned to it by the face's axis and the look; else
 /// `DirectionalAxisKineticBlock`'s with the clicked face as the facing and
 /// the alignment across the placer's way.
+/// `DirectionalAxisKineticBlock.getStateForPlacement` with
+/// `FluidValveBlock.prefersConnectionTo`: a shaft across its shaft axis, or
+/// a pipe across its pipe axis.
+pub fn valve_along_first(facing: Dir, ctx: &Ctx, around: &dyn Around) -> bool {
+    let shaft = |side: Dir| {
+        around
+            .kind(side)
+            .is_some_and(|k| k.has_shaft_towards(side.opposite()))
+    };
+    if facing.axis() != Axis::Y {
+        let perpendicular = if facing.axis() == Axis::X {
+            Dir::South
+        } else {
+            Dir::East
+        };
+        if shaft(Dir::Up)
+            || shaft(Dir::Down)
+            || around.pipe_connects(perpendicular)
+            || around.pipe_connects(perpendicular.opposite())
+        {
+            return facing.axis() == Axis::X;
+        }
+        return facing.axis() == Axis::Z;
+    }
+    let mut preferred: Option<Dir> = None;
+    for side in HORIZONTALS {
+        if !shaft(side) && !around.pipe_connects(side.clockwise(Axis::Y)) {
+            continue;
+        }
+        if preferred.is_some_and(|p| p.axis() != side.axis()) {
+            preferred = None;
+            break;
+        }
+        preferred = Some(side);
+    }
+    match preferred {
+        Some(p) => p.axis() == Axis::X,
+        None => horizontal(ctx.yaw).axis() == Axis::X,
+    }
+}
+
 pub fn gauge(ctx: &Ctx, around: &dyn Around) -> (Dir, bool) {
     let face = ctx.face;
     let looking = nearest_looking(ctx.yaw, ctx.pitch);
@@ -309,6 +350,10 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         Kind::MechanicalPump(_) => Kind::MechanicalPump(pump(ctx, around)),
         // SplitShaftBlock (gearshift, clutch): RotatedPillarKineticBlock's.
         Kind::SplitShaft(g, ..) => Kind::SplitShaft(g, rotated_pillar(ctx, around), false),
+        Kind::FluidValve(..) => {
+            let facing = directional(ctx, around);
+            Kind::FluidValve(facing, valve_along_first(facing, ctx, around))
+        }
         Kind::Gauge(stress, ..) => {
             let (facing, along) = gauge(ctx, around);
             Kind::Gauge(stress, facing, along)

@@ -373,6 +373,12 @@ pub enum PipeBlock {
     Pipe([bool; 6]),
     /// `PumpBlock`: its `FACING` (where it pushes to).
     Pump(Dir),
+    /// `EncasedPipeBlock`: its six sides, set when encased and kept.
+    Encased([bool; 6]),
+    /// `GlassFluidPipeBlock`: open along its `AXIS`.
+    Glass(Axis),
+    /// `FluidValveBlock`: `getPipeAxis` and `ENABLED`.
+    Valve(Axis, bool),
 }
 
 impl PipeBlock {
@@ -389,14 +395,22 @@ impl PipeBlock {
     /// pumps.
     pub fn open(self, d: Dir) -> bool {
         match self {
-            PipeBlock::Pipe(open) => open[d as usize],
+            PipeBlock::Pipe(open) | PipeBlock::Encased(open) => open[d as usize],
             PipeBlock::Pump(f) => f.axis() == d.axis(),
+            PipeBlock::Glass(a) | PipeBlock::Valve(a, _) => a == d.axis(),
         }
+    }
+    /// `FluidPropagator.validateNeighbourChange`'s check of the pipe.
+    fn hears_neighbours(self) -> bool {
+        self.straight_axis().is_some() || matches!(self, PipeBlock::Encased(_))
     }
     /// `FluidPropagator.getStraightPipeAxis`.
     pub fn straight_axis(self) -> Option<Axis> {
         match self {
             PipeBlock::Pump(f) => Some(f.axis()),
+            PipeBlock::Glass(a) => Some(a),
+            // Neither a `PumpBlock`, an `AxisPipeBlock` nor a `FluidPipeBlock`.
+            PipeBlock::Encased(_) | PipeBlock::Valve(..) => None,
             PipeBlock::Pipe(_) => {
                 let mut found = None;
                 let mut connections = 0;
@@ -736,9 +750,24 @@ impl Fluids {
             }
             (Some(old), Some(new)) if old == new => {}
             (Some(old), Some(new)) => {
-                if !matches!((old, new), (PipeBlock::Pump(_), PipeBlock::Pump(_))) {
+                let pump = |b| matches!(b, PipeBlock::Pump(_));
+                if pump(old) != pump(new) {
                     self.remove(pos);
                     self.transports.insert(pos, Transport::new(new));
+                } else if !pump(new) {
+                    // The same block entity, or `cacheFlows` and `loadFlows`
+                    // between a pipe, its glass and its casing; the sides
+                    // follow as `wipePressure` has them.
+                    if let Some(t) = self.transports.get_mut(&pos) {
+                        t.block = new;
+                        for d in Dir::ALL {
+                            if !new.open(d) {
+                                t.interfaces[d as usize] = None;
+                            } else if t.interfaces[d as usize].is_none() {
+                                t.interfaces[d as usize] = Some(Connection::new(d));
+                            }
+                        }
+                    }
                 } else if let Some(t) = self.transports.get_mut(&pos) {
                     t.block = new;
                 }
@@ -756,6 +785,31 @@ impl Fluids {
                 self.propagate_changed_pipe(world, pos, Some(new));
             }
         }
+    }
+
+    /// The flows of the glass pipes that have any.
+    pub fn glass_streams(&self) -> Vec<(Pos, Vec<PipeStream>)> {
+        self.transports
+            .iter()
+            .filter(|(_, t)| matches!(t.block, PipeBlock::Glass(_)))
+            .filter_map(|(p, t)| {
+                let streams: Vec<PipeStream> = t
+                    .interfaces
+                    .iter()
+                    .flatten()
+                    .filter_map(|c| {
+                        let f = c.flow.as_ref().filter(|f| !f.fluid.is_empty())?;
+                        Some(PipeStream {
+                            side: c.side,
+                            inbound: f.inbound,
+                            progress: (f.progress.clamp(0.0, 1.0) * 255.0) as u8,
+                            fluid: FluidStack::new(&f.fluid.fluid, 1),
+                        })
+                    })
+                    .collect();
+                (!streams.is_empty()).then_some((*p, streams))
+            })
+            .collect()
     }
 
     fn remove(&mut self, pos: Pos) {
@@ -777,7 +831,7 @@ impl Fluids {
             let Some(block) = self.transports.get(&pipe).map(|t| t.block) else {
                 continue;
             };
-            if block.straight_axis().is_none() || !block.open(d.opposite()) {
+            if !block.hears_neighbours() || !block.open(d.opposite()) {
                 continue;
             }
             self.propagate_changed_pipe(world, pipe, None);
@@ -1089,9 +1143,15 @@ impl Fluids {
         }
     }
 
-    /// `FlowSource.provideFluid` of the connection at `pos`, `side` (every
-    /// pipe here may pull any fluid: `canPullFluidFrom` is true).
+    /// `FlowSource.provideFluid` of the connection at `pos`, `side`, through
+    /// `canPullFluidFrom`: anything, but nothing through a closed valve.
     fn provide_fluid(&mut self, world: &mut dyn FluidWorld, pos: Pos, side: Dir) -> FluidStack {
+        if matches!(
+            self.transports.get(&pos).map(|t| t.block),
+            Some(PipeBlock::Valve(_, false))
+        ) {
+            return FluidStack::empty();
+        }
         let source = self
             .transports
             .get(&pos)
@@ -1753,6 +1813,12 @@ pub enum PipeNeighbour {
     Vanilla,
     /// A pump facing this way (`canHaveFlowToward`: along its axis).
     Pump(Dir),
+    /// An encased pipe, and whether it is open towards this block.
+    Encased(bool),
+    /// A glass pipe along this axis.
+    Glass(Axis),
+    /// A valve with this pipe axis.
+    Valve(Axis),
     Other,
 }
 
@@ -1761,6 +1827,8 @@ pub fn pipe_connects(n: PipeNeighbour, d: Dir) -> bool {
     match n {
         PipeNeighbour::Pipe | PipeNeighbour::Holder | PipeNeighbour::Vanilla => true,
         PipeNeighbour::Pump(f) => f.axis() == d.axis(),
+        PipeNeighbour::Encased(open) => open,
+        PipeNeighbour::Glass(a) | PipeNeighbour::Valve(a) => a == d.axis(),
         PipeNeighbour::Other => false,
     }
 }
@@ -1823,10 +1891,135 @@ pub fn pipe_attachment(open: [bool; 6], d: Dir, n: PipeNeighbour) -> PipeSide {
                 PipeSide::DetailedConnection
             }
         }
-        // A pump it can flow into.
+        // A pump or valve it can flow into.
         PipeNeighbour::Pump(f) if f.axis() == d.axis() => PipeSide::DetailedConnection,
+        PipeNeighbour::Valve(a) if a == d.axis() => PipeSide::DetailedConnection,
         _ => PipeSide::Rim,
     }
+}
+
+/// What the end of a glass pipe or valve draws
+/// (`StraightPipeFluidTransportBehaviour.getRenderedRimAttachment`): no
+/// connectors, just `PARTIAL_RIM` or `PARTIAL_DRAIN`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipeEnd {
+    None,
+    Rim,
+    Drain,
+}
+
+impl PipeEnd {
+    pub fn name(self) -> &'static str {
+        match self {
+            PipeEnd::None => "none",
+            PipeEnd::Rim => "rim",
+            PipeEnd::Drain => "drain",
+        }
+    }
+}
+
+/// The end of a glass pipe (or else a valve) along `axis`, on side `d`.
+pub fn straight_end(glass: bool, axis: Axis, d: Dir, n: PipeNeighbour) -> PipeEnd {
+    if d.axis() != axis {
+        return PipeEnd::None;
+    }
+    match n {
+        PipeNeighbour::Pump(f) if f == d.opposite() => PipeEnd::None,
+        PipeNeighbour::Holder => PipeEnd::Drain,
+        _ if !glass => PipeEnd::None,
+        PipeNeighbour::Pipe => PipeEnd::None,
+        PipeNeighbour::Glass(a) | PipeNeighbour::Valve(a) if a == axis => PipeEnd::None,
+        _ => PipeEnd::Rim,
+    }
+}
+
+/// An encased pipe's side as its state keeps it: `false` closed, `true`
+/// open, `drain` open with a drain (`StandardPipeFluidTransportBehaviour`
+/// draws nothing else on one).
+pub fn encased_side(open: bool, d: Dir, n: PipeNeighbour) -> &'static str {
+    match n {
+        _ if !open => "false",
+        PipeNeighbour::Pump(f) if f == d.opposite() => "true",
+        PipeNeighbour::Holder => "drain",
+        _ => "true",
+    }
+}
+
+/// A flow in a glass pipe as clients draw it (`TransparentStraightPipeRenderer`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PipeStream {
+    pub side: Dir,
+    pub inbound: bool,
+    /// The flow's progress, in 255ths.
+    pub progress: u8,
+    pub fluid: FluidStack,
+}
+
+/// `FluidRenderer.renderFluidStream`'s box in the block, of radius 3/16: from
+/// the side in to the middle when inbound, else from the middle out to it, as
+/// far as it has got.
+pub fn pipe_stream_box(s: &PipeStream) -> [f32; 6] {
+    const RADIUS: f32 = 3.0 / 16.0;
+    let progress = f32::from(s.progress) / 255.0;
+    let (start, end) = if s.inbound {
+        (0.5, 0.5 - progress * 0.5)
+    } else {
+        (0.0, progress * 0.5)
+    };
+    let n = s.side.normal();
+    let mut low = [0.5 - RADIUS; 3];
+    let mut high = [0.5 + RADIUS; 3];
+    for k in 0..3 {
+        if n[k] != 0 {
+            let (a, b) = (0.5 + start * n[k] as f32, 0.5 + end * n[k] as f32);
+            low[k] = a.min(b);
+            high[k] = a.max(b);
+        }
+    }
+    [low[0], low[1], low[2], high[0], high[1], high[2]]
+}
+
+/// `FluidValveBlock.getPipeAxis`: of the two axes not its facing's, the
+/// second when `AXIS_ALONG_FIRST_COORDINATE`.
+pub fn valve_pipe_axis(facing: Dir, along_first: bool) -> Axis {
+    let others: Vec<Axis> = Axis::ALL
+        .into_iter()
+        .filter(|a| *a != facing.axis())
+        .collect();
+    others[usize::from(along_first)]
+}
+
+/// `FluidValveBlockEntity`: the pointer a tick on, chasing open at a positive
+/// speed, closed at a negative one, standing still at none.
+pub fn valve_pointer(pointer: f32, speed: f32) -> f32 {
+    let target = if speed > 0.0 { 1.0 } else { 0.0 };
+    let step = (speed.abs() / 16.0 / 20.0).clamp(0.0, 1.0);
+    pointer + (target - pointer).clamp(-step, step)
+}
+
+/// `FluidPipeBlock.onWrenched`: the axis of the glass pipe it becomes, from
+/// its straight axis or, on a corner, the side nearest the click (`local` in
+/// the block); none when the click is on that axis.
+pub fn pipe_wrench_axis(straight: Option<Axis>, face: Dir, local: [f64; 3]) -> Option<Axis> {
+    let axis = straight.unwrap_or_else(|| {
+        let mut closest = f64::MAX;
+        let mut found = Dir::Up;
+        for d in Dir::ALL {
+            if d.axis() == face.axis() {
+                continue;
+            }
+            let n = d.normal();
+            let distance: f64 = (0..3)
+                .map(|k| (f64::from(n[k]) + 0.5 - local[k]).powi(2))
+                .sum();
+            if distance < closest {
+                closest = distance;
+                found = d;
+            }
+        }
+        found.axis()
+    });
+    (axis != face.axis()).then_some(axis)
 }
 
 /// `FluidPipeBlock.updateBlockState`: the sides a pipe opens, from what it
@@ -2474,6 +2667,38 @@ mod tests {
     }
 
     #[test]
+    fn a_valve_holds_the_flow_until_it_opens_and_glass_passes_it() {
+        let (mut f, mut w) = rig();
+        w.pipes.insert([3, 0, 0], PipeBlock::Valve(Axis::X, false));
+        f.block_changed(&mut w, [3, 0, 0]);
+        w.pipes.insert([4, 0, 0], PipeBlock::Glass(Axis::X));
+        f.block_changed(&mut w, [4, 0, 0]);
+        f.pump_speed(&mut w, [2, 0, 0], 32.0);
+        for _ in 0..200 {
+            f.tick(&mut w);
+        }
+        assert_eq!(w.tanks[&[5, 0, 0]].amount(), 0);
+        w.pipes.insert([3, 0, 0], PipeBlock::Valve(Axis::X, true));
+        f.block_changed(&mut w, [3, 0, 0]);
+        for _ in 0..200 {
+            f.tick(&mut w);
+        }
+        assert!(w.tanks[&[5, 0, 0]].amount() > 0, "the tank got nothing");
+        let before = w.tanks[&[5, 0, 0]].amount();
+        w.pipes.insert([3, 0, 0], PipeBlock::Valve(Axis::X, false));
+        f.block_changed(&mut w, [3, 0, 0]);
+        for _ in 0..50 {
+            f.tick(&mut w);
+        }
+        let closed = w.tanks[&[5, 0, 0]].amount();
+        for _ in 0..50 {
+            f.tick(&mut w);
+        }
+        assert_eq!(w.tanks[&[5, 0, 0]].amount(), closed);
+        assert!(closed >= before);
+    }
+
+    #[test]
     fn a_stopped_pump_moves_nothing() {
         let (mut f, mut w) = rig();
         f.pump_speed(&mut w, [2, 0, 0], 0.0);
@@ -2603,6 +2828,147 @@ mod tests {
         let one = basin_fluid_boxes(&[FluidStack::new(WATER, 500)]);
         // 1 - (3/4)^2 of the height.
         assert!((one[0].1[4] - (0.125 + 0.75 * 0.4375)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_closed_valve_passes_nothing_and_an_open_one_does() {
+        let mut f = Fluids::default();
+        let v = PipeBlock::Valve(Axis::X, false);
+        assert!(v.open(Dir::East) && !v.open(Dir::Up));
+        assert_eq!(v.straight_axis(), None);
+        assert_eq!(PipeBlock::Glass(Axis::Z).straight_axis(), Some(Axis::Z));
+        assert!(PipeBlock::Encased([true; 6]).hears_neighbours());
+        assert!(!v.hears_neighbours());
+        f.transports.insert([0, 0, 0], Transport::new(v));
+        assert!(f.transports[&[0, 0, 0]].connection(Dir::East).is_some());
+    }
+
+    #[test]
+    fn stream_boxes_run_to_and_from_the_side() {
+        let s = |side, inbound, progress| PipeStream {
+            side,
+            inbound,
+            progress,
+            fluid: FluidStack::new(WATER, 1),
+        };
+        let b = pipe_stream_box(&s(Dir::East, false, 255));
+        assert_eq!([b[0], b[3]], [0.5, 1.0]);
+        let b = pipe_stream_box(&s(Dir::East, true, 255));
+        assert_eq!([b[0], b[3]], [0.5, 1.0]);
+        let b = pipe_stream_box(&s(Dir::West, false, 255));
+        assert_eq!([b[0], b[3]], [0.0, 0.5]);
+        // Inbound starts at the side, outward at the middle.
+        let b = pipe_stream_box(&s(Dir::Up, true, 0));
+        assert_eq!([b[1], b[4]], [1.0, 1.0]);
+        let b = pipe_stream_box(&s(Dir::Up, false, 0));
+        assert_eq!([b[1], b[4]], [0.5, 0.5]);
+        assert_eq!([b[0], b[3]], [0.5 - 3.0 / 16.0, 0.5 + 3.0 / 16.0]);
+    }
+
+    #[test]
+    fn valve_pointer_chases_by_speed() {
+        assert_eq!(valve_pointer(0.0, 32.0), 0.1);
+        assert_eq!(valve_pointer(0.5, 0.0), 0.5);
+        assert_eq!(valve_pointer(0.05, -32.0), 0.0);
+        assert_eq!(valve_pointer(0.95, 64.0), 1.0);
+    }
+
+    #[test]
+    fn valve_axis_is_the_one_not_facing_nor_the_shaft() {
+        assert_eq!(valve_pipe_axis(Dir::North, false), Axis::X);
+        assert_eq!(valve_pipe_axis(Dir::North, true), Axis::Y);
+        assert_eq!(valve_pipe_axis(Dir::Up, false), Axis::X);
+        assert_eq!(valve_pipe_axis(Dir::Up, true), Axis::Z);
+        assert_eq!(valve_pipe_axis(Dir::East, false), Axis::Y);
+        assert_eq!(valve_pipe_axis(Dir::East, true), Axis::Z);
+    }
+
+    #[test]
+    fn ends_of_straight_pipes() {
+        use PipeNeighbour as N;
+        assert_eq!(
+            straight_end(true, Axis::X, Dir::Up, N::Holder),
+            PipeEnd::None
+        );
+        assert_eq!(
+            straight_end(true, Axis::X, Dir::East, N::Holder),
+            PipeEnd::Drain
+        );
+        assert_eq!(
+            straight_end(false, Axis::X, Dir::East, N::Holder),
+            PipeEnd::Drain
+        );
+        assert_eq!(
+            straight_end(true, Axis::X, Dir::East, N::Other),
+            PipeEnd::Rim
+        );
+        assert_eq!(
+            straight_end(false, Axis::X, Dir::East, N::Other),
+            PipeEnd::None
+        );
+        assert_eq!(
+            straight_end(true, Axis::X, Dir::East, N::Pipe),
+            PipeEnd::None
+        );
+        assert_eq!(
+            straight_end(true, Axis::X, Dir::East, N::Glass(Axis::X)),
+            PipeEnd::None
+        );
+        assert_eq!(
+            straight_end(true, Axis::X, Dir::East, N::Pump(Dir::West)),
+            PipeEnd::None
+        );
+        assert_eq!(
+            straight_end(true, Axis::X, Dir::East, N::Pump(Dir::East)),
+            PipeEnd::Rim
+        );
+        assert_eq!(encased_side(false, Dir::East, N::Holder), "false");
+        assert_eq!(encased_side(true, Dir::East, N::Holder), "drain");
+        assert_eq!(encased_side(true, Dir::East, N::Pipe), "true");
+    }
+
+    #[test]
+    fn pipes_connect_to_their_straight_neighbours_along_them() {
+        use PipeNeighbour as N;
+        assert!(pipe_connects(N::Glass(Axis::X), Dir::East));
+        assert!(!pipe_connects(N::Glass(Axis::X), Dir::Up));
+        assert!(pipe_connects(N::Valve(Axis::Y), Dir::Up));
+        assert!(pipe_connects(N::Encased(true), Dir::Up));
+        assert!(!pipe_connects(N::Encased(false), Dir::Up));
+        let mut open = [false; 6];
+        open[Dir::East as usize] = true;
+        assert_eq!(
+            pipe_attachment(open, Dir::East, N::Valve(Axis::X)),
+            PipeSide::DetailedConnection
+        );
+        assert_eq!(
+            pipe_attachment(open, Dir::East, N::Glass(Axis::X)),
+            PipeSide::Rim
+        );
+        assert_eq!(
+            pipe_attachment(open, Dir::East, N::Encased(true)),
+            PipeSide::Rim
+        );
+    }
+
+    #[test]
+    fn wrench_on_a_pipe_picks_the_click_axis() {
+        assert_eq!(
+            pipe_wrench_axis(Some(Axis::X), Dir::Up, [0.5, 1.0, 0.5]),
+            Some(Axis::X)
+        );
+        assert_eq!(
+            pipe_wrench_axis(Some(Axis::X), Dir::East, [1.0, 0.5, 0.5]),
+            None
+        );
+        assert_eq!(
+            pipe_wrench_axis(None, Dir::Up, [0.9, 1.0, 0.5]),
+            Some(Axis::X)
+        );
+        assert_eq!(
+            pipe_wrench_axis(None, Dir::Up, [0.5, 1.0, 0.1]),
+            Some(Axis::Z)
+        );
     }
 
     #[test]

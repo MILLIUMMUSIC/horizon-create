@@ -263,6 +263,11 @@ impl Kind {
                 let (top, bottom) = if swap { (bottom, top) } else { (top, bottom) };
                 Kind::EncasedCog(b, l, turn_axis(a), top, bottom)
             }
+            // DirectionalAxisKineticBlock.getRotatedBlockState.
+            Kind::FluidValve(f, along) => {
+                let (f, along) = super::create_deployer::wrenched(f, along, face);
+                Kind::FluidValve(f, along)
+            }
             Kind::Cogwheel(a) => Kind::Cogwheel(turn_axis(a)),
             Kind::LargeCogwheel(a) => Kind::LargeCogwheel(turn_axis(a)),
             Kind::Gearbox(a) => Kind::Gearbox(turn_axis(a)),
@@ -320,6 +325,7 @@ impl Kind {
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => Some(("facing", f.name())),
             Kind::Deployer(f, _)
+            | Kind::FluidValve(f, _)
             | Kind::MechanicalPiston(f, ..)
             | Kind::Saw(f, _)
             | Kind::Gauge(_, f, _) => Some(("facing", f.name())),
@@ -462,6 +468,8 @@ pub enum Kind {
     /// `DeployerBlock`: its facing and `AXIS_ALONG_FIRST_COORDINATE`
     /// (deployer.rs).
     Deployer(Dir, bool),
+    /// `FluidValveBlock`: its facing and `AXIS_ALONG_FIRST_COORDINATE`.
+    FluidValve(Dir, bool),
     /// `MechanicalPistonBlock`: its facing, `AXIS_ALONG_FIRST_COORDINATE`
     /// and whether it is sticky; its `STATE` is in the block, not the kind
     /// (contraption.rs).
@@ -573,6 +581,9 @@ impl Kind {
             "create:large_water_wheel" => axis().map(Kind::LargeWaterWheel),
             "create:encased_fan" => facing().map(Kind::EncasedFan),
             "create:mechanical_pump" => facing().map(Kind::MechanicalPump),
+            "create:fluid_valve" => {
+                facing().map(|f| Kind::FluidValve(f, prop("axis_along_first") == Some("true")))
+            }
             "create:mechanical_crafter" => facing().map(Kind::MechanicalCrafter),
             "create:mechanical_mixer" => Some(Kind::MechanicalMixer),
             "create:mechanical_arm" => Some(Kind::MechanicalArm),
@@ -628,6 +639,7 @@ impl Kind {
             Kind::LargeWaterWheel(_) => "create:large_water_wheel",
             Kind::EncasedFan(_) => "create:encased_fan",
             Kind::MechanicalPump(_) => "create:mechanical_pump",
+            Kind::FluidValve(..) => "create:fluid_valve",
             Kind::MechanicalCrafter(_) => "create:mechanical_crafter",
             Kind::MechanicalMixer => "create:mechanical_mixer",
             Kind::Belt(b) => b.block().map_or("create:belt", |(name, _)| name),
@@ -689,6 +701,7 @@ impl Kind {
             Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
             Kind::Deployer(f, along)
+            | Kind::FluidValve(f, along)
             | Kind::MechanicalPiston(f, along, _)
             | Kind::GantryCarriage(f, along)
             | Kind::Saw(f, along)
@@ -727,6 +740,7 @@ impl Kind {
             Kind::MechanicalMixer | Kind::MechanicalArm => false,
             Kind::Belt(b) => b.has_shaft_towards(face),
             Kind::Deployer(f, along)
+            | Kind::FluidValve(f, along)
             | Kind::MechanicalPiston(f, along, _)
             | Kind::GantryCarriage(f, along)
             | Kind::Saw(f, along)
@@ -2257,6 +2271,7 @@ fn kind_key(k: Kind) -> String {
         Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => c.axis.name(),
         Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm | Kind::Turntable => "",
         Kind::Deployer(f, _)
+        | Kind::FluidValve(f, _)
         | Kind::MechanicalPiston(f, ..)
         | Kind::Saw(f, _)
         | Kind::Gauge(_, f, _) => f.name(),
@@ -2496,6 +2511,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::EncasedShaft(b, a) => (29, axis(a) | u8::from(b) << 2),
         Kind::Flywheel(a) => (31, axis(a)),
         Kind::SpeedController(a) => (35, axis(a)),
+        Kind::FluidValve(d, along) => (36, dir(d) | u8::from(along) << 3),
         Kind::Turntable => (32, 0),
         Kind::ChainDrive(c) => (33, chain_code(c)),
         Kind::ChainGearshift(c, p) => (34, chain_code(c) | u8::from(p) << 5),
@@ -2549,6 +2565,10 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         28 => Kind::CrushingWheel(axis?),
         31 => Kind::Flywheel(axis?),
         35 => Kind::SpeedController(axis?),
+        36 => Kind::FluidValve(
+            Dir::ALL.get(usize::from(state & 7)).copied()?,
+            state & 8 != 0,
+        ),
         32 => Kind::Turntable,
         33 => Kind::ChainDrive(chain_from_code(state)?),
         34 => Kind::ChainGearshift(chain_from_code(state)?, state & 32 != 0),

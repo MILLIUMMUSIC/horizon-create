@@ -265,6 +265,8 @@ PARTIALS = {
     "smart_chute_powered": "create:block/smart_chute/block_powered",
     # PumpRenderer's cog.
     "mechanical_pump_cog": "create:block/mechanical_pump/cog",
+    # FluidValveRenderer's pointer.
+    "fluid_valve_pointer": "create:block/fluid_valve/pointer",
     # ArmRenderer's and DeployerRenderer's partials.
     "arm_cog": "create:block/mechanical_arm/cog",
     "arm_base": "create:block/mechanical_arm/base",
@@ -725,6 +727,7 @@ def fit_logistics(content, names):
     fit_crushing_wheel_controller(content)
     fit_encased_cogwheels(content)
     fit_turntable(content)
+    fit_straight_pipes(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1410,6 +1413,93 @@ def fit_speed_controller(content):
 
 
 # The turntable: AllShapes.TURNTABLE_SHAPE on stone; its model turns whole.
+# Glass and encased pipes and the fluid valve. Their attachments
+# (PipeAttachmentModel, from the block entity) are state properties here, as
+# the fluid pipe's are: a glass pipe's and a valve's `end_negative` and
+# `end_positive`, an encased pipe's six sides `false`, `true` or `drain`. Glass
+# pipes and encased pipes are made from a pipe: no item.
+def fit_straight_pipes(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    ends = {"x": ("west", "east"), "y": ("down", "up"), "z": ("north", "south")}
+    def end_parts(axis, values):
+        parts = []
+        for prop, side in zip(("end_negative", "end_positive"), ends[axis]):
+            for value in values:
+                parts.append(({prop: value}, f"create:block/fluid_pipe/{value}/{side}"))
+        return parts
+
+    # GlassFluidPipeBlock: AllShapes.EIGHT_VOXEL_POLE along its `axis`.
+    decl = read_json(blocks / "glass_fluid_pipe.json") if (blocks / "glass_fluid_pipe.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["item"] = False
+    end_values = {"type": "enum", "values": ["none", "rim", "drain"]}
+    decl["state_properties"] = {"alt": {"type": "boolean"}, "end_negative": end_values, "end_positive": end_values}
+    decl["default_state"] = {"alt": "false", "end_negative": "none", "end_positive": "none"}
+    decl["shapes"] = {"property": "axis", "values": {
+        "x": [box(0, 4, 4, 16, 12, 12)], "y": [box(4, 0, 4, 12, 16, 12)], "z": [box(4, 4, 0, 12, 12, 16)]}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "glass_fluid_pipe.json", decl)
+    window = {"x": {"x": 90, "y": 90}, "y": {}, "z": {"x": 90}}
+    parts = []
+    for axis, turn in window.items():
+        parts.append({"when": {"axis": axis}, "apply": {"model": "create:block/fluid_pipe/window", **turn}})
+        for when, model in end_parts(axis, ["rim", "drain"]):
+            parts.append({"when": {"axis": axis, **when}, "apply": {"model": model}})
+    write_json(states / "glass_fluid_pipe.json", {"multipart": parts})
+
+    # EncasedPipeBlock: Create's multipart with its booleans as our values.
+    decl = read_json(blocks / "encased_fluid_pipe.json") if (blocks / "encased_fluid_pipe.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["item"] = False
+    decl["state_properties"] = {d: {"type": "enum", "values": ["false", "true", "drain"]} for d in PIPE_SIDES}
+    decl["default_state"] = {d: "false" for d in PIPE_SIDES}
+    decl["shapes"] = {"default": [box(0, 0, 0, 16, 16, 16)]}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "encased_fluid_pipe.json", decl)
+    original = read_json(states / "encased_fluid_pipe.json")
+    parts = []
+    for part in original["multipart"]:
+        when = {k: "true|drain" if v == "true" else v for k, v in part["when"].items()}
+        parts.append({"when": when, "apply": part["apply"]})
+    for side in PIPE_SIDES:
+        for partial in PIPE_PARTIALS["drain"]:
+            parts.append({"when": {side: "drain"}, "apply": {"model": f"create:block/fluid_pipe/{partial}/{side}"}})
+    write_json(states / "encased_fluid_pipe.json", {"multipart": parts})
+
+    # FluidValveBlock: a lightning rod's facings, AllShapes.FLUID_VALVE along
+    # its pipe axis; a shaft and its pointer drawn by the native mod.
+    decl = read_json(blocks / "fluid_valve.json") if (blocks / "fluid_valve.json").exists() else {}
+    decl["template"] = "minecraft:lightning_rod"
+    valve_ends = {"type": "enum", "values": ["none", "drain"]}
+    decl["state_properties"] = {"axis_along_first": {"type": "boolean"}, "enabled": {"type": "boolean"},
+                                "end_negative": valve_ends, "end_positive": valve_ends}
+    decl["default_state"] = {"axis_along_first": "false", "enabled": "false",
+                             "end_negative": "none", "end_positive": "none"}
+    def pipe_axis(facing, along):
+        facing_axis = {"west": "x", "east": "x", "down": "y", "up": "y", "north": "z", "south": "z"}[facing]
+        return [a for a in "xyz" if a != facing_axis][1 if along == "true" else 0]
+    valve_shape = {"x": [box(0, 3, 3, 16, 13, 13), box(2, 2, 2, 14, 14, 14)],
+                   "y": [box(3, 0, 3, 13, 16, 13), box(2, 2, 2, 14, 14, 14)],
+                   "z": [box(3, 3, 0, 13, 13, 16), box(2, 2, 2, 14, 14, 14)]}
+    decl["shapes"] = {"properties": ["facing", "axis_along_first"], "values": {
+        f"{f},{a}": valve_shape[pipe_axis(f, a)] for f in FACINGS for a in ("false", "true")}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "fluid_valve.json", decl)
+    original = read_json(states / "fluid_valve.json")
+    parts = []
+    for key, apply in original["variants"].items():
+        when = dict(kv.split("=") for kv in key.split(","))
+        if when.pop("waterlogged") == "true":
+            continue
+        parts.append({"when": when, "apply": apply})
+    for f in FACINGS:
+        for a in ("false", "true"):
+            for when, model in end_parts(pipe_axis(f, a), ["drain"]):
+                parts.append({"when": {"facing": f, "axis_along_first": a, **when}, "apply": {"model": model}})
+    write_json(states / "fluid_valve.json", {"multipart": parts})
+
+
 def fit_turntable(content):
     blocks = content / "data" / "create" / "horizon" / "block"
     states = content / "assets" / "create" / "blockstates"
