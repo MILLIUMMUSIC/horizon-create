@@ -2169,6 +2169,79 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
     true
 }
 
+/// `SuperGlueHandler.glueInOffHandAppliesOnBlockPlace`: a block placed with
+/// super glue in the other hand is glued to the block it was placed
+/// against (the one the player's look meets once the new block is out of
+/// the way), using one use of the glue. Create cancels a placement whose
+/// look meets another block; this doesn't.
+pub(super) fn glue_in_off_hand(game: &mut Game<'_>, pos: Pos) {
+    let Some(player) = game.native_acting_player() else {
+        return;
+    };
+    if game.offhand.as_ref().is_none_or(|s| &*s.item != SUPER_GLUE)
+        || game.held().is_some_and(|s| &*s.item == super::create_glue::WRENCH)
+    {
+        return;
+    }
+    // The ray from the eye along the look, 4.5 blocks, the new block air.
+    let eye_height = if game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) { 1.27 } else { 1.62 };
+    let (yaw, pitch) = (f64::from(player.yaw).to_radians(), f64::from(player.pitch).to_radians());
+    let look = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
+    let start = [player.position[0], player.position[1] + eye_height, player.position[2]];
+    let cell = |t: f64| [0, 1, 2].map(|k| (start[k] + look[k] * t).floor() as i32);
+    let mut previous = cell(0.0);
+    let mut hit = None;
+    let mut t = 0.0;
+    while t <= 4.5 {
+        t += 0.02;
+        let here = cell(t);
+        if here == previous {
+            continue;
+        }
+        if here != pos {
+            let id = game.world.block(here[0], here[1], here[2]);
+            if id != game.res.facts().air {
+                hit = Some((here, previous));
+                break;
+            }
+        }
+        previous = here;
+    }
+    let Some((glue_pos, outside)) = hit else {
+        return;
+    };
+    if outside != pos {
+        return;
+    }
+    let dimension = game.dim.id().to_owned();
+    let Some(face) = Dir::ALL.into_iter().find(|d| add(glue_pos, *d) == pos) else {
+        return;
+    };
+    let world = scan(game);
+    if world.glue(glue_pos, face).is_some() {
+        return;
+    }
+    if !super::create_contraption::glue_valid_face(&world.facts(glue_pos), face) {
+        return;
+    }
+    drop(world);
+    if player.game_mode != 1 {
+        let max = game.items().get(SUPER_GLUE).map_or(0, |i| i.max_damage);
+        if let Some(h) = game.offhand.as_mut() {
+            h.damage += 1;
+            if max > 0 && h.damage >= max {
+                game.offhand = None;
+            }
+        }
+    }
+    state()
+        .get_or_insert_with(State::default)
+        .glue
+        .entry(dimension)
+        .or_default()
+        .push((glue_pos, pos));
+}
+
 /// `native_left_click_block` with super glue: the glue around the block
 /// (or its face) comes off (`SuperGlueRemovalPacket`); the glue never breaks
 /// blocks (`canAttackBlock`). True when it took the click.

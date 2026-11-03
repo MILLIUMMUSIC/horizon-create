@@ -212,7 +212,8 @@ pub(super) fn block_changed(
 }
 
 /// `native_place_block`: a player placed a block in their dimension.
-pub(super) fn placed(game: &Game<'_>, pos: [i32; 3]) {
+pub(super) fn placed(game: &mut Game<'_>, pos: [i32; 3]) {
+    super::create_contraptions::glue_in_off_hand(game, pos);
     super::create_logistics::placed(game, pos);
     super::create_arms::placed(game, pos);
     if kind_at(game, pos).is_none() {

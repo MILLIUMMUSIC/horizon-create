@@ -870,4 +870,7 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - Super glue held, the first corner chosen on a stone block and the crosshair on another: the box between them is
   outlined in green (screenshot). The red/yellow failing colour, the cluster outline and the thin outlines of glue
   already placed are not checked in the game.
+- Super glue in the off hand, a stone placed against a stone with the main hand: the two are glued (the glue's thin
+  outline around both shows with the glue in the main hand afterwards, screenshot). The glue's use is counted out of
+  creative only (not checked).
 
