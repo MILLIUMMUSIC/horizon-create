@@ -22,6 +22,8 @@ pub mod create_fan;
 pub mod create_fluids;
 #[path = "../mixins/create/funnel.rs"]
 pub mod create_funnel;
+#[path = "../mixins/create/gauge.rs"]
+pub mod create_gauge;
 #[path = "../mixins/create/kinetics.rs"]
 pub mod create_kinetics;
 #[path = "../mixins/create/obj.rs"]

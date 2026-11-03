@@ -186,6 +186,57 @@ pub fn cog_axis(ctx: &Ctx, around: &dyn Around) -> Axis {
     preferred_axis(around).unwrap_or(ctx.face.axis())
 }
 
+/// `GaugeBlock.getStateForPlacement`: against a block with a shaft towards
+/// the clicked face, turned to it by the face's axis and the look; else
+/// `DirectionalAxisKineticBlock`'s with the clicked face as the facing and
+/// the alignment across the placer's way.
+pub fn gauge(ctx: &Ctx, around: &dyn Around) -> (Dir, bool) {
+    let face = ctx.face;
+    let looking = nearest_looking(ctx.yaw, ctx.pitch);
+    let hz = horizontal(ctx.yaw);
+    if around
+        .kind(face.opposite())
+        .is_some_and(|k| k.has_shaft_towards(face))
+    {
+        let positive = looking.positive();
+        return match face.axis() {
+            Axis::X => (if positive { Dir::North } else { Dir::South }, true),
+            Axis::Y => (hz.opposite(), hz.axis() == Axis::X),
+            Axis::Z => (if positive { Dir::West } else { Dir::East }, false),
+        };
+    }
+    // `prefersConnectionTo`: a shaft beside the placed block towards it.
+    let shaft = |side: Dir| {
+        around
+            .kind(side)
+            .is_some_and(|k| k.has_shaft_towards(side.opposite()))
+    };
+    let mut along;
+    if face.axis() != Axis::Y {
+        along = face.axis() == Axis::Z;
+        if shaft(Dir::Up) || shaft(Dir::Down) {
+            along = face.axis() == Axis::X;
+        }
+    } else {
+        along = hz.axis() != Axis::X;
+        let mut preferred: Option<Dir> = None;
+        for side in HORIZONTALS {
+            if !shaft(side) {
+                continue;
+            }
+            if preferred.is_some_and(|p| p.axis() != side.axis()) {
+                preferred = None;
+                break;
+            }
+            preferred = Some(side);
+        }
+        if let Some(p) = preferred {
+            along = p.axis() == Axis::X;
+        }
+    }
+    (face, along)
+}
+
 /// `Block.getStateForPlacement` of Create's kinetic block `kind` (its own
 /// default orientation ignored): the kind it is placed as, none for a block
 /// whose placement stays the template's.
@@ -233,6 +284,10 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         // PulleyBlock: HorizontalAxisKineticBlock's.
         Kind::RopePulley(_) => Kind::RopePulley(horizontal_axis(ctx, around)),
         Kind::MechanicalPump(_) => Kind::MechanicalPump(pump(ctx, around)),
+        Kind::Gauge(stress, ..) => {
+            let (facing, along) = gauge(ctx, around);
+            Kind::Gauge(stress, facing, along)
+        }
         _ => return None,
     })
 }
@@ -249,6 +304,20 @@ mod tests {
         fn chute(&self, side: Dir) -> bool {
             self.1.contains(&side)
         }
+    }
+
+    #[test]
+    fn a_gauge_placed_on_a_shaft_turns_to_it() {
+        // On the side of a shaft along X whose end faces east: the clicked face
+        // is X, so it faces north or south and turns along the first axis.
+        let shaft = Near(vec![(Dir::West, Kind::Shaft(Axis::X))], vec![]);
+        let (facing, along) = gauge(&ctx(Dir::East, 0.0, 0.0, false), &shaft);
+        assert!(along);
+        assert!(facing == Dir::North || facing == Dir::South);
+        // On open ground it faces the clicked face.
+        let none = Near(vec![], vec![]);
+        let (facing, _) = gauge(&ctx(Dir::North, 0.0, 0.0, false), &none);
+        assert_eq!(facing, Dir::North);
     }
 
     fn ctx(face: Dir, yaw: f32, pitch: f32, sneaking: bool) -> Ctx {

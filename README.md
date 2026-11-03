@@ -35,7 +35,7 @@ horizon-port-pack carries over without behaviour (decoration, plain items) count
 | 4. Logistics and fluids (belts, chutes, funnels, tunnels, arm, deployer, vault, pipes, pump, tank) | 15 % | 99.9 % | 15.0 % |
 | 5. Contraptions | 20 % | 88.5 % | 17.7 % |
 | 6. Trains | 15 % | 0 % | 0.0 % |
-| 7. Everything else (blaze burner and heat, crafters, saws, drills, spout and drain, gauges, redstone, packages, Ponder...) | 25 % | 2.5 % | 0.6 % |
+| 7. Everything else (blaze burner and heat, crafters, saws, drills, spout and drain, gauges, redstone, packages, Ponder...) | 25 % | 3.5 % | 0.9 % |
 | **Total** | 100 % | | **58 %** |
 
 Not done in a milestone counts against it: its "Not yet" lists in docs/PLAN.md (corner pipes, valves, smart chutes,

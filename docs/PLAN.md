@@ -423,6 +423,12 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    sets, Create's compatibility with other mods (**blocked on the engine**: no shared capabilities, #1040 for item
    storage only, nothing for fluids or energy). The rest of this milestone is ported item by item below; what is
    done is in the README's estimate.
+   Done from this milestone: the speedometer and stressometer (`gauge.rs`: `SpeedGaugeBlockEntity.getDialTarget`,
+   `StressGaugeBlockEntity`'s target, `GaugeBlockEntity`'s eighth-a-tick chase, `GaugeBlock.shouldRenderHeadOnFace`;
+   `Kind::Gauge`, a block for each `axis_along_first` as the saw has, placed by `GaugeBlock.getStateForPlacement`
+   through `native_state_for_placement`; their shaft, heads and dials drawn by the native mod as `GaugeRenderer`
+   does; goggle tooltips). Not yet: the gauges' particles (`animateTick`), their plate-shaped collision (a 12/16
+   casing stands in), the stressometer's advancements and its `GaugeObservedPacket` (nothing reads it).
 
 ## Rework onto Horizon's hooks (pin 674948d)
 

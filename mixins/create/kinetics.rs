@@ -20,6 +20,10 @@ pub type Pos = [i32; 3];
 /// has that property).
 pub const DEPLOYER: &str = "create:deployer";
 pub const DEPLOYER_ALONG: &str = "create:hz_deployer_along";
+pub const SPEEDOMETER: &str = "create:speedometer";
+pub const SPEEDOMETER_ALONG: &str = "create:hz_speedometer_along";
+pub const STRESSOMETER: &str = "create:stressometer";
+pub const STRESSOMETER_ALONG: &str = "create:hz_stressometer_along";
 
 /// `AllConfigs.server().kinetics.maxRotationSpeed` default.
 pub const MAX_ROTATION_SPEED: f32 = 256.0;
@@ -262,9 +266,10 @@ impl Kind {
             | Kind::MechanicalBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => Some(("facing", f.name())),
-            Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) | Kind::Saw(f, _) => {
-                Some(("facing", f.name()))
-            }
+            Kind::Deployer(f, _)
+            | Kind::MechanicalPiston(f, ..)
+            | Kind::Saw(f, _)
+            | Kind::Gauge(_, f, _) => Some(("facing", f.name())),
             Kind::GantryShaft(f) | Kind::GantryCarriage(f, _) => Some(("facing", f.name())),
             Kind::ElevatorPulley(f) => Some(("facing", f.name())),
             Kind::LargeWaterWheel(a) => Some(("axis", a.name())),
@@ -428,6 +433,8 @@ pub enum Kind {
     /// `SawBlock`: its facing and `AXIS_ALONG_FIRST_COORDINATE`, as a
     /// deployer (`flipped` isn't kept).
     Saw(Dir, bool),
+    /// A speedometer (false) or stressometer (true), facing, along first.
+    Gauge(bool, Dir, bool),
     /// `ElevatorPulleyBlock`: its horizontal facing; the shaft runs across it
     /// (contraptions.rs runs the cabin).
     ElevatorPulley(Dir),
@@ -468,6 +475,10 @@ impl Kind {
             DEPLOYER => facing().map(|f| Kind::Deployer(f, false)),
             DEPLOYER_ALONG => facing().map(|f| Kind::Deployer(f, true)),
             super::create_actors::SAW => facing().map(|f| Kind::Saw(f, false)),
+            SPEEDOMETER => facing().map(|f| Kind::Gauge(false, f, false)),
+            SPEEDOMETER_ALONG => facing().map(|f| Kind::Gauge(false, f, true)),
+            STRESSOMETER => facing().map(|f| Kind::Gauge(true, f, false)),
+            STRESSOMETER_ALONG => facing().map(|f| Kind::Gauge(true, f, true)),
             "create:elevator_pulley" => facing().map(Kind::ElevatorPulley),
             super::create_actors::SAW_ALONG => facing().map(|f| Kind::Saw(f, true)),
             n => {
@@ -503,6 +514,10 @@ impl Kind {
             Kind::ElevatorPulley(_) => "create:elevator_pulley",
             Kind::Saw(_, false) => super::create_actors::SAW,
             Kind::Saw(_, true) => super::create_actors::SAW_ALONG,
+            Kind::Gauge(false, _, false) => SPEEDOMETER,
+            Kind::Gauge(false, _, true) => SPEEDOMETER_ALONG,
+            Kind::Gauge(true, _, false) => STRESSOMETER,
+            Kind::Gauge(true, _, true) => STRESSOMETER_ALONG,
             Kind::Deployer(_, along) => {
                 if along {
                     DEPLOYER_ALONG
@@ -539,7 +554,8 @@ impl Kind {
             Kind::Deployer(f, along)
             | Kind::MechanicalPiston(f, along, _)
             | Kind::GantryCarriage(f, along)
-            | Kind::Saw(f, along) => super::create_deployer::rotation_axis(f, along),
+            | Kind::Saw(f, along)
+            | Kind::Gauge(_, f, along) => super::create_deployer::rotation_axis(f, along),
             Kind::ElevatorPulley(f) => f.clockwise(Axis::Y).axis(),
             Kind::LargeWaterWheel(a) => a,
             Kind::GantryShaft(f) => f.axis(),
@@ -566,7 +582,10 @@ impl Kind {
             Kind::Deployer(f, along)
             | Kind::MechanicalPiston(f, along, _)
             | Kind::GantryCarriage(f, along)
-            | Kind::Saw(f, along) => face.axis() == super::create_deployer::rotation_axis(f, along),
+            | Kind::Saw(f, along)
+            | Kind::Gauge(_, f, along) => {
+                face.axis() == super::create_deployer::rotation_axis(f, along)
+            }
             Kind::GantryShaft(f) => face.axis() == f.axis(),
             Kind::ElevatorPulley(f) => face.axis() == f.clockwise(Axis::Y).axis(),
             Kind::LargeWaterWheel(a) => face.axis() == a,
@@ -1970,7 +1989,10 @@ fn kind_key(k: Kind) -> String {
         | Kind::WindmillBearing(f)
         | Kind::Drill(f) => f.name(),
         Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => "",
-        Kind::Deployer(f, _) | Kind::MechanicalPiston(f, ..) | Kind::Saw(f, _) => f.name(),
+        Kind::Deployer(f, _)
+        | Kind::MechanicalPiston(f, ..)
+        | Kind::Saw(f, _)
+        | Kind::Gauge(_, f, _) => f.name(),
         Kind::ElevatorPulley(f) => f.name(),
         Kind::GantryShaft(f) | Kind::GantryCarriage(f, _) => f.name(),
         Kind::Belt(b) => {
@@ -2105,6 +2127,9 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::Saw(d, along) => (22, dir(d) | u8::from(along) << 3),
         Kind::ElevatorPulley(d) => (23, dir(d)),
         Kind::LargeWaterWheel(a) => (24, axis(a)),
+        Kind::Gauge(stress, d, along) => {
+            (25, dir(d) | u8::from(along) << 3 | u8::from(stress) << 4)
+        }
     }
 }
 
@@ -2150,6 +2175,11 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         21 => Kind::Drill(dir?),
         23 => Kind::ElevatorPulley(dir?),
         24 => Kind::LargeWaterWheel(axis?),
+        25 => Kind::Gauge(
+            state & 16 != 0,
+            Dir::ALL.get(usize::from(state & 7)).copied()?,
+            state & 8 != 0,
+        ),
         22 => Kind::Saw(
             Dir::ALL.get(usize::from(state & 7)).copied()?,
             state & 8 != 0,
@@ -2935,6 +2965,8 @@ mod tests {
             Kind::Drill(Dir::North),
             Kind::Saw(Dir::East, true),
             Kind::Saw(Dir::Up, false),
+            Kind::Gauge(true, Dir::North, true),
+            Kind::Gauge(false, Dir::Up, false),
             Kind::ElevatorPulley(Dir::East),
             Kind::LargeWaterWheel(Axis::Z),
         ] {

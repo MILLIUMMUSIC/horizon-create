@@ -711,7 +711,14 @@ pub(super) fn state_for_placement(
     let Some((key, value)) = placed.state_property() else {
         return;
     };
-    if let Some(next) = level.native_state_with_property(state, key, value) {
+    // A kind with a block for each of its orientations (the gauges' along
+    // blocks) is placed as that block.
+    let target = if placed.block() == s.name {
+        Some(state)
+    } else {
+        level.registry.default_state(placed.block())
+    };
+    if let Some(next) = target.and_then(|t| level.native_state_with_property(t, key, value)) {
         *answer = Some(Some(next));
     }
 }
@@ -1447,6 +1454,20 @@ struct Part {
 
 type Want = (&'static str, Option<(&'static str, &'static str)>, glam::Mat4, Axis, f32, f32);
 
+/// A gauge's dial as drawn: chasing its target an eighth a tick
+/// (`GaugeBlockEntity.tick`), by position.
+static GAUGE_DIALS: Mutex<Option<HashMap<Pos, (f32, std::time::Instant)>>> = Mutex::new(None);
+
+fn gauge_dial(pos: Pos, target: f32) -> f32 {
+    let now = std::time::Instant::now();
+    let mut guard = GAUGE_DIALS.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = guard.get_or_insert_with(HashMap::new).entry(pos).or_insert((0.0, now));
+    let ticks = now.duration_since(entry.1).as_secs_f32() * 20.0;
+    entry.0 = super::create_gauge::chase(entry.0, target, ticks.min(200.0));
+    entry.1 = now;
+    entry.0
+}
+
 /// What Create's renderer for `view` draws at `pos`.
 fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Vec<Part> {
     let standard = render_angle(view.kind, pos, view.speed, time);
@@ -1531,6 +1552,37 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                 orient = glam::Mat4::from_rotation_y(90f32.to_radians()) * orient;
             }
             want.push((blade, None, orient, a, 0.0, 0.0));
+        }
+        Kind::Gauge(stress, f, _) => {
+            // GaugeRenderer: a shaft across it and, on each side it shows
+            // on, the head and the dial turned by its value.
+            let a = view.kind.rotation_axis();
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+            let target = if stress {
+                super::create_gauge::stress_dial_target(view.speed, view.stress, view.capacity)
+            } else {
+                super::create_gauge::speed_dial_target(view.speed)
+            };
+            let progress = gauge_dial(pos, target);
+            let head = if stress { "create:hz_part_gauge_head_stress" } else { "create:hz_part_gauge_head_speed" };
+            for face in [Dir::North, Dir::South, Dir::West, Dir::East] {
+                let n = face.normal();
+                let beside = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+                let open = game.world.is_air(game.world.block(beside[0], beside[1], beside[2]));
+                if !super::create_gauge::shows_head(f, a, face, open) {
+                    continue;
+                }
+                // rotateBufferTowards: about Y, centred; the dial first turns about
+                // East around its pivot (5.75/16 up and in).
+                let turn = glam::Mat4::from_rotation_y((-super::create_gauge::y_rot(face) - 90.0).to_radians());
+                let pivot = glam::Vec3::new(0.0, 5.75 / 16.0 - 0.5, 5.75 / 16.0 - 0.5);
+                let dial = turn
+                    * glam::Mat4::from_translation(pivot)
+                    * glam::Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2 * progress)
+                    * glam::Mat4::from_translation(-pivot);
+                want.push(("create:hz_part_gauge_dial", None, dial, Axis::Y, 0.0, 0.0));
+                want.push((head, None, turn, Axis::Y, 0.0, 0.0));
+            }
         }
         // ElevatorPulleyRenderer: a shaft across it (its coil and belt aren't drawn).
         Kind::ElevatorPulley(_) => {
@@ -2260,8 +2312,65 @@ fn fluid_lines(tanks: &[(super::create_fluids::FluidStack, i32)], count: usize) 
 /// `KineticBlockEntity.addToTooltip` and `addToGoggleTooltip`, and the
 /// generators' `GeneratingKineticBlockEntity.addToGoggleTooltip`, in
 /// Create's English (`create.gui.goggles.*`, `create.tooltip.*`).
+/// `SpeedGaugeBlockEntity` and `StressGaugeBlockEntity`'s goggle tooltips.
+fn gauge_lines(stress_gauge: bool, view: &View) -> Vec<(String, u32)> {
+    let bar = |level: usize| {
+        (0..3).map(|i| if i < level { '\u{2588}' } else { '\u{2592}' }).collect::<String>()
+    };
+    let mut lines = vec![("Gauge Information:".to_owned(), WHITE)];
+    if !stress_gauge {
+        lines.push(("Rotation Speed".to_owned(), GRAY));
+        // SpeedLevel.of: none, slow, moderate (30) and fast (100).
+        let speed = view.speed.abs();
+        let (level, rgb) = if view.over_stressed() {
+            (3, 0xFF5555)
+        } else if speed >= 100.0 {
+            (3, 0xFF55FF)
+        } else if speed >= 30.0 {
+            (2, 0x55FFFF)
+        } else if speed > 0.0 {
+            (1, 0x55FF55)
+        } else {
+            (0, DARK_GRAY)
+        };
+        let text = if view.over_stressed() { "Overstressed".to_owned() } else { format!("{speed:.0} RPM") };
+        lines.push((format!("{} {text}", bar(level)), rgb));
+        return lines;
+    }
+    lines.push(("Network Stress".to_owned(), GRAY));
+    let fraction = if view.capacity == 0.0 { 0.0 } else { view.stress / view.capacity };
+    if view.speed == 0.0 && !view.over_stressed() {
+        lines.push((format!("{} No Rotation", bar(0)), DARK_GRAY));
+        return lines;
+    }
+    // StressImpact.of: low under half, moderate under the capacity, high at it.
+    let (level, rgb, word) = if view.over_stressed() {
+        (3, 0xFF5555, "Overstressed")
+    } else if fraction < 0.5 {
+        (1, 0x55FF55, "Low")
+    } else if fraction < 1.0 {
+        (2, 0xFFFF55, "Moderate")
+    } else {
+        (3, 0xFF5555, "High")
+    };
+    lines.push((format!("{} {word}", bar(level)), rgb));
+    lines.push(("Remaining Capacity".to_owned(), GRAY));
+    let remaining = (view.capacity - view.stress).max(0.0);
+    let su = |v: f32| if v.fract() == 0.0 { format!("{v:.0}su") } else { format!("{v:.1}su") };
+    let text = if remaining != view.capacity {
+        format!(" {} / {}", su(remaining), su(view.capacity))
+    } else {
+        format!(" {}", su(remaining))
+    };
+    lines.push((text, rgb));
+    lines
+}
+
 fn goggle_lines(view: &View) -> Vec<(String, u32)> {
     let mut lines = Vec::new();
+    if let Kind::Gauge(stress_gauge, ..) = view.kind {
+        return gauge_lines(stress_gauge, view);
+    }
     if view.over_stressed() {
         lines.push(("Overstressed".to_owned(), GOLD));
         lines.push(("This network is overstressed.".to_owned(), GRAY));

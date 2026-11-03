@@ -222,6 +222,9 @@ PARTIALS = {
     # and tunnels' block entities.
     "funnel_flap": "create:block/funnel/flap",
     "belt_funnel_flap": "create:block/belt_funnel/flap",
+    "gauge_dial": "create:block/gauge/dial",
+    "gauge_head_speed": "create:block/gauge/speedometer/head",
+    "gauge_head_stress": "create:block/gauge/stressometer/head",
     "belt_tunnel_flap": "create:block/belt_tunnel/flap",
     # SmartChuteBlock's models, by `powered`.
     "smart_chute": "create:block/smart_chute/block",
@@ -680,6 +683,7 @@ def fit_logistics(content, names):
     fit_gantry(content, names)
     fit_actors(content)
     fit_saws(content, names)
+    fit_gauges(content, names)
     fit_psi(content)
     fit_contacts(content, names)
     fit_large_wheel(content, names)
@@ -695,6 +699,8 @@ def fit_logistics(content, names):
         **{name: "create:deployer" for name in DEPLOYERS if name != "deployer"},
         **{name: "create:chute" for name in CHUTE_BLOCKS.values() if name != "chute"},
         "hz_mechanical_saw_along": "create:mechanical_saw",
+        "hz_speedometer_along": "create:speedometer",
+        "hz_stressometer_along": "create:stressometer",
         "elevator_contact": "create:redstone_contact",
         "water_wheel_structure": "create:large_water_wheel",
         **{name: f"create:{piston}" for name, (piston, _, _) in piston_blocks().items() if name != piston},
@@ -1212,6 +1218,43 @@ def fit_saws(content, names):
         for key, model in original.get("variants", {}).items():
             props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
             if props.get("axis_along_first") == along and props.get("flipped") == "false" and "facing" in props:
+                variants[f"facing={props['facing']}"] = model
+        write_json(states / f"{name}.json", {"variants": variants})
+
+
+# Speedometer and stressometer: a lightning rod's template (six facings), a
+# block for each `axis_along_first` as the saw has; the dial and head are
+# partials drawn by the native mod (GaugeRenderer). Their shape is the 12/16
+# casing, not GaugeShaper's plate.
+GAUGES = {
+    "speedometer": "false", "hz_speedometer_along": "true",
+    "stressometer": "false", "hz_stressometer_along": "true",
+}
+
+
+def fit_gauges(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    for name, along in GAUGES.items():
+        item = name.replace("hz_", "").replace("_along", "")
+        original = read_json(states / f"{item}.json") if (states / f"{item}.json").exists() else None
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:lightning_rod"
+        decl.pop("default_state", None)
+        decl["shapes"] = {"property": "facing", "values": {f: [facing_box(f, CASING_12PX)] for f in FACINGS}}
+        decl.setdefault("properties", {})["light"] = 0
+        if name != item:
+            decl["item"] = False
+            names[f"block.create.{name}"] = names.get(f"block.create.{item}", item.title())
+        write_json(loot_tables / f"{name}.json", loot(name, [f"create:{item}"]))
+        write_json(blocks / f"{name}.json", decl)
+        if original is None:
+            continue
+        variants = {}
+        for key, model in original.get("variants", {}).items():
+            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            if props.get("axis_along_first") == along and "facing" in props:
                 variants[f"facing={props['facing']}"] = model
         write_json(states / f"{name}.json", {"variants": variants})
 

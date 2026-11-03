@@ -913,3 +913,11 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - The wrench on a belt funnel along a belt: `shape=retracted` becomes `shape=extended` and back (`horizon-ctl block`).
   The extended model, its flap offset and a tunnel's window beside it were not looked at.
 
+## Speedometer and stressometer (macOS, offscreen)
+
+- A speedometer and a stressometer on a creative motor's shaft line: their blocks place and join the network, the
+  heads with their dials are drawn on the two open sides, and the goggles on the speedometer read `Gauge Information:`,
+  `Rotation Speed`, a bar and `16 RPM` (screenshot). The dial's turn to its target, the stressometer's lines and the
+  overstressed state were not looked at; the tooltips' exact bar and colours are from memory of `SpeedLevel` and
+  `StressImpact` (their classes are not in the sources kept here).
+
