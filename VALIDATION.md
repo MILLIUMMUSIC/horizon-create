@@ -904,3 +904,10 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   front was sent away (no item line on the goggles), iron ingots stay (the line shows). The overflow's contents and the
   save and load of the filter were not looked at.
 
+## Belt funnel shapes (macOS, offscreen)
+
+- Funnels set above a belt turn to the belt funnel states at the next tick: across the belt an extracting one is
+  `shape=pushing` and a collecting one `shape=pulling`, along it `shape=retracted`, off a belt `shape=wall`
+  (`/data`-less: `horizon-ctl block`). Screenshot: the belt funnels' own models stand on the belt. The flap models'
+  offsets and the shapes' collision were not checked.
+

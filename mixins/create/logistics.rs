@@ -2062,6 +2062,45 @@ pub(super) fn wrench_chute(game: &mut Game<'_>, pos: Pos) -> bool {
 
 /// `FunnelBlockEntity.tick` and `FunnelBlock.entityInside` for every funnel
 /// of the level.
+/// `BeltFunnelBlock.getShapeForPosition` (and `isOnValidBelt`): what a
+/// horizontal funnel is above a belt or depot (`retracted` along a belt,
+/// else `pushing` when it extracts and `pulling` when it doesn't), `wall`
+/// where there is no belt.
+fn belt_funnel_shape(game: &Game<'_>, pos: Pos, f: FunnelState) -> &'static str {
+    if f.facing.axis() == Axis::Y {
+        return "wall";
+    }
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    let perpendicular = if f.extracting { "pushing" } else { "pulling" };
+    if let Some(b) = belt_at(game, below) {
+        if !b.can_transport_objects() {
+            return "wall";
+        }
+        return if b.facing.axis() != f.facing.axis() { perpendicular } else { "retracted" };
+    }
+    if block_name(game, below).as_deref() == Some(super::create_machines::DEPOT) {
+        return perpendicular;
+    }
+    "wall"
+}
+
+/// `BeltFunnelBlock.updateShape`: the funnel's `shape` follows what is
+/// below it.
+fn update_funnel_shape(game: &mut Game<'_>, pos: Pos, f: FunnelState) {
+    let want = belt_funnel_shape(game, pos, f);
+    if prop(game, pos, "shape").as_deref().unwrap_or("wall") == want {
+        return;
+    }
+    let Some(base) = game.pack.assets.registry.default_state(f.block()) else {
+        return;
+    };
+    let Some(id) = game.with_props(base, &[("facing", f.facing.name()), ("shape", want)]) else {
+        return;
+    };
+    let dimension = game.dim.id().to_owned();
+    game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+}
+
 pub(super) fn funnels_tick(game: &mut Game<'_>, dimension: &str) {
     let sneaked: Vec<Pos> = with_state(|s| {
         let mut here = Vec::new();
@@ -2095,6 +2134,7 @@ pub(super) fn funnels_tick(game: &mut Game<'_>, dimension: &str) {
             with_state(|s| s.funnels.remove(&(dimension.to_owned(), pos)));
             continue;
         };
+        update_funnel_shape(game, pos, f);
         let mut cooldown = data.cooldown;
         let filter = f.brass.then_some(&data.filter);
         if f.brass {
@@ -2206,7 +2246,14 @@ pub(super) fn submit(
         match funnel_at(game, pos) {
             // -getFlapOffset: 1/16 out for a funnel not on a belt.
             Some(f) if f.facing.axis() != Axis::Y => {
-                vec![(f.facing, [0.0, 10.0 / 16.0, 9.5 / 16.0], 1.0 / 16.0, "create:hz_part_funnel_flap")]
+                // FunnelBlockEntity.getFlapOffset: on a belt the flap is
+                // BELT_FUNNEL_FLAP, 2/16 in front of a funnel pushing or pulling.
+                let (model, offset) = match prop(game, pos, "shape").as_deref() {
+                    Some("pushing" | "pulling") => ("create:hz_part_belt_funnel_flap", 2.0 / 16.0),
+                    Some("retracted") => ("create:hz_part_belt_funnel_flap", 0.0),
+                    _ => ("create:hz_part_funnel_flap", 1.0 / 16.0),
+                };
+                vec![(f.facing, [0.0, 10.0 / 16.0, 9.5 / 16.0], offset, model)]
             }
             _ => Vec::new(),
         }

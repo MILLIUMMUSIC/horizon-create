@@ -221,6 +221,7 @@ PARTIALS = {
     # FunnelRenderer's and BeltTunnelRenderer's flaps, drawn by the funnels'
     # and tunnels' block entities.
     "funnel_flap": "create:block/funnel/flap",
+    "belt_funnel_flap": "create:block/belt_funnel/flap",
     "belt_tunnel_flap": "create:block/belt_tunnel/flap",
     # SmartChuteBlock's models, by `powered`.
     "smart_chute": "create:block/smart_chute/block",
@@ -306,6 +307,14 @@ FUNNEL_KINDS = {
 }
 FUNNEL_WALL_NORTH = [box(2, 2, 14, 14, 14, 16), box(1, 8, 12, 15, 15, 14), box(0.1, 13, 7, 15.9, 15, 11),
                      box(0.1, 9, 8, 15.9, 13, 12), box(0.1, 5, 9, 15.9, 9, 13)]
+# AllShapes.BELT_FUNNEL_RETRACTED and _PERPENDICULAR (pushing and pulling),
+# north, cut to the block.
+BELT_FUNNEL_RETRACTED_NORTH = [box(2, 0, 14, 14, 14, 16), box(0, 0, 8, 16, 16, 14)]
+BELT_FUNNEL_PERPENDICULAR_NORTH = [
+    box(2, 0, 14, 14, 14, 16), box(1, 8, 12, 15, 15, 14), box(0.1, 13, 7, 15.9, 15, 11),
+    box(0.1, 9, 8, 15.9, 13, 12), box(0.1, 5, 9, 15.9, 9, 13), box(0.1, 1, 10, 15.9, 5, 14),
+    box(0.1, 0, 11, 15.9, 1, 15)]
+FUNNEL_SHAPE_VALUES = ["wall", "retracted", "pushing", "pulling"]
 FUNNEL_SHAPES = {
     "up": [box(2, 0, 2, 14, 8, 14), box(1, 1, 1, 15, 8, 15), box(0, 4, 0, 16, 10, 16)],
     "down": [box(2, 8, 2, 14, 16, 14), box(1, 8, 1, 15, 15, 15), box(0, 6, 0, 16, 12, 16)],
@@ -580,7 +589,20 @@ def fit_logistics(content, names):
             decl = dict(base)
             decl["template"] = "minecraft:lightning_rod"
             decl.pop("default_state", None)
-            decl["shapes"] = {"property": "facing", "values": shapes}
+            # BeltFunnelBlock's SHAPE as a state property on the same block:
+            # `wall` is the plain funnel, the rest are the funnel on a belt.
+            decl["state_properties"] = {"shape": {"type": "enum", "values": FUNNEL_SHAPE_VALUES}}
+            decl["default_state"] = {"shape": "wall"}
+            combos = {}
+            for f in shapes:
+                for sh in FUNNEL_SHAPE_VALUES:
+                    if sh == "wall" or f in ("up", "down"):
+                        combos[f"{f},{sh}"] = shapes[f]
+                    elif sh == "retracted":
+                        combos[f"{f},{sh}"] = [turn_y(b, turns[f]) for b in BELT_FUNNEL_RETRACTED_NORTH]
+                    else:
+                        combos[f"{f},{sh}"] = [turn_y(b, turns[f]) for b in BELT_FUNNEL_PERPENDICULAR_NORTH]
+            decl["shapes"] = {"properties": ["facing", "shape"], "values": combos}
             decl.setdefault("properties", {})["light"] = 0
             if name != item:
                 decl["item"] = False
@@ -600,7 +622,15 @@ def fit_logistics(content, names):
             parts = []
             for key, model in variants.items():
                 facing = key.split("=", 1)[1]
-                parts.append({"when": {"facing": facing}, "apply": model})
+                parts.append({"when": {"facing": facing, "shape": "wall"}, "apply": model})
+            # The belt funnel's own models (andesite_belt_funnel's blockstate).
+            belt_path = states / (item.replace("_funnel", "_belt_funnel") + ".json")
+            belt = read_json(belt_path) if belt_path.exists() else None
+            for key, model in (belt or {}).get("variants", {}).items():
+                props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+                if props.get("powered", "false") == "false" and props.get("waterlogged", "false") == "false" \
+                        and props.get("shape") in ("retracted", "pushing", "pulling"):
+                    parts.append({"when": {"facing": props["facing"], "shape": props["shape"]}, "apply": model})
             write_json(states / f"{name}.json", {"multipart": parts})
 
     tunnel_shapes = {"z": TUNNEL_ALONG_Z}

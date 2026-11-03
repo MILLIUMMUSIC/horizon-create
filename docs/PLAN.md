@@ -139,8 +139,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt
      funnel (`getShapeForPosition`): pulling items off the belt into the inventory behind
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
-     wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. Not yet: the belt funnel's own model
-     and flap offsets. Brass funnels: part 3. Funnels and tunnels have block entities (any template, #5549): their flaps swing as
+     wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. A funnel above a belt or depot has Create's belt funnel shape as its own `shape` state property (`retracted` along the belt, `pushing` when it extracts and `pulling` when it doesn't across it, `wall` elsewhere: `BeltFunnelBlock.getShapeForPosition`/`updateShape`, the shapes from `AllShapes`, the models from Create's belt funnel blockstate), with the belt funnel's flap (`FunnelBlockEntity.getFlapOffset`). Not yet: the extended shape (`EXTENDED`) and the wrench's retracted/extended toggle (it still toggles extracting). Brass funnels: part 3. Funnels and tunnels have block entities (any template, #5549): their flaps swing as
      items pass (`FunnelBlockEntity.flap`, `BeltTunnelBlockEntity.flap`: told to clients in the block entity's
      update tag) and are drawn by `native_block_entity_submit` as `FlapStuffs.renderFlaps` does, chasing back to rest.
    Fluids (run in the game: see VALIDATION.md):
