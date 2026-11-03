@@ -1723,6 +1723,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         return;
     }
     range_display_tick(game);
+    glue_display_tick(game);
     let turning: Vec<(Pos, BearingView)> = CLIENT_BEARINGS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1975,7 +1976,6 @@ fn draw_block(
 }
 
 pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
-    draw_glue(game, camera, out);
     draw_bearings(game, camera, out);
     draw_pulleys(game, camera, out);
     draw_gantries(game, camera, out);
@@ -2463,47 +2463,74 @@ pub(super) fn from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
     s.told.push((player, text));
 }
 
-/// `SuperGlueSelectionHandler.tick`'s outlines: with super glue in hand,
-/// every glue box nearby drawn as thin slime edges (Horizon has no outliner).
-fn draw_glue(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
-    if game.held().is_none_or(|s| &*s.item != SUPER_GLUE) {
-        return;
-    }
-    let glue = CLIENT_GLUE.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let Some(slime) = game.pack.assets.registry.default_state("minecraft:slime_block") else {
-        return;
-    };
-    const THICK: f64 = 1.0 / 32.0;
-    for (a, b) in glue {
-        let lo = glam::DVec3::new(
-            f64::from(a[0].min(b[0])),
-            f64::from(a[1].min(b[1])),
-            f64::from(a[2].min(b[2])),
-        );
-        let hi = glam::DVec3::new(
-            f64::from(a[0].max(b[0]) + 1),
-            f64::from(a[1].max(b[1]) + 1),
-            f64::from(a[2].max(b[2]) + 1),
-        );
-        if ((lo + hi) * 0.5).distance_squared(camera) > 48.0 * 48.0 {
-            continue;
-        }
-        let size = hi - lo;
-        // Four edges along each axis.
-        for axis in 0..3 {
-            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
-            for (su, sv) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
-                let mut corner = lo;
-                corner[u] += size[u] * su - THICK * 0.5;
-                corner[v] += size[v] * sv - THICK * 0.5;
-                let mut scale = glam::DVec3::splat(THICK);
-                scale[axis] = size[axis];
-                let m = glam::Mat4::from_translation((corner - camera).as_vec3())
-                    * glam::Mat4::from_scale(scale.as_vec3());
-                game.block_model_vertices(slime, 0, m, 0xF0F0, false, out);
+/// `SuperGlueSelectionHandler.PASSIVE`, `HIGHLIGHT` and `FAIL`.
+const GLUE_PASSIVE: u32 = 0x4D9162;
+const GLUE_HIGHLIGHT: u32 = 0x68C586;
+const GLUE_FAIL: u32 = 0xC5B548;
+
+/// Slots of the glue outlines shown last tick.
+static GLUE_SLOTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// `SuperGlueSelectionHandler.tick`'s outlines: with super glue in hand
+/// every glue box nearby is outlined thinly; once a first corner is chosen
+/// the box to the hovered block, brighter, and the blocks glued with it.
+fn glue_display_tick(game: &Game<'_>) {
+    use super::create_glue::with_outliner;
+    let params = |rgb: u32, width: f32| super::create_outline::Params { rgb, width };
+    let mut shown: Vec<String> = Vec::new();
+    if game.held().is_some_and(|s| &*s.item == SUPER_GLUE) {
+        let dimension = game.dim.id();
+        let first = state()
+            .as_ref()
+            .and_then(|s| s.selecting.values().find(|(d, _)| d == dimension).map(|(_, p)| *p));
+        let eye = game.player.as_ref().map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]);
+        match first {
+            None => {
+                let glue = CLIENT_GLUE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                with_outliner(|o| {
+                    for (i, (a, b)) in glue.iter().enumerate() {
+                        let lo = [0, 1, 2].map(|k| f64::from(a[k].min(b[k])));
+                        let hi = [0, 1, 2].map(|k| f64::from(a[k].max(b[k]) + 1));
+                        let mid = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
+                        if (0..3).map(|k| (mid[k] - eye[k]).powi(2)).sum::<f64>() > 48.0 * 48.0 {
+                            continue;
+                        }
+                        let slot = format!("glue:{i}");
+                        o.show_aabb(&slot, [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]], params(GLUE_PASSIVE, 1.0 / 64.0), 1);
+                        shown.push(slot);
+                    }
+                });
+            }
+            Some(first) => {
+                let hovered = game.pick().map(|h| h.pos);
+                if let Some(hovered) = hovered.filter(|h| (0..3).all(|k| (first[k] - h[k]).abs() <= GLUE_REACH)) {
+                    let world = scan(game);
+                    let cluster = glue_group(&world, first, hovered);
+                    let reach = cluster.as_ref().is_some_and(|c| c.contains(&hovered));
+                    let lo = [0, 1, 2].map(|k| f64::from(first[k].min(hovered[k])));
+                    let hi = [0, 1, 2].map(|k| f64::from(first[k].max(hovered[k]) + 1));
+                    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+                    let color = if reach && !sneaking { GLUE_HIGHLIGHT } else { GLUE_FAIL };
+                    with_outliner(|o| {
+                        o.show_aabb("glue:box", [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]], params(color, 1.0 / 16.0), 1);
+                        shown.push("glue:box".to_owned());
+                        if let Some(c) = cluster {
+                            o.show_cluster("glue:cluster", c.into_iter().collect(), params(GLUE_PASSIVE, 1.0 / 64.0), 1);
+                            shown.push("glue:cluster".to_owned());
+                        }
+                    });
+                }
             }
         }
     }
+    // What was shown and isn't now goes at once.
+    let mut last = GLUE_SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+    with_outliner(|o| {
+        for slot in last.iter().filter(|s| !shown.contains(s)) {
+            o.remove(slot);
+        }
+    });
+    *last = shown;
 }
 
 // ---- Bearings ------------------------------------------------------------------

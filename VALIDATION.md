@@ -865,3 +865,9 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   column is outlined in white thin lines (screenshot). The group display with Ctrl, the fade-out after the wrench is put
   away and the checkered face texture are not checked in the game (the texture is not drawn).
 
+## Super glue's selection preview (macOS, offscreen)
+
+- Super glue held, the first corner chosen on a stone block and the crosshair on another: the box between them is
+  outlined in green (screenshot). The red/yellow failing colour, the cluster outline and the thin outlines of glue
+  already placed are not checked in the game.
+
