@@ -28,6 +28,8 @@ pub mod create_kinetics;
 pub mod create_obj;
 #[path = "../mixins/create/outline.rs"]
 pub mod create_outline;
+#[path = "../mixins/create/placement.rs"]
+pub mod create_placement;
 #[path = "../mixins/create/processing.rs"]
 pub mod create_processing;
 #[path = "../mixins/create/saw.rs"]

@@ -426,7 +426,7 @@ VALIDATION.md is checked again for what it touches:
    `shape`), the vault (`large`), the arm (`ceiling`), the smart chute (`powered`); rotating blocks drawn by their
    block entity (`ENTITYBLOCK_ANIMATED`) instead of blank blockstates; shapes by several properties and
    `collision_shapes`.
-5. Placement and shape updates: `native_state_for_placement` (`getStateForPlacement`), `native_update_shape`,
+5. Placement and shape updates (kinetic blocks done, see the engine gaps): `native_state_for_placement` (`getStateForPlacement`), `native_update_shape`,
    `native_can_survive`, `native_block_entity_inside` / `native_block_fall_on` for belts, funnels and chutes.
 6. Drawing through `native_block_entity_submit` instead of the `transient_block_geometry` mixin where a block entity
    draws; the value settings board as a mod screen (`native_mod_screen_open`, API 111).
@@ -459,8 +459,11 @@ hooks before the remaining "Not yet" items are ported.
 - A mod-drawn screen outside a container menu, with a free cursor: Create 6's value settings board (hold right
   click on a value box, pick a value with the mouse) has nowhere to open. The value box takes the mouse wheel
   instead (`native_wheel`, as Create 0.5 did).
-- Block placement by a template: blocks are placed as their template places itself (a lightning rod faces the
-  clicked face; Create's fan faces away from the player), until a mod can answer `getStateForPlacement`.
+- Fixed on the new pin: `native_state_for_placement` (`placement.rs`) places shafts, cogwheels, large cogwheels,
+  gearboxes, creative motors, hand cranks, presses, fans and water wheels as Create's `getStateForPlacement` does
+  (shafts beside them, the placer's look, sneaking, chutes for the fan). Still placed by their template until their
+  blocks take their own properties (wave 4): pistons, deployers and saws (`axis_along_first` is a block each),
+  bearings, pulleys, gantries, drills, the pump, chutes, funnels, the vault and the arm.
 - Basins with a `facing` (pouring sideways onto belts and depots) need a template with a hopper's facing and a
   block entity; none has both. Basin and depot shapes stay the enchanting table's (12/16 high), so items rest on
   top instead of inside.

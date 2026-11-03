@@ -10,7 +10,11 @@ depot holding 32 cobblestone to 8. Not checked yet: the vault (whole multiblock)
 
 Create's sounds: the client hears `create:wrench_rotate` when a shaft is wrenched round and `create:slime_added`
 when a slimeball makes a mechanical piston sticky (it turns into a sticky one, a slimeball used up in survival).
-Not checked yet: the contraption, depot and press sounds. The checks below this
+Not checked yet: the contraption, depot and press sounds.
+
+Placement (`native_state_for_placement`): a shaft placed on the floor beside a shaft along X lies along X, one with
+nothing beside it takes the look's axis (Z, looking north), and a fan placed beside the first shaft blows away from
+it (east). The checks below this
 section were made on the earlier pin `aa27eca`; they haven't all been repeated.
 
 ## Chute goggles, survival and the powered smart chute (macOS, offscreen)

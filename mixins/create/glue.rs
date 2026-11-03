@@ -566,6 +566,61 @@ pub(super) fn play_create_sound(game: &mut Game<'_>, name: &str, at: [f64; 3], v
     });
 }
 
+/// `Block.getStateForPlacement` of Create's kinetic blocks
+/// (`placement.rs`): their axis or facing from the shafts around and the
+/// placer's look, as Create chooses them.
+pub(super) fn state_for_placement(
+    level: &super::GameLevel<'_>,
+    state: BlockStateId,
+    context: &horizon_world::level::PlacementContext,
+    answer: &mut Option<Option<BlockStateId>>,
+) {
+    let registry = level.registry;
+    let Some(s) = registry.state(state) else {
+        return;
+    };
+    let Some(kind) = Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str)) else {
+        return;
+    };
+    let pos = [context.pos.x, context.pos.y, context.pos.z];
+    struct Near<'a, 'w> {
+        level: &'a super::GameLevel<'w>,
+        pos: Pos,
+    }
+    impl super::create_placement::Around for Near<'_, '_> {
+        fn kind(&self, side: Dir) -> Option<Kind> {
+            let n = side.normal();
+            let p = [self.pos[0] + n[0], self.pos[1] + n[1], self.pos[2] + n[2]];
+            let s = self.level.registry.state(self.level.world.block(p[0], p[1], p[2]))?;
+            Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str))
+        }
+        fn chute(&self, side: Dir) -> bool {
+            let n = side.normal();
+            let p = [self.pos[0] + n[0], self.pos[1] + n[1], self.pos[2] + n[2]];
+            self.level
+                .registry
+                .state(self.level.world.block(p[0], p[1], p[2]))
+                .is_some_and(|s| super::create_logistics::is_chute_block(&s.name))
+        }
+    }
+    let f = context.face.normal();
+    let ctx = super::create_placement::Ctx {
+        face: Dir::nearest(f),
+        yaw: context.yaw,
+        pitch: context.pitch,
+        sneaking: context.sneaking,
+    };
+    let Some(placed) = super::create_placement::place(kind, &ctx, &Near { level, pos }) else {
+        return;
+    };
+    let Some((key, value)) = placed.state_property() else {
+        return;
+    };
+    if let Some(next) = level.native_state_with_property(state, key, value) {
+        *answer = Some(Some(next));
+    }
+}
+
 /// `BlockState.hasAnalogOutputSignal` for Create's blocks comparators read.
 pub(super) fn has_analog_output(level: &super::GameLevel<'_>, state: BlockStateId, output: &mut bool) {
     let Some(s) = level.registry.state(state) else {
