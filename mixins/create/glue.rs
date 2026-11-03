@@ -580,9 +580,69 @@ pub(super) fn state_for_placement(
         return;
     };
     let pos = [context.pos.x, context.pos.y, context.pos.z];
+    let f = context.face.normal();
+    let face = Dir::nearest(f);
+    let looking = super::create_placement::nearest_looking(context.yaw, context.pitch);
+    let set = |props: &[(&str, &str)]| {
+        let mut st = state;
+        for (k, v) in props {
+            st = level.native_state_with_property(st, k, v)?;
+        }
+        Some(st)
+    };
+    let against = {
+        let n = face.opposite().normal();
+        let p = [context.pos.x + n[0], context.pos.y + n[1], context.pos.z + n[2]];
+        level.registry.state(level.world.block(p[0], p[1], p[2]))
+    };
+    let chosen = match s.name.as_str() {
+        // RedstoneContactBlock: facing away from the placer, or onto the
+        // clicked block when sneaking.
+        "create:redstone_contact" => {
+            let f = if context.sneaking { face.opposite() } else { looking.opposite() };
+            set(&[("facing", f.name())])
+        }
+        // PortableStorageInterfaceBlock: DirectionalBlock's.
+        super::create_actors::PSI => {
+            let f = if context.sneaking { looking } else { looking.opposite() };
+            set(&[("facing", f.name())])
+        }
+        // ItemVaultBlock: the axis of a vault it is placed against unless
+        // sneaking, else the placer's facing's.
+        super::create_arms::VAULT => {
+            let placed_on = against.filter(|a| a.name == super::create_arms::VAULT).map(|a| {
+                match a.properties.get("axis").map(String::as_str) {
+                    Some("z") => super::create_kinetics::Axis::Z,
+                    _ => super::create_kinetics::Axis::X,
+                }
+            });
+            let horizontal = super::create_placement::horizontal(context.yaw).axis();
+            let axis = super::create_vault::placement_axis(placed_on, context.sneaking, horizontal);
+            set(&[("axis", if axis == super::create_kinetics::Axis::X { "x" } else { "z" })])
+        }
+        // AttachedActorBlock (harvester, plough): on a grindstone's
+        // template, kept on its wall.
+        super::create_actors::HARVESTER | super::create_actors::PLOUGH => {
+            let other = against
+                .filter(|a| a.name == s.name)
+                .and_then(|a| a.properties.get("facing").and_then(|f| Dir::parse(f)));
+            let ctx = super::create_placement::Ctx {
+                face,
+                yaw: context.yaw,
+                pitch: context.pitch,
+                sneaking: context.sneaking,
+            };
+            let f = super::create_placement::attached_actor(&ctx, other);
+            set(&[("face", "wall"), ("facing", f.name())])
+        }
+        _ => None,
+    };
+    if let Some(next) = chosen {
+        *answer = Some(Some(next));
+        return;
+    }
     // ArmBlock.getStateForPlacement: hung when placed against a ceiling.
     if s.name == super::create_arms::ARM {
-        let f = context.face.normal();
         let ceiling = if f == [0, -1, 0] { "true" } else { "false" };
         if let Some(next) = level.native_state_with_property(state, "ceiling", ceiling) {
             *answer = Some(Some(next));
@@ -618,6 +678,10 @@ pub(super) fn state_for_placement(
                 .state(self.level.world.block(p[0], p[1], p[2]))
                 .is_some_and(|s| super::create_logistics::is_chute_block(&s.name))
         }
+        fn pipe_connects(&self, side: Dir) -> bool {
+            let n = super::create_fluid_glue::pipe_neighbour(self.level, self.pos, side);
+            super::create_fluids::pipe_connects(n, side)
+        }
     }
     let f = context.face.normal();
     let ctx = super::create_placement::Ctx {
@@ -629,6 +693,8 @@ pub(super) fn state_for_placement(
     let Some(placed) = super::create_placement::place(kind, &ctx, &Near { level, pos }) else {
         return;
     };
+    // The kinds are placed as their blocks are; the redstone contact, the
+    // portable storage interface, the vault and the attached actors below.
     let Some((key, value)) = placed.state_property() else {
         return;
     };

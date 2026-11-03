@@ -1899,9 +1899,9 @@ fn draw_block(
     // Vaults and tanks draw from hidden holders too (blank blockstates):
     // without their multiblock's connected textures here.
     let holder = match s.name.as_str() {
-        "create:item_vault" => Some(match s.properties.get("facing").map(String::as_str) {
-            Some("east" | "west") => "create:hz_vault_x",
-            _ => "create:hz_vault_z",
+        "create:item_vault" => Some(match s.properties.get("axis").map(String::as_str) {
+            Some("z") => "create:hz_vault_z",
+            _ => "create:hz_vault_x",
         }),
         "create:fluid_tank" => Some("create:hz_tank_single_window"),
         "create:creative_fluid_tank" => Some("create:hz_creative_tank_single_window"),

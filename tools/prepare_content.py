@@ -340,7 +340,6 @@ CASING_12PX = box(0, 0, 0, 16, 12, 16)
 
 # The item vault: a barrel's template (a block entity for its slots, a full
 # block, a `facing` holding its horizontal axis: east for X, south for Z).
-VAULT_TURNS = {"east": 90, "west": 90, "north": 0, "south": 0, "up": 0, "down": 0}
 
 # AllPartialModels.WATER_WHEEL, an OBJ model (`neoforge:obj`) with its
 # materials and texture parents: read by the native mod at runtime.
@@ -852,20 +851,23 @@ def fit_arms(content, names):
     blocks = content / "data" / "create" / "horizon" / "block"
     states = content / "assets" / "create" / "blockstates"
     loot_tables = content / "data" / "create" / "loot_table" / "blocks"
+    # ItemVaultBlock's HORIZONTAL_AXIS and LARGE as its own state properties,
+    # on stone's template (a full block with no use of its own: a barrel's
+    # menu took clicks meant for placing against it); its block entity and
+    # slots come from the native mod whatever the template (#5549). Blank:
+    # the native mod draws each vault block (ItemVaultCTBehaviour's connected
+    # textures need its multiblock) from hidden holders, the model turned
+    # along X or Z as Create's blockstate turns it.
     decl = read_json(blocks / "item_vault.json") if (blocks / "item_vault.json").exists() else {}
-    decl["template"] = "minecraft:barrel"
-    decl.pop("default_state", None)
+    decl["template"] = "minecraft:stone"
+    decl["state_properties"] = {"axis": {"type": "enum", "values": ["x", "z"]}, "large": {"type": "boolean"}}
+    decl["default_state"] = {"axis": "x", "large": "false"}
     decl.pop("shapes", None)
     decl.setdefault("properties", {})["light"] = 0
     write_json(blocks / "item_vault.json", decl)
-    # Blank: the native mod draws each vault block (ItemVaultCTBehaviour's
-    # connected textures need its multiblock) from hidden holders, the model
-    # turned along X or Z as Create's blockstate turns it.
     models = content / "assets" / "create" / "models" / "block"
     write_json(models / "hz_blank_item_vault.json", {"textures": {"particle": "create:block/vault/vault_front_small"}})
-    write_json(states / "item_vault.json", {"variants": {
-        f"facing={f}": {"model": "create:block/hz_blank_item_vault"} for f in VAULT_TURNS
-    }})
+    write_json(states / "item_vault.json", {"variants": {"": {"model": "create:block/hz_blank_item_vault"}}})
     for along, y in (("x", 90), ("z", 0)):
         write_json(blocks / f"hz_vault_{along}.json", {"template": "minecraft:stone", "item": False})
         variant = {"model": "create:block/item_vault", "y": y} if y else {"model": "create:block/item_vault"}

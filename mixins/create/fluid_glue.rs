@@ -177,7 +177,7 @@ fn with_sides(
 }
 
 /// What the pipe at `pos` sees on side `d` (`FluidPipeBlock.canConnectTo`).
-fn pipe_neighbour(level: &super::GameLevel<'_>, pos: Pos, d: Dir) -> super::create_fluids::PipeNeighbour {
+pub(super) fn pipe_neighbour(level: &super::GameLevel<'_>, pos: Pos, d: Dir) -> super::create_fluids::PipeNeighbour {
     use super::create_fluids::PipeNeighbour as N;
     let n = d.normal();
     let p = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];

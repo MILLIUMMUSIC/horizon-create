@@ -26,6 +26,10 @@ join without them, as Create's `PipeAttachmentModel` draws them. Lava from a cre
 bends at a pump (creative motor and cogwheel, facing east) into another tank: 2328 mB within ten seconds, the
 wire behind the second tank's comparator at 4.
 
+The vault on stone's template with its own `axis` and `large`: a vault placed against a vault's side takes its
+axis and joins it (`Length: 2`), one placed on the floor takes the placer's facing's axis, and a hopper above fills
+it (5 diamonds in its block entity). A bearing placed beside a shaft faces away from it.
+
 Placement (`native_state_for_placement`): a shaft placed on the floor beside a shaft along X lies along X, one with
 nothing beside it takes the look's axis (Z, looking north), and a fan placed beside the first shaft blows away from
 it (east). The checks below this

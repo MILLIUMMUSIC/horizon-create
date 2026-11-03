@@ -20,7 +20,7 @@ use super::create_deployer::{
     timer_speed, when_item_held,
 };
 use super::create_kinetics::{Axis, DEPLOYER, DEPLOYER_ALONG, Dir, Kind, Pos};
-use super::create_vault::{VAULT_CAPACITY, VaultLevel, VaultPart, members, placement_axis};
+use super::create_vault::{VAULT_CAPACITY, VaultLevel, VaultPart, members};
 use horizon_client::containers::{ModBlockEntity, ModContainer};
 use horizon_client::crafting::Ingredient;
 use horizon_client::items::ItemStack;
@@ -250,9 +250,9 @@ fn put(nbt: &mut Compound, key: &str, tag: Tag) {
 // ---- The item vault -------------------------------------------------------
 
 fn vault_axis(game: &Game<'_>, pos: Pos) -> Axis {
-    match prop(game, pos, "facing").as_deref() {
-        Some("east" | "west") => Axis::X,
-        _ => Axis::Z,
+    match prop(game, pos, "axis").as_deref() {
+        Some("z") => Axis::Z,
+        _ => Axis::X,
     }
 }
 
@@ -350,10 +350,10 @@ pub(super) fn vault_analog(level: &super::GameLevel<'_>, pos: Pos, max_stack: &d
         let facing = level
             .registry
             .state(level.world.block(p[0], p[1], p[2]))
-            .and_then(|s| s.properties.get("facing").cloned());
+            .and_then(|s| s.properties.get("axis").cloned());
         match facing.as_deref() {
-            Some("east" | "west") => Axis::X,
-            _ => Axis::Z,
+            Some("z") => Axis::Z,
+            _ => Axis::X,
         }
     };
     let part_at = |p: Pos| match level.world.block_entities.get(&(p[0], p[1], p[2])) {
@@ -1425,7 +1425,6 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
         && name != super::create_actors::SAW
         && name != super::create_actors::SAW_ALONG
         && name != super::create_actors::PSI
-        && !DIRECTIONAL_PLACED.contains(&name.as_str())
     {
         return;
     }
@@ -1487,88 +1486,6 @@ fn set_block(game: &mut Game<'_>, pos: Pos, name: &str, props: &[(&str, &str)]) 
     game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL)
 }
 
-/// Blocks placed as `DirectionalKineticBlock` (or their own variant) and the
-/// redstone contact, all on a lightning rod's template: it faces the clicked
-/// face, from which the rule's facing is worked out.
-const DIRECTIONAL_PLACED: [&str; 8] = [
-    "create:mechanical_drill",
-    "create:mechanical_bearing",
-    "create:windmill_bearing",
-    "create:creative_motor",
-    "create:hand_crank",
-    "create:encased_fan",
-    "create:redstone_contact",
-    "create:portable_storage_interface",
-];
-
-/// `DirectionalKineticBlock.getPreferredFacing`: the one side (or axis) a
-/// neighbour's shaft comes from.
-fn preferred_facing(game: &Game<'_>, pos: Pos) -> Option<Dir> {
-    let mut preferred: Option<Dir> = None;
-    for side in Dir::ALL {
-        let n = add(pos, side.normal());
-        let Some(name) = block_name(game, n) else {
-            continue;
-        };
-        let state = game.pack.assets.registry.state(game.world.block(n[0], n[1], n[2]));
-        let kind = state.and_then(|s| Kind::from_block(&name, |k| s.properties.get(k).map(String::as_str)));
-        if !kind.is_some_and(|k| k.has_shaft_towards(side.opposite())) {
-            continue;
-        }
-        if preferred.is_some_and(|p| p.axis() != side.axis()) {
-            return None;
-        }
-        preferred = Some(side);
-    }
-    preferred
-}
-
-/// The facing each of `DIRECTIONAL_PLACED` takes (`getStateForPlacement`),
-/// `clicked` the face clicked.
-fn directional_facing(game: &Game<'_>, pos: Pos, name: &str, clicked: Dir, p: &Placed) -> Dir {
-    let looking = nearest_looking(p.yaw, p.pitch);
-    let preferred = preferred_facing(game, pos);
-    let default = || if p.sneaking { looking } else { looking.opposite() };
-    match name {
-        "create:creative_motor" => match preferred {
-            Some(f) if !p.sneaking => f,
-            _ => default(),
-        },
-        "create:hand_crank" => match preferred {
-            Some(f) if !p.sneaking => f.opposite(),
-            _ => clicked,
-        },
-        "create:encased_fan" => {
-            let chute = |d: Dir| {
-                block_name(game, add(pos, d.normal())).is_some_and(|n| super::create_logistics::is_chute_block(&n))
-            };
-            if chute(clicked.opposite()) {
-                return clicked.opposite();
-            }
-            if chute(clicked) {
-                return clicked;
-            }
-            let f = preferred.unwrap_or(looking);
-            if p.sneaking { f } else { f.opposite() }
-        }
-        // RedstoneContactBlock: facing away from the player, or onto the
-        // clicked block when sneaking.
-        "create:redstone_contact" => {
-            if p.sneaking {
-                clicked.opposite()
-            } else {
-                looking.opposite()
-            }
-        }
-        // PortableStorageInterfaceBlock.
-        "create:portable_storage_interface" => default(),
-        _ => match preferred {
-            Some(f) if !p.sneaking => f.opposite(),
-            _ => default(),
-        },
-    }
-}
-
 fn finish_placed(game: &mut Game<'_>, p: Placed) {
     let pos = p.pos;
     let Some(name) = block_name(game, pos) else {
@@ -1605,22 +1522,6 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
             with_state(|s| s.arms.remove(&(dim, pos)));
         }
         VAULT => {
-            // ItemVaultBlock.getStateForPlacement: the axis of a vault it is
-            // placed against (the hook doesn't say which face was clicked:
-            // a lone vault beside it), else the player's facing's.
-            let beside: Vec<Axis> = Dir::ALL
-                .iter()
-                .filter(|d| block_name(game, add(pos, d.normal())).as_deref() == Some(VAULT))
-                .map(|d| vault_axis(game, add(pos, d.normal())))
-                .collect();
-            let placed_on = (beside.len() == 1).then(|| beside[0]);
-            let axis = placement_axis(placed_on, p.sneaking, horizontal_facing(p.yaw).axis());
-            set_block(
-                game,
-                pos,
-                VAULT,
-                &[("facing", if axis == Axis::X { "east" } else { "south" })],
-            );
             // onPlace: updateConnectivity.
             game.native_with_mod_block_entity(pos, |be| {
                 put(&mut be.nbt, "Uninitialized", Tag::Byte(1))
@@ -1719,44 +1620,6 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
             }
             super::create_contraptions::queue_carriage(game, pos);
         }
-        ROPE_PULLEY => {
-            // HorizontalAxisKineticBlock.getStateForPlacement: the axis of a
-            // shaft beside it, else across the way the player faces.
-            let beside: Vec<Axis> = [Dir::North, Dir::South, Dir::West, Dir::East]
-                .into_iter()
-                .filter(|side| {
-                    let n = add(pos, side.normal());
-                    let state = game.pack.assets.registry.state(game.world.block(n[0], n[1], n[2]));
-                    state
-                        .and_then(|s| Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str)))
-                        .is_some_and(|k| k.has_shaft_towards(side.opposite()))
-                })
-                .map(|side| side.axis())
-                .collect();
-            let axis = match beside.as_slice() {
-                [a] => *a,
-                [a, b] if a == b => *a,
-                _ => horizontal_facing(p.yaw).clockwise(Axis::Y).axis(),
-            };
-            set_block(game, pos, ROPE_PULLEY, &[("axis", axis.name())]);
-        }
-        n if DIRECTIONAL_PLACED.contains(&n) => {
-            let Some(clicked) = prop(game, pos, "facing").and_then(|f| Dir::parse(&f)) else {
-                return;
-            };
-            let facing = directional_facing(game, pos, n, clicked, &p);
-            if facing != clicked {
-                set_block(game, pos, n, &[("facing", facing.name())]);
-            }
-        }
-        n if n == super::create_actors::HARVESTER || n == super::create_actors::PLOUGH => {
-            // AttachedActorBlock.getStateForPlacement: on a floor or a
-            // ceiling it faces the player (a grindstone faces away).
-            if prop(game, pos, "face").as_deref() != Some("wall") {
-                let facing = horizontal_facing(p.yaw).opposite();
-                set_block(game, pos, n, &[("face", "wall"), ("facing", facing.name())]);
-            }
-        }
         _ => super::create_contraptions::placed_chassis(game, pos, p.sneaking, nearest_looking(p.yaw, p.pitch)),
     }
 }
@@ -1777,15 +1640,9 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         return use_item_on(game, &stack, pos);
     }
     let holding_wrench = game.held().is_some_and(|s| &*s.item == WRENCH);
-    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     match name.as_str() {
-        VAULT => {
-            // No use of its own: a sneaking player places against it.
-            if holding_wrench {
-                return false;
-            }
-            !(sneaking && game.held().is_some())
-        }
+        // ItemVaultBlock has no use of its own.
+        VAULT => false,
         ARM => {
             if holding_wrench {
                 return false;
@@ -1881,7 +1738,7 @@ pub(super) fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
             game,
             pos,
             VAULT,
-            &[("facing", if axis == Axis::X { "south" } else { "east" })],
+            &[("axis", if axis == Axis::X { "z" } else { "x" })],
         );
         game.native_with_mod_block_entity(pos, |be| {
             let mut part = read_part(axis, &be.nbt);

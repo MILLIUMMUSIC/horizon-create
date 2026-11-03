@@ -190,11 +190,11 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
    checks):
    - Item vault (`vault.rs`: `ItemVaultBlock`, `ItemVaultBlockEntity`, `ConnectivityHandler`; `arms.rs`): a mod block
-     entity of 20 slots per block on a barrel's template, its `facing` holding the axis (east for X, south for Z).
+     entity of 20 slots per block on stone's template (no use of its own), with its own `axis` and `large` properties.
      Vaults of one axis join as Create's do (up to 3 wide, 3 times as long; `formMulti` with its search order and
      creation queue), split when a block goes and join again on their next tick. Funnels, chutes and arms reach the
      whole vault in `SameSizeCombinedInvWrapper`'s slot order; hoppers reach one block's 20 slots. Placed against a
-     lone vault it takes that vault's axis (the hook doesn't say which face was clicked), else the player's facing's;
+     vault's face it takes that vault's axis unless sneaking, else the player's facing's (`getStateForPlacement`);
      the wrench from above or below takes it out of its vault and turns it. Its blockstate is blank: the native mod
      draws each block from hidden holders (`hz_vault_x`, `hz_vault_z`) with `ItemVaultCTBehaviour`'s connected
      textures (`ct.rs`, `CTModel`'s sheets: medium, or large past 2 wide, the `LARGE` property), its part sent over
@@ -466,10 +466,12 @@ hooks before the remaining "Not yet" items are ported.
   click on a value box, pick a value with the mouse) has nowhere to open. The value box takes the mouse wheel
   instead (`native_wheel`, as Create 0.5 did).
 - Fixed on the new pin: `native_state_for_placement` (`placement.rs`) places shafts, cogwheels, large cogwheels,
-  gearboxes, creative motors, hand cranks, presses, fans and water wheels as Create's `getStateForPlacement` does
-  (shafts beside them, the placer's look, sneaking, chutes for the fan). Still placed by their template until their
-  blocks take their own properties (wave 4): pistons, deployers and saws (`axis_along_first` is a block each),
-  bearings, pulleys, gantries, drills, the pump, chutes, funnels, the vault and the arm.
+  gearboxes, creative motors, hand cranks, presses, fans, water wheels, drills, bearings, rope pulleys, pumps, the
+  redstone contact, the portable storage interface, harvesters, ploughs, the arm and the vault as Create's
+  `getStateForPlacement` does (shafts beside them, the placer's look, sneaking, the clicked face, chutes for the
+  fan, pipes for the pump), replacing the fixes made a tick after placement. Still turned after placement until
+  their blocks take their own properties: pistons, deployers and saws (`axis_along_first` is a block each), gantry
+  carriages, chassis, chutes and funnels.
 - Basins with a `facing` (pouring sideways onto belts and depots) need a template with a hopper's facing and a
   block entity; none has both. Basin and depot shapes stay the enchanting table's (12/16 high), so items rest on
   top instead of inside.

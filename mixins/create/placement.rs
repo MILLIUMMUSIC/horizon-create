@@ -26,6 +26,11 @@ pub trait Around {
     fn kind(&self, side: Dir) -> Option<Kind>;
     /// Whether the block on `side` is a chute (the fan blows into one).
     fn chute(&self, side: Dir) -> bool;
+    /// `FluidPipeBlock.canConnectTo` the block on `side` (the pump turns to
+    /// a pipe or tank beside it).
+    fn pipe_connects(&self, _side: Dir) -> bool {
+        false
+    }
 }
 
 /// `Direction.orderedByNearest(entity)[0]`: the direction the placer looks
@@ -116,6 +121,56 @@ pub fn directional(ctx: &Ctx, around: &dyn Around) -> Dir {
     }
 }
 
+/// `HorizontalAxisKineticBlock.getStateForPlacement`: the axis of the shaft
+/// beside it, else across the way the placer faces.
+pub fn horizontal_axis(ctx: &Ctx, around: &dyn Around) -> Axis {
+    preferred_side(around, &HORIZONTALS)
+        .map(Dir::axis)
+        .unwrap_or_else(|| horizontal(ctx.yaw).clockwise(Axis::Y).axis())
+}
+
+/// `PumpBlock.getStateForPlacement`: DirectionalKineticBlock's facing,
+/// turned to the side with a pipe nearest the way it would push when that
+/// is across it (not sneaking).
+pub fn pump(ctx: &Ctx, around: &dyn Around) -> Dir {
+    let placed = directional(ctx, around);
+    let looking = nearest_looking(ctx.yaw, ctx.pitch);
+    let target = if ctx.sneaking {
+        looking
+    } else {
+        looking.opposite()
+    };
+    let t = target.normal();
+    let mut best: Option<Dir> = None;
+    let mut best_distance = f64::MAX;
+    for d in Dir::ALL {
+        if !around.pipe_connects(d) {
+            continue;
+        }
+        let n = d.normal();
+        let distance = ((0..3).map(|k| f64::from(n[k] - t[k]).powi(2)).sum::<f64>()).sqrt();
+        if distance > best_distance {
+            continue;
+        }
+        best_distance = distance;
+        best = Some(d);
+    }
+    match best {
+        Some(b) if b.axis() != target.axis() && !ctx.sneaking => b,
+        _ => placed,
+    }
+}
+
+/// `AttachedActorBlock.getStateForPlacement` (harvester, plough): facing the
+/// placer on a floor or ceiling, else the clicked face or the facing of the
+/// actor it is placed against.
+pub fn attached_actor(ctx: &Ctx, against: Option<Dir>) -> Dir {
+    if ctx.face.axis() == Axis::Y {
+        return horizontal(ctx.yaw).opposite();
+    }
+    against.unwrap_or(ctx.face)
+}
+
 /// `CogWheelBlock.getAxisForPlacement` (no speed controller below: not
 /// ported).
 pub fn cog_axis(ctx: &Ctx, around: &dyn Around) -> Axis {
@@ -171,6 +226,13 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         // WaterWheelBlock: DirectionalKineticBlock's (its turn to the
         // positive side is thrown away in Create 6.0.10).
         Kind::WaterWheel(_) => Kind::WaterWheel(directional(ctx, around)),
+        // DrillBlock, BearingBlock, WindmillBearingBlock: DirectionalKineticBlock's.
+        Kind::Drill(_) => Kind::Drill(directional(ctx, around)),
+        Kind::MechanicalBearing(_) => Kind::MechanicalBearing(directional(ctx, around)),
+        Kind::WindmillBearing(_) => Kind::WindmillBearing(directional(ctx, around)),
+        // PulleyBlock: HorizontalAxisKineticBlock's.
+        Kind::RopePulley(_) => Kind::RopePulley(horizontal_axis(ctx, around)),
+        Kind::MechanicalPump(_) => Kind::MechanicalPump(pump(ctx, around)),
         _ => return None,
     })
 }
@@ -264,6 +326,25 @@ mod tests {
         assert_eq!(
             place(Kind::EncasedFan(Dir::Up), &c, &chute),
             Some(Kind::EncasedFan(Dir::Down))
+        );
+    }
+
+    #[test]
+    fn pulleys_and_pumps() {
+        let none = Near(vec![], vec![]);
+        let c = ctx(Dir::Up, 0.0, 0.0, false);
+        // Facing south: the pulley lies across, along X.
+        assert_eq!(
+            place(Kind::RopePulley(Axis::Z), &c, &none),
+            Some(Kind::RopePulley(Axis::X))
+        );
+        assert_eq!(
+            attached_actor(&ctx(Dir::Up, 0.0, 0.0, false), None),
+            Dir::North
+        );
+        assert_eq!(
+            attached_actor(&ctx(Dir::East, 0.0, 0.0, false), Some(Dir::West)),
+            Dir::West
         );
     }
 
