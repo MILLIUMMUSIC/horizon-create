@@ -878,8 +878,11 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 
 - A saw facing up driven by a creative motor: an andesite alloy dropped on it goes into its inventory, is cut after
   about 10 s at the motor's 16 RPM (`ProcessingTime` counting down from 200 by one a tick in the block data), the stone
-  sound plays and six shafts are thrown off the east side (`/data get entity`). Not checked: a belt feeding it and the
-  belt or depot ahead taking the pieces, wood and stone sounds by name, stacks of several items.
+  sound plays and six shafts are thrown off the east side (`/data get entity`). A belt carrying two andesite alloys into
+  the saw's side: it took one at a time, cut it into six shafts, and while the belt ahead moved against it the
+  shafts waited in its slots (as Create's `canInsertFromSide` makes them); with the saw turned the other way they
+  were thrown off the open side. Not checked: a depot or a belt moving away taking the pieces, wood and stone sounds by
+  name.
 
 ## Deployer goggle lines (macOS, offscreen)
 
