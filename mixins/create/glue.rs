@@ -911,7 +911,9 @@ fn right_click_hand(
             || name == super::create_machines::BASIN
             || super::create_logistics::is_chute_block(&name)
             || name == super::create_arms::VAULT
-            || name == super::create_arms::ARM;
+            || name == super::create_arms::ARM
+            || name == super::create_spout_glue::SPOUT
+            || name == super::create_spout_glue::DRAIN;
         if own_use {
             *canceled = true;
             wrench(game, pos, face, sneaking);

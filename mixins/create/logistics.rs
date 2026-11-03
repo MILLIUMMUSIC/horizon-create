@@ -420,6 +420,16 @@ fn insert_into(game: &mut Game<'_>, pos: Pos, face: Dir, stack: ItemStack) -> Op
     if let Some(t) = tunnel_at(game, pos) {
         return insert_into_tunnel_block(game, pos, t, stack);
     }
+    // ItemDrainItemHandler: from a side, travelling away from it.
+    if block_name(game, pos).as_deref() == Some(super::create_spout_glue::DRAIN) {
+        if face.axis() == Axis::Y {
+            return Some(stack);
+        }
+        return match super::create_spout_glue::drain_insert(game, pos, face.opposite(), stack.clone(), false) {
+            Some(left) => left,
+            None => Some(stack),
+        };
+    }
     game.native_insert_item(pos, core_dir(face), stack)
 }
 
@@ -628,7 +638,7 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
             let belt = e.belt;
             return Some(e.inv.insert_from_side(&belt, segment_state, index, item, side, true));
         }
-        direct_insert(self.game, pos, item.stack.clone())
+        direct_insert(self.game, pos, item.stack.clone(), side)
     }
     fn solid_side(&self, pos: Pos, face: Dir) -> bool {
         sturdy(self.game, pos, face)
@@ -674,7 +684,7 @@ fn has_direct_input(game: &Game<'_>, pos: Pos) -> bool {
         return true;
     }
     match block_name(game, pos).as_deref() {
-        Some(super::create_machines::DEPOT) => true,
+        Some(super::create_machines::DEPOT | super::create_spout_glue::DRAIN) => true,
         Some(name) if super::create_machines::is_saw(name) => prop(game, pos, "facing").as_deref() == Some("up"),
         // canDirectlyInsert: an open chute not under one facing down.
         Some(name) if is_chute_block(name) => {
@@ -687,8 +697,9 @@ fn has_direct_input(game: &Game<'_>, pos: Pos) -> bool {
 
 /// `handleInsertion` of what isn't a belt (a depot, chute or funnel):
 /// what is left, none when it can't take anything.
-fn direct_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack) -> Option<Option<ItemStack>> {
+fn direct_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack, side: Dir) -> Option<Option<ItemStack>> {
     match block_name(game, pos).as_deref() {
+        Some(super::create_spout_glue::DRAIN) => super::create_spout_glue::drain_insert(game, pos, side, stack, false),
         Some(super::create_machines::DEPOT) => {
             // DepotBehaviour.tryInsertingFromSide: an empty depot only.
             let max = stack.max_stack();
@@ -2784,6 +2795,9 @@ fn side_insert(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack, simul
             e.inv.insert_from_side(&belt, segment_state, index, &Transported::new(stack.clone(), angle), side, false)
         });
     }
+    if simulate && block_name(game, pos).as_deref() == Some(super::create_spout_glue::DRAIN) {
+        return super::create_spout_glue::drain_insert(game, pos, side, stack.clone(), true).unwrap_or(Some(stack));
+    }
     if simulate {
         let free = match block_name(game, pos).as_deref() {
             Some(name) if is_chute_block(name) => chute_accepts(game, pos, &stack),
@@ -2799,7 +2813,7 @@ fn side_insert(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack, simul
         };
         return (!free).then_some(stack);
     }
-    match direct_insert(game, pos, stack.clone()) {
+    match direct_insert(game, pos, stack.clone(), side) {
         Some(left) => left,
         None => Some(stack),
     }

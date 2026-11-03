@@ -145,7 +145,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || is_saw(block)) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || is_saw(block)) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -155,7 +155,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || is_saw(block) || super::create_logistics::is_chute_block(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || is_saw(block) || super::create_logistics::is_chute_block(block) {
         *ticks = true;
     }
 }
@@ -179,14 +179,17 @@ pub(super) fn block_entity_container(block: &str, container: &mut Option<ModCont
         BASIN => (BASIN_ALL_SLOTS, (0..BASIN_SLOTS).collect(), (0..BASIN_ALL_SLOTS).collect()),
         // ChuteItemHandler: its one item.
         super::create_logistics::CHUTE => (1, vec![0], vec![0]),
+        // ItemDrainItemHandler: its held item, from the sides only.
+        super::create_spout_glue::DRAIN => (1, vec![0], vec![0]),
         _ => return,
     };
     let all: Vec<usize> = (0..slots).collect();
     // The saw's inventory answers every side but the bottom.
     let bottom = is_saw(block);
+    let sides_only = block == super::create_spout_glue::DRAIN;
     *container = Some(ModContainer {
         slots,
-        faces: std::array::from_fn(|i| if bottom && i == 0 { Vec::new() } else { all.clone() }),
+        faces: std::array::from_fn(|i| if (bottom && i == 0) || (sides_only && i < 2) { Vec::new() } else { all.clone() }),
         inputs,
         outputs,
         menu: None,
@@ -776,6 +779,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         BLAZE => blaze_tick(game, pos, entity),
         LINK => link_tick(game, pos, entity),
         super::create_spout_glue::SPOUT => super::create_spout_glue::spout_tick(game, pos, entity),
+        super::create_spout_glue::DRAIN => super::create_spout_glue::drain_tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {
@@ -1543,6 +1547,9 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         }
         Some(n) if is_saw(n) => saw_filter_click(game, pos, face),
         Some(BLAZE) => blaze_click(game, pos),
+        // SpoutBlock has no use of its own (the template's menu stays shut).
+        Some(super::create_spout_glue::SPOUT) => true,
+        Some(super::create_spout_glue::DRAIN) => super::create_spout_glue::drain_click(game, pos),
         Some(LINK) => link_click(game, pos, face),
         Some(MILLSTONE) => {
             // MillstoneBlock.useItemOn: an empty hand takes the outputs.
@@ -1635,6 +1642,7 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                         s.name != DEPOT
                             && s.name != BASIN
                             && s.name != LINK
+                            && s.name != super::create_spout_glue::DRAIN
                             && !super::create_logistics::is_chute_block(&s.name)
                             && !super::create_funnel::is_funnel(&s.name)
                     })
@@ -1756,6 +1764,10 @@ pub(super) fn draw_depots(
             .is_some_and(|s| super::create_logistics::is_chute_block(&s.name));
         if chute {
             super::create_logistics::draw_chute(game, camera, *pos, slots, out);
+            continue;
+        }
+        if super::create_spout_glue::is_drain(game, *pos) {
+            super::create_spout_glue::draw_drain_item(game, camera, *pos, slots, out);
             continue;
         }
         let link = game

@@ -47,6 +47,8 @@ struct State {
     basins: HashMap<String, HashMap<Pos, Vec<FluidStack>>>,
     /// Spouts' tanks and processing ticks as their last tick saw them.
     spouts: HashMap<String, HashMap<Pos, (FluidStack, i32)>>,
+    /// Item drains' tanks.
+    drains: HashMap<String, HashMap<Pos, FluidStack>>,
     /// What clients were last told, by dimension.
     shown: HashMap<String, HashMap<Pos, Shown>>,
     ticks: u64,
@@ -59,6 +61,8 @@ enum Shown {
     Basin(Vec<FluidStack>),
     /// A spout's fluid and `processingTicks`.
     Spout(FluidStack, i32),
+    /// An item drain's fluid.
+    Drain(FluidStack),
 }
 
 /// A tank block as clients see it: its controller and, at the controller,
@@ -379,6 +383,16 @@ impl Access<'_, '_> {
             }
             return Some(r);
         }
+        if super::create_spout_glue::is_drain(self.game, pos) {
+            return self.game.native_with_mod_block_entity(pos, |be| {
+                let mut t = super::create_spout_glue::drain_tank(be);
+                let r = op(&mut super::create_spout::DrainTank(&mut t));
+                if !simulate {
+                    super::create_spout_glue::set_spout_tank(be, &t);
+                }
+                r
+            });
+        }
         if super::create_spout_glue::is_spout(self.game, pos) {
             return self.game.native_with_mod_block_entity(pos, |be| {
                 let mut t = super::create_spout_glue::spout_tank(be);
@@ -410,8 +424,15 @@ impl FluidAccess for Access<'_, '_> {
         is_tank(self.game, pos)
             || is_basin(self.game, pos)
             || (side != Dir::Down && super::create_spout_glue::is_spout(self.game, pos))
+            || (side != Dir::Up && super::create_spout_glue::is_drain(self.game, pos))
     }
     fn handler_tanks(&self, pos: Pos, side: Dir) -> Vec<FluidStack> {
+        if side != Dir::Up && super::create_spout_glue::is_drain(self.game, pos) {
+            return match self.game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+                Some(BlockEntity::Mod(m)) => vec![super::create_spout_glue::drain_tank(m).fluid],
+                _ => Vec::new(),
+            };
+        }
         if side != Dir::Down && super::create_spout_glue::is_spout(self.game, pos) {
             return match self.game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
                 Some(BlockEntity::Mod(m)) => vec![super::create_spout_glue::spout_tank(m).fluid],
@@ -569,7 +590,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
         s.ticks += 1;
         let ticks = s.ticks;
         let State {
-            dims, tanks, shown, basins, spouts, ..
+            dims, tanks, shown, basins, spouts, drains, ..
         } = s;
         let fluids = dims.entry(dimension.to_owned()).or_default();
         let tanks = tanks.entry(dimension.to_owned()).or_default();
@@ -603,8 +624,9 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
         );
         let basins = basins.entry(dimension.to_owned()).or_default();
         let spouts = spouts.entry(dimension.to_owned()).or_default();
+        let drains = drains.entry(dimension.to_owned()).or_default();
         let shown = shown.entry(dimension.to_owned()).or_default();
-        message = updates(game, dimension, tanks, basins, spouts, shown, ticks);
+        message = updates(game, dimension, tanks, basins, spouts, drains, shown, ticks);
         if ticks % SAVE_EVERY == 0 {
             save(s);
         }
@@ -653,6 +675,18 @@ pub(super) fn note_spout(dimension: &str, pos: Pos, fluid: &FluidStack, ticks: i
     }
 }
 
+/// An item drain's block entity tick: its tank, for clients.
+pub(super) fn note_drain(dimension: &str, pos: Pos, fluid: &FluidStack) {
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let drains = s.drains.entry(dimension.to_owned()).or_default();
+    if fluid.is_empty() {
+        drains.remove(&pos);
+    } else {
+        drains.insert(pos, fluid.clone());
+    }
+}
+
 /// The tanks and basins whose contents changed since clients were told
 /// (all of them every `SNAPSHOT_EVERY` ticks), as one F1 message.
 fn updates(
@@ -661,6 +695,7 @@ fn updates(
     tanks: &mut Tanks,
     basins: &mut HashMap<Pos, Vec<FluidStack>>,
     spouts: &mut HashMap<Pos, (FluidStack, i32)>,
+    drains: &mut HashMap<Pos, FluidStack>,
     shown: &mut HashMap<Pos, Shown>,
     ticks: u64,
 ) -> Option<Vec<u8>> {
@@ -683,12 +718,14 @@ fn updates(
         .extend(tanks.changed.drain().filter(|p| in_world(game, *p)));
     basins.retain(|p, _| !in_world(game, *p) || is_basin(game, *p));
     spouts.retain(|p, _| !in_world(game, *p) || super::create_spout_glue::is_spout(game, *p));
+    drains.retain(|p, _| !in_world(game, *p) || super::create_spout_glue::is_drain(game, *p));
     let now: HashMap<Pos, Shown> = tanks
         .parts
         .iter()
         .map(|(p, t)| (*p, Shown::Tank(ShownTank::of(*p, t))))
         .chain(basins.iter().map(|(p, b)| (*p, Shown::Basin(b.clone()))))
         .chain(spouts.iter().map(|(p, (f, t))| (*p, Shown::Spout(f.clone(), *t))))
+        .chain(drains.iter().map(|(p, f)| (*p, Shown::Drain(f.clone()))))
         .collect();
     let full = ticks % SNAPSHOT_EVERY == 0;
     let mut entries: Vec<(Pos, Option<Shown>)> = now
@@ -722,6 +759,7 @@ fn encode(dim: u8, full: bool, entries: &[(Pos, Option<Shown>)]) -> Vec<u8> {
             Some(Shown::Tank(t)) => (1, std::slice::from_ref(&t.fluid)),
             Some(Shown::Basin(b)) => (2, b),
             Some(Shown::Spout(f, _)) => (3, std::slice::from_ref(f)),
+            Some(Shown::Drain(f)) => (4, std::slice::from_ref(f)),
         };
         out.push(kind);
         if let Some(Shown::Spout(_, ticks)) = shown {
@@ -802,6 +840,7 @@ fn decode(data: &[u8]) -> Option<Decoded> {
             }
             2 => Some(Shown::Basin(fluids)),
             3 => Some(Shown::Spout(fluids.into_iter().next().unwrap_or_default(), ticks)),
+            4 => Some(Shown::Drain(fluids.into_iter().next().unwrap_or_default())),
             _ => None,
         };
         entries.push((pos, shown));
@@ -973,6 +1012,7 @@ pub(super) fn client_fluids(dimension: u8, pos: Pos) -> Option<(Vec<(FluidStack,
         // Two input and two output tanks.
         Shown::Basin(fs) => (fs.iter().map(|f| (f.clone(), super::create_fluids::BASIN_TANK)).collect(), 4),
         Shown::Spout(f, _) => (vec![(f.clone(), super::create_spout::SPOUT_CAPACITY)], 1),
+        Shown::Drain(f) => (vec![(f.clone(), super::create_spout::DRAIN_CAPACITY)], 1),
     })
 }
 
@@ -1036,7 +1076,7 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
         .iter()
         .filter_map(|(p, v)| match v {
             Shown::Tank(t) => Some((*p, t.clone())),
-            Shown::Basin(_) | Shown::Spout(..) => None,
+            Shown::Basin(_) | Shown::Spout(..) | Shown::Drain(_) => None,
         })
         .collect();
     for (pos, shown) in holders {
@@ -1067,6 +1107,12 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
                 let tank = if fluid.is_empty() { None } else { super::create_spout::tank_box(level) };
                 let stream = super::create_spout_glue::client_stream(pos, ticks, !fluid.is_empty());
                 tank.into_iter().chain(stream).map(|b| (fluid.clone(), b)).collect()
+            }
+            // ItemDrainRenderer.renderFluid. Not yet: the stream over an
+            // item being emptied.
+            Shown::Drain(fluid) => {
+                let level = fluid.amount as f32 / super::create_spout::DRAIN_CAPACITY as f32;
+                super::create_spout::drain_fluid_box(level).into_iter().map(|b| (fluid.clone(), b)).collect()
             }
         };
         for (fluid, b) in boxes {

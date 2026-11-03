@@ -968,3 +968,12 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   `minecraft:potion`s), the second result held on the depot as Create leaves it. Screenshots during a third fill
   showed the nozzle squeezing down, the thin stream below it and the tank's water level in its window.
   Not tried: belts below the spout, filling through pipes, buckets, `create:filling` recipes (grass, blaze cake).
+
+## Item drain (macOS, offscreen)
+
+- A water bucket dropped on an item drain: it moved to the middle, stopped 20 ticks (`ProcessingTicks` counting
+  down), the tank filled with 1000 mB of water, and the empty bucket went on and was ejected north (picked up).
+  A lava bucket dropped on the full drain waited at the middle with `ProcessingTicks` held at 20 until the tank was
+  emptied (`data merge`), then drained into it. Screenshots showed the fluid through the grate and the item lying on
+  top, moving along its way. Not tried: belts, chutes, funnels or pipes on the drain, the bucket click, water
+  bottles.

@@ -1,16 +1,18 @@
 // Create's spout and item drain, ported from Create 6.0.10 (MIT, The Create
 // Team): SpoutBlockEntity's processing as a belt or depot's
 // BeltProcessingBehaviour, FillingBySpout and GenericItemFilling for the
-// items Horizon has, GenericItemEmptying, and how SpoutRenderer draws the
-// tank and the nozzle. Injected as `crate::game::create_spout`; no Horizon
+// items Horizon has, GenericItemEmptying, ItemDrainBlockEntity's item and
+// tank, and how SpoutRenderer and ItemDrainRenderer draw them. Injected as `crate::game::create_spout`; no Horizon
 // types, tested with `cargo test`.
 
-use super::create_fluids::{FluidStack, WATER, bucket_fluid, filled_bucket};
+use super::create_fluids::{
+    FluidHandler, FluidStack, FluidTank, WATER, bucket_fluid, filled_bucket,
+};
+use super::create_kinetics::Dir;
 
 /// `SpoutBlockEntity`'s tank (`SmartFluidTankBehaviour.single(this, 1000)`).
 pub const SPOUT_CAPACITY: i32 = 1000;
 /// `ItemDrainBlockEntity`'s tank.
-#[allow(dead_code)]
 pub const DRAIN_CAPACITY: i32 = 1500;
 /// `SpoutBlockEntity.FILLING_TIME` (and the drain's).
 pub const FILLING_TIME: i32 = 20;
@@ -66,7 +68,6 @@ pub fn generic_fill_result(
 /// (`PotionFluidHandler.getFluidFromPotionItem`) 250 mB of water and the
 /// glass bottle. Other potions are Create's potion fluid, which Horizon has
 /// no fluid for: they aren't taken.
-#[allow(dead_code)]
 pub fn generic_empty(item: &str, potion: Option<&str>) -> Option<(FluidStack, &'static str)> {
     if let Some(fluid) = bucket_fluid(item) {
         return Some((FluidStack::new(fluid, 1000), BUCKET));
@@ -181,6 +182,129 @@ pub fn nozzle(processing_pt: Option<f32>, has_fluid: bool) -> (Option<f32>, f32)
     (has_fluid.then_some(radius), squeeze)
 }
 
+// ---- The item drain ---------------------------------------------------------------
+
+/// `ItemDrainBlockEntity.itemMovementPerTick`.
+pub const DRAIN_ITEM_SPEED: f32 = 1.0 / 8.0;
+
+/// The drain's held item as it moves over it (`TransportedItemStack`'s
+/// `beltPosition`, 0 where it came in to 1 where it leaves, and
+/// `insertedFrom`, the way it travels).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrainItem {
+    pub position: f32,
+    pub inserted_from: Dir,
+}
+
+impl DrainItem {
+    /// `tryInsertingFromSide`: at the side it came in (the middle when it
+    /// came from above or below).
+    pub fn inserted(side: Dir) -> DrainItem {
+        DrainItem {
+            position: if side.axis() == super::create_kinetics::Axis::Y {
+                0.5
+            } else {
+                0.0
+            },
+            inserted_from: side,
+        }
+    }
+}
+
+/// What a drain's tick asks of its block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrainStep {
+    Nothing,
+    /// The 20 ticks began (`sendData`).
+    Started,
+    /// `continueProcessing` at five ticks: empty the item into the tank.
+    Empty,
+    /// Processing stopped: the item can't be emptied any more.
+    Stopped,
+    /// At the far side: hand the item on, or eject it.
+    Output,
+}
+
+/// `ItemDrainBlockEntity.tick` on the server. `can_empty` is
+/// `GenericItemEmptying.canItemBeEmptied` of the held item, `fits` whether
+/// the tank takes all it would give.
+pub fn drain_tick(
+    item: &mut Option<DrainItem>,
+    processing: &mut i32,
+    can_empty: bool,
+    fits: bool,
+) -> DrainStep {
+    let Some(it) = item.as_mut() else {
+        *processing = 0;
+        return DrainStep::Nothing;
+    };
+    if *processing > 0 {
+        *processing -= 1;
+        // continueProcessing
+        if *processing < 5 {
+            return DrainStep::Nothing;
+        }
+        if !can_empty {
+            *processing = 0;
+            return DrainStep::Stopped;
+        }
+        if *processing > 5 {
+            if !fits {
+                *processing = FILLING_TIME;
+            }
+            return DrainStep::Nothing;
+        }
+        return DrainStep::Empty;
+    }
+    let prev = it.position;
+    it.position += DRAIN_ITEM_SPEED;
+    if it.position > 1.0 {
+        it.position = 1.0;
+        return DrainStep::Output;
+    }
+    if prev < 0.5 && it.position >= 0.5 {
+        if !can_empty {
+            return DrainStep::Nothing;
+        }
+        it.position = 0.5;
+        *processing = FILLING_TIME;
+        return DrainStep::Started;
+    }
+    DrainStep::Nothing
+}
+
+/// The drain's tank as others reach it: `allowExtraction().forbidInsertion()`.
+pub struct DrainTank<'a>(pub &'a mut FluidTank);
+
+impl FluidHandler for DrainTank<'_> {
+    fn fill(&mut self, _: &FluidStack, _: bool) -> i32 {
+        0
+    }
+    fn drain(&mut self, resource: &FluidStack, simulate: bool) -> FluidStack {
+        self.0.drain(resource, simulate)
+    }
+    fn drain_any(&mut self, max: i32, simulate: bool) -> FluidStack {
+        self.0.drain_any(max, simulate)
+    }
+}
+
+/// `ItemDrainRenderer.renderFluid`: the tank's fluid box, as full as
+/// `level`; none when empty.
+pub fn drain_fluid_box(level: f32) -> Option<[f32; 6]> {
+    if level <= 0.0 {
+        return None;
+    }
+    let (y_min, min) = (5.0 / 16.0, 2.0 / 16.0);
+    Some([
+        min,
+        y_min,
+        min,
+        min + 12.0 / 16.0,
+        y_min + 7.0 / 16.0 * level,
+        min + 12.0 / 16.0,
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +389,64 @@ mod tests {
         let b = tank_box(0.5).unwrap();
         assert!((b[4] - (2.5 / 16.0 + 5.5 / 16.0)).abs() < 1e-6);
         assert!(tank_box(0.0).is_none());
+    }
+
+    #[test]
+    fn a_drain_moves_its_item_empties_it_at_the_middle_and_hands_it_on() {
+        let mut item = Some(DrainItem::inserted(Dir::East));
+        let mut ticks = 0;
+        // Four steps of 1/8 to the middle, where it starts.
+        for _ in 0..3 {
+            assert_eq!(
+                drain_tick(&mut item, &mut ticks, true, true),
+                DrainStep::Nothing
+            );
+        }
+        assert_eq!(
+            drain_tick(&mut item, &mut ticks, true, true),
+            DrainStep::Started
+        );
+        assert_eq!(ticks, FILLING_TIME);
+        // A full tank keeps it waiting at twenty.
+        drain_tick(&mut item, &mut ticks, true, false);
+        assert_eq!(ticks, FILLING_TIME);
+        let mut steps = Vec::new();
+        for _ in 0..20 {
+            steps.push(drain_tick(&mut item, &mut ticks, true, true));
+        }
+        assert_eq!(steps.iter().filter(|s| **s == DrainStep::Empty).count(), 1);
+        assert_eq!(ticks, 0);
+        // What is left (an empty bucket) goes on: four more steps out.
+        let mut out = DrainStep::Nothing;
+        for _ in 0..5 {
+            out = drain_tick(&mut item, &mut ticks, false, true);
+        }
+        assert_eq!(out, DrainStep::Output);
+        assert_eq!(item.unwrap().position, 1.0);
+        // An item it can't empty passes the middle.
+        let mut item = Some(DrainItem::inserted(Dir::North));
+        let mut ticks = 0;
+        for _ in 0..8 {
+            assert_eq!(
+                drain_tick(&mut item, &mut ticks, false, true),
+                DrainStep::Nothing
+            );
+        }
+        assert_eq!(
+            drain_tick(&mut item, &mut ticks, false, true),
+            DrainStep::Output
+        );
+    }
+
+    #[test]
+    fn the_drain_tank_takes_nothing_from_outside() {
+        let mut t = FluidTank::new(DRAIN_CAPACITY);
+        t.fluid = FluidStack::new(WATER, 1000);
+        let mut h = DrainTank(&mut t);
+        assert_eq!(h.fill(&FluidStack::new(WATER, 100), false), 0);
+        assert_eq!(h.drain_any(400, false).amount, 400);
+        assert_eq!(t.amount(), 600);
+        let b = drain_fluid_box(1.0).unwrap();
+        assert!((b[4] - 12.0 / 16.0).abs() < 1e-6);
     }
 }

@@ -130,6 +130,10 @@ CONTAINERS = {
     # block entity draws (SpoutRenderer).
     "spout": {"template": "minecraft:enchanting_table", "model": "create:block/spout/block",
               "shapes": {"default": [box(1, 2, 1, 15, 14, 15), box(2, 0, 2, 14, 16, 14)]}},
+    # ItemDrainBlock: AllShapes.CASING_13PX; its item and fluid are drawn by
+    # the native mod (ItemDrainRenderer).
+    "item_drain": {"template": "minecraft:enchanting_table", "model": "create:block/item_drain",
+                   "shapes": {"default": [box(0, 0, 0, 16, 13, 16)]}},
     # ArmBlock's `ceiling` needs a template property: arms stand on the floor.
     # The block keeps its base model; the native mod draws the cog and body.
     # ArmBlock's `ceiling` as its own state property (its blockstate is

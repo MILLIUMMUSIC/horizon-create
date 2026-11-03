@@ -183,7 +183,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      burner), each fluid ingredient from one tank as `BasinRecipe.apply` does; the fluids drawn side by side as
      `BasinRenderer` does.
    - Not yet: fluids without a block in Horizon (Create's honey, chocolate, tea, builder's tea, milk, potions) and
-     their pipe effects (`OpenPipeEffectHandler`), encased, glass and smart pipes, valves, brackets, particles and sounds, the item drain, the
+     their pipe effects (`OpenPipeEffectHandler`), encased, glass and smart pipes, valves, brackets, particles and sounds, the
      hose pulley, portable fluid interfaces. The goggles show a tank's and a basin's fluids and amounts
      (`containedFluidTooltip`).
    Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
@@ -456,6 +456,18 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    `SpoutRenderer` draws them. Not yet: `BlockSpoutingBehaviour` (filling blocks below: other mods' only),
    sequenced assembly's filling steps, potion and tea fluids (no fluid in Horizon), the splash and processing
    particles, the comparator (`levelOfSmartFluidTank`), the food advancements, spouts on contraptions.
+   The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
+   `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that
+   pipes drain from every side but the top and can't fill. Items come in from belts and chutes
+   (`DirectBeltInputBehaviour`), funnels and arms on its sides (the item handler; hoppers through the slot travel
+   south, as no side is known), and dropped on it (travelling north, as Create's `Direction.getNearest` of no
+   motion); one item is taken when it can be emptied. It moves 1/8 a tick, stops at the middle for 20 ticks while
+   the tank can take the fluid, is emptied at five (`create:emptying` recipes whose fluid Horizon has, water and lava
+   buckets, the water bottle), then goes on to what takes items from belts beyond, or is ejected when nothing solid
+   is there. A full bucket clicked on it empties into the tank; another click takes the held item back. The tank's
+   fluid and the item lying on it are drawn. Not yet: belt funnels on its sides (`tryExportingToBeltFunnel`), the
+   item's roll and the stream over it while emptying, potion and other fluids Horizon has no block for (honey, tea,
+   milk), the comparator, advancements.
 
 ## Rework onto Horizon's hooks (pin 674948d)
 
