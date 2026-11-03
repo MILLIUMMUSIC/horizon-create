@@ -225,6 +225,7 @@ impl Kind {
         match self {
             // RotatedPillarKineticBlock.AXIS
             Kind::Shaft(a) => Kind::Shaft(turn_axis(a)),
+            Kind::CrushingWheel(a) => Kind::CrushingWheel(turn_axis(a)),
             Kind::Cogwheel(a) => Kind::Cogwheel(turn_axis(a)),
             Kind::LargeCogwheel(a) => Kind::LargeCogwheel(turn_axis(a)),
             Kind::Gearbox(a) => Kind::Gearbox(turn_axis(a)),
@@ -259,6 +260,7 @@ impl Kind {
     pub fn state_property(self) -> Option<(&'static str, &'static str)> {
         match self {
             Kind::Shaft(a)
+            | Kind::CrushingWheel(a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::Gearbox(a)
@@ -452,6 +454,8 @@ pub enum Kind {
     /// `MechanicalCrafterBlock`: its horizontal facing (its `pointing` is in
     /// the block); a small cog about that axis, no shafts (crafter.rs).
     MechanicalCrafter(Dir),
+    /// `CrushingWheelBlock`: a shaft along its axis (crusher.rs).
+    CrushingWheel(Axis),
 }
 
 impl Kind {
@@ -464,6 +468,7 @@ impl Kind {
         }
         match name {
             "create:shaft" => axis().map(Kind::Shaft),
+            "create:crushing_wheel" => axis().map(Kind::CrushingWheel),
             "create:cogwheel" => axis().map(Kind::Cogwheel),
             "create:large_cogwheel" => axis().map(Kind::LargeCogwheel),
             "create:gearbox" => axis().map(Kind::Gearbox),
@@ -511,6 +516,7 @@ impl Kind {
     pub fn block(self) -> &'static str {
         match self {
             Kind::Shaft(_) => "create:shaft",
+            Kind::CrushingWheel(_) => "create:crushing_wheel",
             Kind::Cogwheel(_) => "create:cogwheel",
             Kind::LargeCogwheel(_) => "create:large_cogwheel",
             Kind::Gearbox(_) => "create:gearbox",
@@ -560,6 +566,7 @@ impl Kind {
     pub fn rotation_axis(self) -> Axis {
         match self {
             Kind::Shaft(a)
+            | Kind::CrushingWheel(a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::Gearbox(a)
@@ -591,6 +598,7 @@ impl Kind {
     pub fn has_shaft_towards(self, face: Dir) -> bool {
         match self {
             Kind::Shaft(a)
+            | Kind::CrushingWheel(a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::SplitShaft(_, a, _)
@@ -642,6 +650,7 @@ impl Kind {
             Kind::EncasedFan(_) => 2.0,
             Kind::MechanicalPump(_) => 4.0,
             Kind::MechanicalCrafter(_) => 2.0,
+            Kind::CrushingWheel(_) => 8.0,
             Kind::MechanicalMixer => 4.0,
             Kind::MechanicalArm => 2.0,
             Kind::Deployer(..) => 4.0,
@@ -2026,6 +2035,7 @@ impl Kinetics {
 fn kind_key(k: Kind) -> String {
     let state = match k {
         Kind::Shaft(a)
+        | Kind::CrushingWheel(a)
         | Kind::Cogwheel(a)
         | Kind::LargeCogwheel(a)
         | Kind::Gearbox(a)
@@ -2165,6 +2175,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::EncasedFan(d) => (9, dir(d)),
         Kind::MechanicalPump(d) => (12, dir(d)),
         Kind::MechanicalCrafter(d) => (27, dir(d)),
+        Kind::CrushingWheel(a) => (28, axis(a)),
         Kind::MechanicalMixer => (10, 0),
         Kind::Belt(b) => {
             let slope = Slope::ALL.iter().position(|s| *s == b.slope).unwrap_or(0) as u8;
@@ -2208,6 +2219,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         9 => Kind::EncasedFan(dir?),
         12 => Kind::MechanicalPump(dir?),
         27 => Kind::MechanicalCrafter(dir?),
+        28 => Kind::CrushingWheel(axis?),
         10 => Kind::MechanicalMixer,
         11 => Kind::Belt(BeltState {
             facing: Dir::ALL.get(usize::from(state & 7)).copied()?,

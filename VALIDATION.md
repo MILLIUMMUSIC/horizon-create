@@ -1011,3 +1011,12 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - Screenshots through a two-crafter craft: the planks moved from the upper crafter toward the lower while it exported,
   its lid stayed shut until the items had passed, and the stick showed turned at an angle before the lower crafter while
   it crafted; 4 more sticks ended in the chest.
+
+## Crushing wheels (macOS, offscreen)
+
+- Two wheels along Z with a block between, turned opposite ways by two creative motors at 16 rpm: a controller appeared
+  between them (`valid=true`, `facing=down`) and the OBJ model showed large and turning. 4 gravel dropped in took about
+  17 seconds (the timer falling 0.64 a tick: 1.28 divided by `log2` of 4) and came out as 4 sand on a depot below. One
+  gravel with nothing below fell straight down as sand. The ejected sand wasn't taken back (`BypassCrushingWheel`).
+  Not tried: sideways or upward wheels, belts and funnels into it, arms, breaking a wheel with items inside, milling
+  recipes, chance results.

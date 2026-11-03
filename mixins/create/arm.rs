@@ -118,6 +118,8 @@ pub enum PointType {
     BlazeBurner,
     /// `SawType`'s `DepotPoint`: a turning saw facing up.
     Saw,
+    /// `CrushingWheelPoint`: into the controller from above.
+    CrushingWheels,
 }
 
 impl PointType {
@@ -137,6 +139,7 @@ impl PointType {
             PointType::Crafter(_) => "create:crafter",
             PointType::BlazeBurner => "create:blaze_burner",
             PointType::Saw => "create:saw",
+            PointType::CrushingWheels => "create:crushing_wheels",
         }
     }
     /// `DepositOnlyArmInteractionPoint`.
@@ -147,13 +150,14 @@ impl PointType {
                 | PointType::Campfire
                 | PointType::RespawnAnchor
                 | PointType::BlazeBurner
+                | PointType::CrushingWheels
         )
     }
     /// `getInteractionPositionVector`, from the block's corner.
     pub fn interaction_offset(self) -> [f64; 3] {
         match self {
             // TopFaceArmInteractionPoint
-            PointType::Chute => [0.5, 1.0, 0.5],
+            PointType::Chute | PointType::CrushingWheels => [0.5, 1.0, 0.5],
             // DepotPoint (and BeltPoint)
             PointType::Depot | PointType::Belt | PointType::Saw => [0.5, 14.0 / 16.0, 0.5],
             PointType::Deployer(f) => {

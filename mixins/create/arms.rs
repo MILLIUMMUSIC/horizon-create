@@ -452,6 +452,8 @@ pub(super) enum Inv {
     Crafter(Vec<Pos>),
     /// `BlazeBurnerPoint.insert`: fuel, one at a time.
     Burner(Pos),
+    /// A crushing wheel controller's `ProcessingInventory`.
+    Crusher(Pos),
     /// The arm's `CampfirePoint`, `ComposterPoint` and `RespawnAnchorPoint`.
     Campfire(Pos),
     Composter(Pos),
@@ -678,7 +680,7 @@ impl ItemHandler for Inv {
             Inv::Chest(pos) => chest_items(game, *pos).map_or(0, |i| i.len()),
             Inv::Psi(pos) => super::create_actor_glue::psi_slots(game, *pos),
             Inv::Crafter(members) => members.len(),
-            Inv::Burner(_) => 1,
+            Inv::Burner(_) | Inv::Crusher(_) => 1,
             Inv::Campfire(_) | Inv::Composter(_) | Inv::Anchor(_) => 1,
         }
     }
@@ -851,6 +853,7 @@ impl ItemHandler for Inv {
                 Some(m) => super::create_crafter_glue::slot_insert(game, *m, stack, simulate),
                 None => Some(stack),
             },
+            Inv::Crusher(pos) => super::create_crusher_glue::insert(game, *pos, stack, simulate),
             // BlazeBurnerPoint.insert: one taken, the rest given back (its
             // container dropped); a single item gives back its container.
             Inv::Burner(pos) => {
@@ -960,7 +963,7 @@ impl ItemHandler for Inv {
             .flatten(),
             Inv::Composter(pos) => composter_extract(game, *pos, simulate).filter(|_| amount > 0),
             Inv::Crafter(members) => super::create_crafter_glue::slot_extract(game, *members.get(slot)?, amount, simulate),
-            Inv::Campfire(_) | Inv::Anchor(_) | Inv::Burner(_) => None,
+            Inv::Campfire(_) | Inv::Anchor(_) | Inv::Burner(_) | Inv::Crusher(_) => None,
         }
     }
 }
@@ -1090,6 +1093,7 @@ fn point_type_at(game: &Game<'_>, pos: Pos) -> Option<PointType> {
         name if super::create_logistics::is_chute_block(name) => Some(PointType::Chute),
         "create:millstone" => Some(PointType::Millstone),
         super::create_machines::BLAZE => Some(PointType::BlazeBurner),
+        super::create_crusher_glue::CONTROLLER => Some(PointType::CrushingWheels),
         // SawType: facing up and turning.
         n if super::create_machines::is_saw(n) => {
             (prop(game, pos, "facing").as_deref() == Some("up") && speed_at(game, pos) != 0.0).then_some(PointType::Saw)
@@ -1137,6 +1141,7 @@ impl ArmAt<'_, '_> {
             PointType::Composter => Some(Inv::Composter(point.pos)),
             PointType::RespawnAnchor => Some(Inv::Anchor(point.pos)),
             PointType::BlazeBurner => Some(Inv::Burner(point.pos)),
+            PointType::CrushingWheels => Some(Inv::Crusher(point.pos)),
             _ => handler_at(self.game, point.pos),
         }
     }

@@ -240,6 +240,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut drills: Vec<(Pos, Dir, f32, bool)> = Vec::new();
     let mut large_wheels: Vec<(Pos, Axis)> = Vec::new();
     let mut split_shafts: Vec<(Pos, Kind)> = Vec::new();
+    let mut crushing_wheels: Vec<(Pos, Axis, f32)> = Vec::new();
     let mut amounts: Vec<(Pos, i32)> = Vec::new();
     let save_now;
     {
@@ -375,6 +376,12 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             {
                 pumps.push((p, f, kinetics.speed_of(&level, p)));
             }
+            // Crushing wheels, for their controllers.
+            if let Some(Kind::CrushingWheel(a)) = kinetics.get(p).map(|e| e.kind)
+                && level.is_loaded(p)
+            {
+                crushing_wheels.push((p, a, kinetics.speed_of(&level, p)));
+            }
             // Gearshifts and clutches, for their redstone signal.
             if let Some(k @ Kind::SplitShaft(..)) = kinetics.get(p).map(|e| e.kind)
                 && level.is_loaded(p)
@@ -449,6 +456,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_logistics::chutes_update(game, dimension);
     super::create_logistics::tunnels_tick(game, dimension);
     super::create_crafter_glue::level_tick(game, dimension);
+    super::create_crusher_glue::level_tick(game, dimension, &crushing_wheels);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
     super::create_actor_glue::breakers_tick(game, dimension, &drills);
@@ -798,6 +806,12 @@ fn link_supported(level: &super::GameLevel<'_>, pos: Pos, facing: Dir) -> bool {
 /// `native_can_survive` for Create's blocks: the redstone link on a block
 /// that isn't replaceable.
 pub(super) fn can_survive(level: &super::GameLevel<'_>, pos: Pos, state: BlockStateId, survives: &mut Option<bool>) {
+    if let Some(s) = level.registry.state(state).filter(|s| s.name == super::create_crusher_glue::WHEEL)
+        && let Some(axis) = s.properties.get("axis").and_then(|a| Axis::parse(a))
+    {
+        *survives = Some(super::create_crusher_glue::wheel_survives(level, pos, axis));
+        return;
+    }
     if let Some(facing) = link_facing(level, state) {
         *survives = Some(link_supported(level, pos, facing));
     }
@@ -1628,6 +1642,9 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
     let mut scrolls: Vec<Option<(&'static str, String, f32)>> = Vec::new();
     match view.kind {
         Kind::Shaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
+        Kind::CrushingWheel(a) => {
+            want.push(("create:hz_crushing_wheel", Some(("axis", a.name())), id, a, standard, 0.0))
+        }
         Kind::Cogwheel(a) => {
             want.push(("create:hz_cogwheel", Some(("axis", a.name())), id, a, standard, 0.0))
         }

@@ -132,6 +132,7 @@ pub(super) fn reset() {
     *machines() = None;
     super::create_spout_glue::reset();
     super::create_crafter_glue::reset();
+    super::create_crusher_glue::reset();
     *CLIENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
@@ -146,7 +147,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || is_saw(block)) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || is_saw(block)) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -156,7 +157,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || is_saw(block) || super::create_logistics::is_chute_block(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || is_saw(block) || super::create_logistics::is_chute_block(block) {
         *ticks = true;
     }
 }
@@ -186,13 +187,16 @@ pub(super) fn block_entity_container(block: &str, container: &mut Option<ModCont
         // `create_crafter_glue::insert`, one item at a time); kept as a slot
         // so breaking drops it.
         super::create_crafter_glue::CRAFTER => (1, Vec::new(), Vec::new()),
+        // ProcessingInventory: its own insertion (`create_crusher_glue::insert`)
+        // for what is empty, nothing taken; a slot list so breaking drops it.
+        super::create_crusher_glue::CONTROLLER => (super::create_crusher::SLOTS, Vec::new(), Vec::new()),
         _ => return,
     };
     let all: Vec<usize> = (0..slots).collect();
     // The saw's inventory answers every side but the bottom.
     let bottom = is_saw(block);
     let sides_only = block == super::create_spout_glue::DRAIN;
-    let no_faces = block == super::create_crafter_glue::CRAFTER;
+    let no_faces = block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER;
     *container = Some(ModContainer {
         slots,
         faces: std::array::from_fn(|i| if (bottom && i == 0) || (sides_only && i < 2) || no_faces { Vec::new() } else { all.clone() }),
@@ -257,7 +261,7 @@ fn insert_stacked(
 }
 
 /// The recipes of `kind` (`create:pressing`) that take `stack`, first.
-fn find_recipe(game: &Game<'_>, kind: &'static str, stack: &ItemStack) -> Option<Recipe> {
+pub(super) fn find_recipe(game: &Game<'_>, kind: &'static str, stack: &ItemStack) -> Option<Recipe> {
     find_recipes(game, kind, stack).into_iter().next()
 }
 
@@ -810,6 +814,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         super::create_spout_glue::SPOUT => super::create_spout_glue::spout_tick(game, pos, entity),
         super::create_spout_glue::DRAIN => super::create_spout_glue::drain_tick(game, pos, entity),
         super::create_crafter_glue::CRAFTER => super::create_crafter_glue::tick(game, pos, entity),
+        super::create_crusher_glue::CONTROLLER => super::create_crusher_glue::tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {

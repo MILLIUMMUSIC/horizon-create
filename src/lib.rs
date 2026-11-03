@@ -16,6 +16,8 @@ pub mod create_chute;
 pub mod create_contraption;
 #[path = "../mixins/create/crafter.rs"]
 pub mod create_crafter;
+#[path = "../mixins/create/crusher.rs"]
+pub mod create_crusher;
 #[path = "../mixins/create/ct.rs"]
 pub mod create_ct;
 #[path = "../mixins/create/deployer.rs"]

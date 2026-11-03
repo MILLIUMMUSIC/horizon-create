@@ -83,6 +83,8 @@ ROTATING = {
     "shaft": {"shapes": [POLE], "particle": "create:block/axis"},
     "cogwheel": {"shapes": [POLE, SMALL_GEAR], "particle": "block/stripped_spruce_log_top"},
     "large_cogwheel": {"shapes": [POLE, LARGE_GEAR], "particle": "block/stripped_spruce_log_top"},
+    # CrushingWheelBlock: ENTITYBLOCK_ANIMATED, AllShapes' full collision.
+    "crushing_wheel": {"shapes": [box(0, 0, 0, 16, 16, 16)], "particle": "create:block/palettes/stone_types/cut/andesite_cut"},
 }
 
 # Directional kinetic blocks: a template with all six facings and nothing
@@ -713,6 +715,7 @@ def fit_logistics(content, names):
     fit_blaze_burner(content, names)
     fit_redstone_link(content, names)
     fit_mechanical_crafter(content)
+    fit_crushing_wheel_controller(content)
     fit_psi(content)
     fit_contacts(content, names)
     fit_large_wheel(content, names)
@@ -1359,6 +1362,29 @@ def fit_redstone_link(content, names):
             props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
             out[f"facing={props['facing']},powered={props['powered']},receiver={props['receiver']}"] = model
         write_json(states / "redstone_link.json", {"variants": out})
+
+
+# The controller between two crushing wheels: a lightning rod's six facings
+# (no occlusion, letting the wheels show), with its own `valid`; nothing drawn,
+# `AllShapes.CRUSHING_WHEEL_CONTROLLER_COLLISION` (made for `down`), no item.
+def fit_crushing_wheel_controller(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    name = "crushing_wheel_controller"
+    opposite = {"down": "up", "up": "down", "north": "south", "south": "north", "west": "east", "east": "west"}
+    decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+    decl["template"] = "minecraft:lightning_rod"
+    decl["item"] = False
+    decl.pop("default_state", None)
+    decl["state_properties"] = {"valid": {"type": "boolean"}}
+    decl["default_state"] = {"valid": "false"}
+    full = box(0, 0, 0, 16, 16, 16)
+    decl["shapes"] = {"property": "facing", "values": {f: [full] for f in FACINGS}}
+    decl["collision_shapes"] = {"property": "facing", "values": {
+        f: [facing_box(opposite[f], box(0, 0, 0, 16, 13, 16))] for f in FACINGS}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / f"{name}.json", decl)
+    write_json(states / f"{name}.json", {"multipart": [{"apply": {"model": "minecraft:block/air"}}]})
 
 
 # The mechanical crafter (HorizontalKineticBlock with `pointing`): a stone

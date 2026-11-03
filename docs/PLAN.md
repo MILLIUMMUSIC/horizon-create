@@ -480,6 +480,21 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    components (`GroupedItems.write`). The items move along the way out while exporting, gather and shrink as it crafts,
    and the result spins out (`renderItems`, the countdown told to clients). Not yet: the belt's scrolling texture, the
    connected casing (`CrafterCTBehaviour`), the firework recipe's ingredient limit, the particles, advancements.
+   The crushing wheels (`crusher.rs`, `crusher_glue.rs`: `CrushingWheelBlock`, `CrushingWheelControllerBlock`,
+   `CrushingWheelControllerBlockEntity`): `Kind::CrushingWheel`, a shaft along its axis (8 su per rpm), drawn turning
+   from its OBJ model. Two wheels on one axis with a block between get a controller there (`updateControllers`:
+   `valid` and its facing from their opposite speeds, looked at when a speed changes and every 20 ticks; it goes,
+   dropping what it holds, when a wheel goes). Items in its cell, or from belts, funnels, chutes and arms
+   (`CrushingWheelPoint`, deposit only), are crushed with `create:crushing` then `create:milling` recipes at the
+   wheels' speed (a stack slower, by `log2` of its count; with no recipe the items are gone, as in Create), each item
+   rolled, and the results go to what takes items from belts below (or along a sideways facing) or are thrown the way
+   it faces. Decisions, as Horizon has no collision shape for one entity: an item in the cell goes in at once rather
+   than being drawn through slowly, and results start clear of the controller's collision (Create throws them 0.55
+   out with its collision empty for them); `BypassCrushingWheel` is kept for the items thrown out. Hoppers don't
+   reach it (a mod container has no slot limit or validity hook: **blocked on the engine**, no issue). Not yet: hurting
+   and killing what stands in it (with the actors' entity damage), pushing entities on top of a wheel
+   (`entityInside`), the ambient sound and crit particles, item particles (they don't go over the network), the
+   wheels' advancements.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that
    pipes drain from every side but the top and can't fill. Items come in from belts and chutes

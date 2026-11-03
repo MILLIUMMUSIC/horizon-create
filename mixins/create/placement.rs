@@ -243,6 +243,7 @@ pub fn gauge(ctx: &Ctx, around: &dyn Around) -> (Dir, bool) {
 pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
     Some(match kind {
         Kind::Shaft(_) => Kind::Shaft(rotated_pillar(ctx, around)),
+        Kind::CrushingWheel(_) => Kind::CrushingWheel(rotated_pillar(ctx, around)),
         Kind::Cogwheel(_) => Kind::Cogwheel(cog_axis(ctx, around)),
         Kind::LargeCogwheel(_) => Kind::LargeCogwheel(cog_axis(ctx, around)),
         // GearboxBlock: always upright.

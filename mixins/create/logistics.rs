@@ -213,6 +213,9 @@ fn can_insert_from_side(game: &Game<'_>, pos: Pos, side: Dir) -> bool {
         let speed = belt_speed(game, pos);
         return b.can_transport_objects() && speed != 0.0 && b.movement_facing(speed) != side.opposite();
     }
+    if let Some((facing, _)) = super::create_crusher_glue::controller_at(game, pos) {
+        return super::create_crusher::takes_from_side(facing, side);
+    }
     has_direct_input(game, pos)
 }
 
@@ -410,6 +413,9 @@ fn has_inventory(game: &Game<'_>, pos: Pos) -> bool {
 /// `stack` into the inventory at `pos` through its side `face`: what is
 /// left (all of it when there is none).
 fn insert_into(game: &mut Game<'_>, pos: Pos, face: Dir, stack: ItemStack) -> Option<ItemStack> {
+    if block_name(game, pos).as_deref() == Some(super::create_crusher_glue::CONTROLLER) {
+        return super::create_crusher_glue::insert(game, pos, stack, false);
+    }
     // The mechanical crafter's slot takes one item at a time.
     if block_name(game, pos).as_deref() == Some(super::create_crafter_glue::CRAFTER) {
         return super::create_crafter_glue::insert(game, pos, stack);
@@ -688,7 +694,7 @@ fn has_direct_input(game: &Game<'_>, pos: Pos) -> bool {
         return true;
     }
     match block_name(game, pos).as_deref() {
-        Some(super::create_machines::DEPOT | super::create_spout_glue::DRAIN) => true,
+        Some(super::create_machines::DEPOT | super::create_spout_glue::DRAIN | super::create_crusher_glue::CONTROLLER) => true,
         Some(name) if super::create_machines::is_saw(name) => prop(game, pos, "facing").as_deref() == Some("up"),
         // canDirectlyInsert: an open chute not under one facing down.
         Some(name) if is_chute_block(name) => {
@@ -704,6 +710,10 @@ fn has_direct_input(game: &Game<'_>, pos: Pos) -> bool {
 fn direct_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack, side: Dir) -> Option<Option<ItemStack>> {
     match block_name(game, pos).as_deref() {
         Some(super::create_spout_glue::DRAIN) => super::create_spout_glue::drain_insert(game, pos, side, stack, false),
+        Some(super::create_crusher_glue::CONTROLLER) => {
+            let left = super::create_crusher_glue::insert(game, pos, stack.clone(), false);
+            (left.as_ref().map(|l| l.count) != Some(stack.count)).then_some(left)
+        }
         Some(super::create_machines::DEPOT) => {
             // DepotBehaviour.tryInsertingFromSide: an empty depot only.
             let max = stack.max_stack();
@@ -2830,6 +2840,9 @@ fn side_insert(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack, simul
             }
             e.inv.insert_from_side(&belt, segment_state, index, &Transported::new(stack.clone(), angle), side, false)
         });
+    }
+    if simulate && block_name(game, pos).as_deref() == Some(super::create_crusher_glue::CONTROLLER) {
+        return super::create_crusher_glue::insert(game, pos, stack, true);
     }
     if simulate && block_name(game, pos).as_deref() == Some(super::create_spout_glue::DRAIN) {
         return super::create_spout_glue::drain_insert(game, pos, side, stack.clone(), true).unwrap_or(Some(stack));
