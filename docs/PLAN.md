@@ -412,13 +412,13 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
 6. **Trains**: track graph, signals, stations, schedules. **Blocked on the engine** (checked 2026-11-04): a carriage
    is a contraption entity that runs on tracks across chunks with its own collision and bogeys that follow curved
    track blocks, and trains need mod entity types (#5556, #5212, #6300, all open), curved track shapes keyed by
-   more than a template's properties (#5550, open) and a map screen for the station and schedule screens
-   (no issue: a mod-drawn screen outside a container menu has no hook, see the gap below). Not started; the
+   more than a template's properties (#5550, open); the station and schedule screens could use the pin's
+   `native_screen*` hooks (found 2026-11-04, see below). Not started; the
    track graph and signal rules could be written as pure modules but nothing of them could be seen or used without
    the carriage entity, so they wait for it.
-7. **Everything else**: Ponder scenes (**blocked on the engine**: mod-drawn screens with a free cursor and an
-   offscreen scene renderer; no issue), schematics and the schematicannon (**blocked on the engine** for the
-   schematic table and the schematic selection screens; the cannon's firing could be ported after them), decoration
+7. **Everything else**: Ponder scenes (an offscreen scene renderer and a free-cursor screen: the pin has
+   `native_screen*` hooks, but no scene renderer; treated as engine-blocked until one exists, no issue), schematics
+   and the schematicannon (screens through `native_screen*`, to be looked at), decoration
    sets, Create's compatibility with other mods (**blocked on the engine**: no shared capabilities, #1040 for item
    storage only, nothing for fluids or energy). The rest of this milestone is ported item by item below; what is
    done is in the README's estimate.
@@ -498,8 +498,14 @@ hooks before the remaining "Not yet" items are ported.
 
 
 - A mod-drawn screen outside a container menu, with a free cursor: Create 6's value settings board (hold right
-  click on a value box, pick a value with the mouse) has nowhere to open. The value box takes the mouse wheel
-  instead (`native_wheel`, as Create 0.5 did).
+  click on a value box, pick a value with the mouse). The pin has `native_screen`, `native_screen_draw` and the
+  `native_screen_*` input hooks (found 2026-11-04, not used yet); until a board is built on them the value boxes take
+  the mouse wheel (`native_wheel`, as Create 0.5 did).
+- Found on the pin 2026-11-04 and not yet used: `native_interact_entity` (an item used on an entity: feeding,
+  capturing a blaze), `native_block_entity_fluids` and `native_item_fluid_tank` (fluids in block entities and items),
+  `native_block_entity_energy`, `native_can_survive`, `native_may_place_on`, `native_neighbor_changed`,
+  `native_tick_block`, `native_random_tick`, `native_block_highlight`, `native_emissive`. Used since: `native_block_signal`
+  and `native_is_signal_source` (the redstone link).
 - Fixed on the new pin: `native_state_for_placement` (`placement.rs`) places shafts, cogwheels, large cogwheels,
   gearboxes, creative motors, hand cranks, presses, fans, water wheels, drills, bearings, rope pulleys, pumps, the
   redstone contact, the portable storage interface, harvesters, ploughs, the arm and the vault as Create's
