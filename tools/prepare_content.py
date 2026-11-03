@@ -229,6 +229,7 @@ PARTIALS = {
     "encased_fan_inner": "create:block/encased_fan/propeller",
     "cogwheel_shaftless": "create:block/cogwheel_shaftless",
     "turntable": "create:block/turntable",
+    "speed_controller_bracket": "create:block/rotation_speed_controller/bracket",
     "large_cogwheel_shaftless": "create:block/large_cogwheel_shaftless",
     "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
     "mechanical_mixer_head": "create:block/mechanical_mixer/head",
@@ -722,6 +723,7 @@ def fit_logistics(content, names):
     fit_crushing_wheel_controller(content)
     fit_encased_cogwheels(content)
     fit_turntable(content)
+    fit_speed_controller(content)
     fit_chain_drives(content)
     fit_psi(content)
     fit_contacts(content, names)
@@ -1369,6 +1371,17 @@ def fit_redstone_link(content, names):
             props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
             out[f"facing={props['facing']},powered={props['powered']},receiver={props['receiver']}"] = model
         write_json(states / "redstone_link.json", {"variants": out})
+
+
+# The rotation speed controller: a log's `axis`, AllShapes.SPEED_CONTROLLER; the
+# native mod keeps it horizontal.
+def fit_speed_controller(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    name = "rotation_speed_controller"
+    decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+    decl["template"] = "minecraft:oak_log"
+    decl["shapes"] = {"default": [box(0, 0, 0, 16, 4, 16), box(1, 1, 1, 15, 13, 15)]}
+    write_json(blocks / f"{name}.json", decl)
 
 
 # The turntable: AllShapes.TURNTABLE_SHAPE on stone; its model turns whole.

@@ -305,6 +305,10 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 amounts.push((pos, value));
                 continue;
             }
+            if matches!(kind_at(game, pos), Some(Kind::SpeedController(_))) {
+                kinetics.set_controller_target(&mut level, pos, value);
+                continue;
+            }
             if matches!(kind_at(game, pos), Some(Kind::CreativeMotor(_))) {
                 if kinetics.get(pos).is_none() {
                     kinetics.on_placed(pos, kind_at(game, pos).expect("a motor"));
@@ -734,6 +738,12 @@ pub(super) fn state_for_placement(
         level: &'a super::GameLevel<'w>,
         pos: Pos,
     }
+    impl Near<'_, '_> {
+        fn kind_above(&self) -> Option<Kind> {
+            let s = self.level.registry.state(self.level.world.block(self.pos[0], self.pos[1] + 1, self.pos[2]))?;
+            Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str))
+        }
+    }
     impl super::create_placement::Around for Near<'_, '_> {
         fn kind(&self, side: Dir) -> Option<Kind> {
             let n = side.normal();
@@ -761,9 +771,16 @@ pub(super) fn state_for_placement(
         pitch: context.pitch,
         sneaking: context.sneaking,
     };
-    let Some(placed) = super::create_placement::place(kind, &ctx, &Near { level, pos }) else {
+    let Some(mut placed) = super::create_placement::place(kind, &ctx, &Near { level, pos }) else {
         return;
     };
+    if let Kind::SpeedController(_) = placed
+        && let Some(above) = (Near { level, pos }).kind_above()
+        && above.is_large_cog()
+        && above.rotation_axis() != Axis::Y
+    {
+        placed = Kind::SpeedController(if above.rotation_axis() == Axis::X { Axis::Z } else { Axis::X });
+    }
     // ChainDriveBlock.getStateForPlacement: its part from its neighbours, and
     // a gearshift's `powered` follows at its first tick.
     if let Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) = placed {
@@ -1587,10 +1604,14 @@ fn looked_at_value_box(game: &Game<'_>) -> Option<(Pos, i32)> {
         return None;
     }
     let view = c.view.blocks.get(&hit.pos)?;
+    let local = [0, 1, 2].map(|k| (hit.point[k] - f64::from(hit.pos[k])) as f32);
+    if let Kind::SpeedController(axis) = view.kind {
+        return super::create_kinetics::hits_controller_value_box(axis, Dir::nearest(hit.face), local)
+            .then_some((hit.pos, i32::from(view.aux)));
+    }
     let Kind::CreativeMotor(facing) = view.kind else {
         return None;
     };
-    let local = [0, 1, 2].map(|k| (hit.point[k] - f64::from(hit.pos[k])) as f32);
     hits_motor_value_box(facing, Dir::nearest(hit.face), local)
         .then_some((hit.pos, i32::from(view.aux)))
 }
@@ -1905,6 +1926,16 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
         }
         Kind::Turntable => want.push(("create:hz_part_turntable", None, id, Axis::Y, standard, 0.0)),
+        // SpeedControllerRenderer: its shaft, and the bracket holding a large
+        // cog above (`hasBracket`).
+        Kind::SpeedController(a) => {
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+            let above = kind_at(game, [pos[0], pos[1] + 1, pos[2]]);
+            if above.is_some_and(|k| k.is_large_cog() && k.rotation_axis() != Axis::Y && k.rotation_axis() != a) {
+                let turn = if a == Axis::X { std::f32::consts::PI } else { std::f32::consts::FRAC_PI_2 };
+                want.push(("create:hz_part_speed_controller_bracket", None, glam::Mat4::from_rotation_y(turn), Axis::Y, 0.0, -1.0));
+            }
+        }
         Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => {
             want.push(("create:hz_shaft", Some(("axis", c.axis.name())), id, c.axis, standard, 0.0))
         }

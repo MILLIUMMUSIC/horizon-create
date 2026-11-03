@@ -228,6 +228,10 @@ impl Kind {
             Kind::CrushingWheel(a) => Kind::CrushingWheel(turn_axis(a)),
             Kind::EncasedShaft(b, a) => Kind::EncasedShaft(b, turn_axis(a)),
             Kind::Flywheel(a) => Kind::Flywheel(turn_axis(a)),
+            // HorizontalAxisKineticBlock: only from above or below.
+            Kind::SpeedController(a) if face.axis() == Axis::Y => {
+                Kind::SpeedController(if a == Axis::X { Axis::Z } else { Axis::X })
+            }
             // ChainDriveBlock.getRotatedBlockState: about its connection's
             // axis when it is part of a line; the parts follow (glue).
             Kind::ChainDrive(c) => {
@@ -295,6 +299,7 @@ impl Kind {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
             | Kind::Flywheel(a)
+            | Kind::SpeedController(a)
             | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
@@ -494,6 +499,8 @@ pub enum Kind {
     MechanicalCrafter(Dir),
     /// `CrushingWheelBlock`: a shaft along its axis (crusher.rs).
     CrushingWheel(Axis),
+    /// `SpeedControllerBlock`: its horizontal axis; its target is `motor_speed`.
+    SpeedController(Axis),
     /// `FlywheelBlock`: a shaft along its axis, no stress.
     Flywheel(Axis),
     /// `TurntableBlock`: turned from below.
@@ -521,6 +528,7 @@ impl Kind {
             "create:shaft" => axis().map(Kind::Shaft),
             "create:crushing_wheel" => axis().map(Kind::CrushingWheel),
             "create:flywheel" => axis().map(Kind::Flywheel),
+            "create:rotation_speed_controller" => axis().map(Kind::SpeedController),
             "create:turntable" => Some(Kind::Turntable),
             "create:encased_chain_drive" | "create:adjustable_chain_gearshift" => axis().map(|a| {
                 let c = super::create_chain::Chain {
@@ -597,6 +605,7 @@ impl Kind {
             Kind::Shaft(_) => "create:shaft",
             Kind::CrushingWheel(_) => "create:crushing_wheel",
             Kind::Flywheel(_) => "create:flywheel",
+            Kind::SpeedController(_) => "create:rotation_speed_controller",
             Kind::Turntable => "create:turntable",
             Kind::ChainDrive(_) => "create:encased_chain_drive",
             Kind::ChainGearshift(..) => "create:adjustable_chain_gearshift",
@@ -657,6 +666,7 @@ impl Kind {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
             | Kind::Flywheel(a)
+            | Kind::SpeedController(a)
             | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
@@ -694,6 +704,7 @@ impl Kind {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
             | Kind::Flywheel(a)
+            | Kind::SpeedController(a)
             | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
@@ -1053,7 +1064,7 @@ impl Kinetics {
                     e.mixing.running_ticks.clamp(0, i16::MAX as i32) as i16
                 }
                 // The scroll value box shows the motor's setting.
-                Kind::CreativeMotor(_) => e.motor_speed as i16,
+                Kind::CreativeMotor(_) | Kind::SpeedController(_) => e.motor_speed as i16,
                 // The wheel's wood, the belt's dye.
                 Kind::WaterWheel(_) | Kind::LargeWaterWheel(_) | Kind::Belt(_) => {
                     i16::from(e.material)
@@ -1598,7 +1609,25 @@ impl Kinetics {
         }
     }
     fn conveyed_speed(&self, from: Pos, to: Pos) -> f32 {
+        // Rotation Speed Controller <-> Large Gear
+        if is_large_cog_to_controller(self.e(from).kind, self.e(to).kind, sub(to, from)) {
+            return self.controller_conveyed(from, to, true);
+        }
+        if is_large_cog_to_controller(self.e(to).kind, self.e(from).kind, sub(from, to)) {
+            return self.controller_conveyed(to, from, false);
+        }
         self.theoretical(from) * self.rotation_speed_modifier(from, to)
+    }
+    /// `SpeedControllerBlockEntity.getConveyedSpeed`.
+    fn controller_conveyed(&self, wheel: Pos, controller: Pos, targeting: bool) -> f32 {
+        let c = self.e(controller);
+        controller_conveyed_speed(
+            c.motor_speed as f32,
+            self.theoretical(controller),
+            self.theoretical(wheel),
+            c.source.map(|s| s == wheel),
+            targeting,
+        )
     }
     /// `handleAdded`.
     fn handle_added(&mut self, level: &mut dyn Level, pos: Pos) {
@@ -1743,7 +1772,8 @@ impl Kinetics {
         }
     }
     fn is_connected(&self, from: Pos, to: Pos) -> bool {
-        self.rotation_speed_modifier(from, to) != 0.0
+        is_large_cog_to_controller(self.e(from).kind, self.e(to).kind, sub(to, from))
+            || self.rotation_speed_modifier(from, to) != 0.0
     }
     fn connected_neighbours(&self, level: &dyn Level, pos: Pos) -> Vec<Pos> {
         if !self.has(pos) {
@@ -2049,6 +2079,20 @@ impl Kinetics {
         true
     }
     /// The creative motor's scroll value changed.
+    /// `SpeedControllerBlockEntity.updateTargetRotation`, its value scrolled.
+    pub fn set_controller_target(&mut self, level: &mut dyn Level, pos: Pos, rpm: i32) {
+        if !self.has(pos) {
+            return;
+        }
+        self.em(pos).motor_speed =
+            rpm.clamp(-(MAX_ROTATION_SPEED as i32), MAX_ROTATION_SPEED as i32);
+        if let Some(id) = self.e(pos).network {
+            self.network_remove(level, id, pos);
+        }
+        self.detach_kinetics(level, pos);
+        self.remove_source(level, pos);
+        self.attach_kinetics(level, pos);
+    }
     /// `ChainGearshiftBlockEntity.analogSignalChanged`.
     pub fn set_chain_signal(&mut self, level: &mut dyn Level, pos: Pos, signal: i32) {
         if !self.has(pos) || self.e(pos).chain_signal == signal {
@@ -2191,6 +2235,7 @@ fn kind_key(k: Kind) -> String {
         Kind::Shaft(a)
         | Kind::CrushingWheel(a)
         | Kind::Flywheel(a)
+        | Kind::SpeedController(a)
         | Kind::EncasedShaft(_, a)
         | Kind::Cogwheel(a)
         | Kind::LargeCogwheel(a)
@@ -2275,6 +2320,63 @@ fn parse_kind_key(s: &str) -> Option<Kind> {
         }),
         _ => None,
     })
+}
+
+/// `isLargeCogToSpeedController`: a large cog on a horizontal axis right above
+/// a controller running across it.
+fn is_large_cog_to_controller(from: Kind, to: Kind, diff: Pos) -> bool {
+    let Kind::SpeedController(axis) = to else {
+        return false;
+    };
+    from.is_large_cog()
+        && diff == [0, -1, 0]
+        && from.rotation_axis() != Axis::Y
+        && from.rotation_axis() != axis
+}
+
+/// `SpeedControllerBlockEntity.getConveyedSpeed` and `getDesiredOutputSpeed`:
+/// `wheel_powers` is none without a source, else whether the wheel is it.
+pub fn controller_conveyed_speed(
+    target: f32,
+    speed: f32,
+    wheel: f32,
+    wheel_powers: Option<bool>,
+    targeting: bool,
+) -> f32 {
+    let desired = if target == 0.0 || (targeting && wheel == 0.0) {
+        0.0
+    } else {
+        match wheel_powers {
+            None if targeting => target,
+            None => 0.0,
+            Some(true) if targeting => target,
+            Some(true) => wheel,
+            Some(false) if targeting => speed,
+            Some(false) => target,
+        }
+    };
+    let compare = if targeting { speed } else { wheel };
+    if desired >= 0.0 && compare >= 0.0 {
+        desired.max(compare)
+    } else if desired < 0.0 && compare < 0.0 {
+        desired.min(compare)
+    } else {
+        desired
+    }
+}
+
+/// `ControllerValueBoxTransform`: the box on the sides off its axis, 11/16 up.
+pub fn hits_controller_value_box(axis: Axis, side: Dir, local: [f32; 3]) -> bool {
+    if side.axis() == Axis::Y || side.axis() == axis {
+        return false;
+    }
+    let along = if side.axis() == Axis::X {
+        local[2]
+    } else {
+        local[0]
+    };
+    let (du, dv) = (along - 0.5, local[1] - 11.0 / 16.0);
+    (du * du + dv * dv).sqrt() < 0.25
 }
 
 fn chain_code(c: super::create_chain::Chain) -> u8 {
@@ -2393,6 +2495,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::CrushingWheel(a) => (28, axis(a)),
         Kind::EncasedShaft(b, a) => (29, axis(a) | u8::from(b) << 2),
         Kind::Flywheel(a) => (31, axis(a)),
+        Kind::SpeedController(a) => (35, axis(a)),
         Kind::Turntable => (32, 0),
         Kind::ChainDrive(c) => (33, chain_code(c)),
         Kind::ChainGearshift(c, p) => (34, chain_code(c) | u8::from(p) << 5),
@@ -2445,6 +2548,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         27 => Kind::MechanicalCrafter(dir?),
         28 => Kind::CrushingWheel(axis?),
         31 => Kind::Flywheel(axis?),
+        35 => Kind::SpeedController(axis?),
         32 => Kind::Turntable,
         33 => Kind::ChainDrive(chain_from_code(state)?),
         34 => Kind::ChainGearshift(chain_from_code(state)?, state & 32 != 0),
@@ -2875,6 +2979,34 @@ mod tests {
             Kind::Turntable.has_shaft_towards(Dir::Down)
                 && !Kind::Turntable.has_shaft_towards(Dir::Up)
         );
+    }
+
+    #[test]
+    fn a_controller_sets_the_speed_of_the_large_cog_above_it() {
+        let mut r = Rig::new();
+        r.place([0, 64, -1], Kind::CreativeMotor(Dir::South));
+        r.place([0, 64, 0], Kind::SpeedController(Axis::Z));
+        r.place([0, 65, 0], Kind::LargeCogwheel(Axis::X));
+        r.place([1, 65, 0], Kind::Shaft(Axis::X));
+        r.ticks(4);
+        assert_eq!(r.speed([0, 64, 0]), 16.0);
+        assert_eq!(r.speed([0, 65, 0]).abs(), 16.0);
+        r.k.set_controller_target(&mut r.world, [0, 64, 0], 64);
+        r.ticks(6);
+        assert_eq!(r.speed([0, 64, 0]), 16.0);
+        assert_eq!(r.speed([1, 65, 0]).abs(), 64.0);
+        // Stopped with no input.
+        assert_eq!(controller_conveyed_speed(64.0, 0.0, 0.0, None, false), 0.0);
+        assert!(hits_controller_value_box(
+            Axis::Z,
+            Dir::West,
+            [0.0, 0.7, 0.5]
+        ));
+        assert!(!hits_controller_value_box(
+            Axis::Z,
+            Dir::North,
+            [0.5, 0.7, 0.0]
+        ));
     }
 
     #[test]

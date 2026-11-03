@@ -254,6 +254,9 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         Kind::Shaft(_) => Kind::Shaft(rotated_pillar(ctx, around)),
         Kind::CrushingWheel(_) => Kind::CrushingWheel(rotated_pillar(ctx, around)),
         Kind::Flywheel(_) => Kind::Flywheel(rotated_pillar(ctx, around)),
+        // SpeedControllerBlock.getStateForPlacement: across a large cog above
+        // (in the native mod), else HorizontalAxisKineticBlock's.
+        Kind::SpeedController(_) => Kind::SpeedController(horizontal_axis(ctx, around)),
         // ChainDriveBlock.getStateForPlacement: its look when sneaking, else
         // the shafts around; its part comes from its neighbours (glue).
         Kind::ChainDrive(_) => {

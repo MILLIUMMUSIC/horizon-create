@@ -1041,3 +1041,10 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A pig on a turntable turned by about 4.8 degrees a tick at 16 RPM (`Rotation` read twice a second); the window's
   player standing on it turned by about 5.8 degrees a tick.
   Not tried: chains at right angles, the wrench on a chain, placing them by hand, a player carried over a table's edge.
+
+## Rotation speed controller (macOS, offscreen)
+
+- A motor at 16 RPM into a controller under a large cog on a crossing axis, with a shaft and a speedometer on the cog: 8
+  steps of the mouse wheel on the controller's value box set the speedometer to 96 RPM (the steps as the motor's: 4 up to
+  32, then 16), the motor's own 16 unchanged, and the bracket showed under the cog. The default 16 wasn't read first
+  (that speedometer's shaft wasn't aligned). Not tried: a target below the input, reversing, placing it by hand under a cog.

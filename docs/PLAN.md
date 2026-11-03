@@ -513,6 +513,12 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    `speed * 3 / 10` degrees a tick (`entityInside`, through `/tp`), the window's player's view turns
    (`TurntableHandler`, a tick at a time rather than each frame, LAN guests not) and a box over its edge is carried
    round. Not yet: rotating and mirroring chains on contraptions (`transform`).
+   The rotation speed controller (`Kind::SpeedController`: `SpeedControllerBlock`, `SpeedControllerBlockEntity`,
+   `RotationPropagator.isLargeCogToSpeedController`): a shaft along its horizontal axis, AllShapes' shape, placed across
+   a large cog above; it sets that cog's speed (`getConveyedSpeed`, `getDesiredOutputSpeed`) to its target, saved with
+   the kinetics. The mouse wheel over its value box steps the target in place of Create 6's value board, as on the
+   motor (so 0, which the board allows, isn't reached). Its shaft and the bracket under the cog are drawn. Not yet: its
+   value's tooltip, `PlacementHelper` (a large cog placed from the controller), the advancement.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that
    pipes drain from every side but the top and can't fill. Items come in from belts and chutes
