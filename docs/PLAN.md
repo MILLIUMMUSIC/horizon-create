@@ -419,8 +419,8 @@ takes no alpha). Used by: the large water wheel's `showBounds`, the arm's select
 
 ## Engine gaps to raise upstream (as hook point requests)
 
-Upstream issues for these gaps (horizon-rust/horizon), checked 2026-11-03. Closed after the pinned `aa27eca`, so
-usable once the pin moves: #5290 (a mod block declares its own state properties: belts, pipes, funnels, tunnels,
+Upstream issues for these gaps (horizon-rust/horizon), checked 2026-11-03. Closed after the old pin `aa27eca`, so
+usable now that the pin moved (see the decision below): #5290 (a mod block declares its own state properties: belts, pipes, funnels, tunnels,
 tanks, the vault's `LARGE`, the arm's `ceiling`), #5549 (block entities for mod blocks whatever their template),
 #5497 (a mod block's comparator output), #5482 and #5483 (mod particle types), #6138 (random ticks on any mod
 block), #1040 (mod capability: storage). Still open: #5548 (drawing baked models at a block every frame),
@@ -428,9 +428,10 @@ block), #1040 (mod capability: storage). Still open: #5548 (drawing baked models
 (mod fluids), #5556 (fake players, mod entity types, moving groups of blocks), #5212 and #6300 (mod entity and
 block types from code), #7465 (a mod particle's own behaviour). None found for mod sound events.
 
-Decision (2026-11-03): the pin stays at `aa27eca` while the "Not yet" items that work there are ported; moving it
-(about 6800 commits, the mixins checked again) is a step of its own after that, and the gaps the issues above closed
-come back as work then, ported as Create does them.
+Decision (2026-11-03, revised the same day at the user's request): the pin moved from `aa27eca` to Horizon main
+`674948d` (2026-11-03) and horizon-mixins `ddd9700`; every mixin applied unchanged (one API change: `Ingredient` is a
+struct, `.order` for its listed items). The workarounds the closed issues above replace are reworked onto the new
+hooks before the remaining "Not yet" items are ported.
 
 
 - A mod-drawn screen outside a container menu, with a free cursor: Create 6's value settings board (hold right

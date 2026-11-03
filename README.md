@@ -85,7 +85,7 @@ blocks against it (a plain right click on it does nothing, as the barrel templat
 
 ```text
 mixins/create/
-  horizon-mixin.toml   the bundle: modules and injections, pinned to Horizon Nightly 2026-10-31 (aa27eca)
+  horizon-mixin.toml   the bundle: modules and injections, pinned to Horizon main of 2026-11-03 (674948d)
   kinetics.rs          Create's kinetic rules, the wrench's turns, the motor's value box, no Horizon types
   processing.rs        pressing and mixing cycles, processing and basin recipes, millstone and water wheel rules
   fan.rs               the encased fan's air current and fan processing rules, no Horizon types
@@ -113,7 +113,7 @@ tools/
 ## Build and run
 
 Needs Rust 1.99.1, Python 3.12 (for `tools/horizon.py`), Git, a Horizon checkout and a horizon-mixins checkout at
-`3f99a5c` (the revision the Horizon launcher builds native mods with).
+`ddd9700` (the revisions are in `compatibility.json`; players need a Horizon build at or past `674948d`).
 
 ```sh
 cargo test                                   # the kinetic core, standalone

@@ -3,11 +3,11 @@ id = "create"
 version = "0.1.0"
 priority = 100
 
-# Pinned to the Nightly it was built and tested on (2026-10-31). The draw
+# Pinned to the Nightly it was built and tested on (2026-11-03). The draw
 # hook targets a game function outside the native hook points, so the mod
 # pins a commit instead of naming a hooks API.
 [compatibility]
-horizon_revision = "aa27eca326db26e999d4e59d7899576016764b1e"
+horizon_revision = "674948d0826adfd2807f8dd7b57a9ef9c4f19c09"
 
 [[module]]
 id = "belt"

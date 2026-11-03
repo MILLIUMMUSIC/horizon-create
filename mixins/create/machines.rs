@@ -263,7 +263,7 @@ fn ingredient(game: &Game<'_>, json: &serde_json::Value) -> Option<Ingredient> {
         .collect();
     let items = game.items();
     let known: Vec<String> = Ingredient::parse(&serde_json::Value::Array(list), items)?
-        .1
+        .order
         .into_iter()
         .filter(|item| items.get(item).is_some())
         .collect();
