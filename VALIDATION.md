@@ -946,6 +946,7 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 ## Blaze burner (macOS, offscreen)
 
 - A blaze burner set down is `heat_level=smouldering`; a click with coal makes it `kindled` (screenshot: the cage with
-  its rods and head drawn by the block entity). Not checked in the game: a mixer over a basin over a burner running a
-  `heated` recipe (the rule is a unit test), the blaze cake, the burn time running out, and the head's pose over a
-  basin.
+  its rods and head drawn by the block entity). A mixer (a creative motor at its higher speeds, a cog) over a basin over the burner: with a copper and a
+  zinc ingot in the basin it made two brass ingots while the burner was `kindled`, and did nothing while it was
+  `smouldering` after the coal had burned out (the same basin made andesite alloy, which needs no heat, either way).
+  Not checked: the blaze cake, and the head's pose over a basin.
