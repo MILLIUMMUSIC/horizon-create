@@ -423,7 +423,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    sets, Create's compatibility with other mods (**blocked on the engine**: no shared capabilities, #1040 for item
    storage only, nothing for fluids or energy). The rest of this milestone is ported item by item below; what is
    done is in the README's estimate.
-   Done from this milestone: the speedometer and stressometer (`gauge.rs`: `SpeedGaugeBlockEntity.getDialTarget`,
+   Done from this milestone: the clutch and gearshift (`Kind::SplitShaft`: `SplitShaftBlockEntity.getRotationSpeedModifier`,
+   a powered gearshift reverses what is beyond it and a powered clutch cuts it; `powered` is their own state property,
+   set from the redstone signal beside them, detached and attached again as `neighborChanged` does; their shaft
+   halves drawn by `SplitShaftRenderer`'s rule), the speedometer and stressometer (`gauge.rs`: `SpeedGaugeBlockEntity.getDialTarget`,
    `StressGaugeBlockEntity`'s target, `GaugeBlockEntity`'s eighth-a-tick chase, `GaugeBlock.shouldRenderHeadOnFace`;
    `Kind::Gauge`, a block for each `axis_along_first` as the saw has, placed by `GaugeBlock.getStateForPlacement`
    through `native_state_for_placement`; their shaft, heads and dials drawn by the native mod as `GaugeRenderer`

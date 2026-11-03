@@ -239,6 +239,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut pumps: Vec<(Pos, Dir, f32)> = Vec::new();
     let mut drills: Vec<(Pos, Dir, f32, bool)> = Vec::new();
     let mut large_wheels: Vec<(Pos, Axis)> = Vec::new();
+    let mut split_shafts: Vec<(Pos, Kind)> = Vec::new();
     let mut amounts: Vec<(Pos, i32)> = Vec::new();
     let save_now;
     {
@@ -374,6 +375,12 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             {
                 pumps.push((p, f, kinetics.speed_of(&level, p)));
             }
+            // Gearshifts and clutches, for their redstone signal.
+            if let Some(k @ Kind::SplitShaft(..)) = kinetics.get(p).map(|e| e.kind)
+                && level.is_loaded(p)
+            {
+                split_shafts.push((p, k));
+            }
             // Large water wheels, for their structure.
             if let Some(Kind::LargeWaterWheel(a)) = kinetics.get(p).map(|e| e.kind)
                 && level.is_loaded(p)
@@ -445,6 +452,23 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_arms::level_tick(game, dimension);
     super::create_actor_glue::breakers_tick(game, dimension, &drills);
     super::create_machines::large_wheels_tick(game, dimension, &large_wheels);
+    // GearshiftBlock / ClutchBlock.neighborChanged: the block follows the
+    // signal beside it (the kinetics detach and attach it again).
+    for (p, k) in split_shafts {
+        let Kind::SplitShaft(_, axis, powered) = k else {
+            continue;
+        };
+        let signal = signal(game, p);
+        if signal == powered {
+            continue;
+        }
+        let Some(base) = game.pack.assets.registry.default_state(k.block()) else {
+            continue;
+        };
+        if let Some(id) = game.with_props(base, &[("axis", axis.name()), ("powered", if signal { "true" } else { "false" })]) {
+            game.native_set_block(dimension, p, id, super::native_hooks::flags::UPDATE_ALL);
+        }
+    }
     super::create_contraptions::level_tick(game, dimension);
     super::create_actor_glue::psis_tick(game, dimension);
     let depots = super::create_machines::take_depot_updates(game, dimension, full_update);
@@ -1552,6 +1576,16 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                 orient = glam::Mat4::from_rotation_y(90f32.to_radians()) * orient;
             }
             want.push((blade, None, orient, a, 0.0, 0.0));
+        }
+        Kind::SplitShaft(gearshift, a, powered) => {
+            // SplitShaftRenderer: a shaft half on each end, the one away from
+            // the source turning as `getRotationSpeedModifier` says.
+            for side in Dir::ALL.into_iter().filter(|d| d.axis() == a) {
+                let away = view.source.is_some_and(|src| src != side);
+                let modifier = if away && powered { if gearshift { -1.0 } else { 0.0 } } else { 1.0 };
+                let angle = render_angle(view.kind, pos, view.speed * modifier, time);
+                want.push(("create:hz_part_shaft_half", None, rotate_to_face(side), a, angle, 0.0));
+            }
         }
         Kind::Gauge(stress, f, _) => {
             // GaugeRenderer: a shaft across it and, on each side it shows

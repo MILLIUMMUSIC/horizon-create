@@ -684,6 +684,7 @@ def fit_logistics(content, names):
     fit_actors(content)
     fit_saws(content, names)
     fit_gauges(content, names)
+    fit_split_shafts(content, names)
     fit_psi(content)
     fit_contacts(content, names)
     fit_large_wheel(content, names)
@@ -1257,6 +1258,34 @@ def fit_gauges(content, names):
             if props.get("axis_along_first") == along and "facing" in props:
                 variants[f"facing={props['facing']}"] = model
         write_json(states / f"{name}.json", {"variants": variants})
+
+
+# Clutch and gearshift (`SplitShaftBlock`): an iron chain's template (`axis`),
+# `powered` as their own state property; the casing is the blockstate's
+# model, the shaft halves are drawn by the native mod (SplitShaftRenderer).
+SPLIT_SHAFTS = ("clutch", "gearshift")
+
+
+def fit_split_shafts(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    for name in SPLIT_SHAFTS:
+        original = read_json(states / f"{name}.json") if (states / f"{name}.json").exists() else None
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:iron_chain"
+        decl["state_properties"] = {"powered": {"type": "boolean"}}
+        decl["default_state"] = {"powered": "false"}
+        decl["shapes"] = {"property": "axis", "values": {a: [box(0, 0, 0, 16, 16, 16)] for a in ("x", "y", "z")}}
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+        if original is not None:
+            variants = {k: v for k, v in original.get("variants", {}).items()
+                        if "waterlogged=true" not in k}
+            states_out = {}
+            for key, model in variants.items():
+                props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+                states_out[f"axis={props['axis']},powered={props.get('powered', 'false')}"] = model
+            write_json(states / f"{name}.json", {"variants": states_out})
 
 
 # The portable storage interface: a lightning rod's template (six facings);

@@ -228,6 +228,7 @@ impl Kind {
             Kind::Cogwheel(a) => Kind::Cogwheel(turn_axis(a)),
             Kind::LargeCogwheel(a) => Kind::LargeCogwheel(turn_axis(a)),
             Kind::Gearbox(a) => Kind::Gearbox(turn_axis(a)),
+            Kind::SplitShaft(g, a, p) => Kind::SplitShaft(g, turn_axis(a), p),
             // HorizontalAxisKineticBlock: only from above or below.
             Kind::RopePulley(a) if face.axis() == Axis::Y => {
                 Kind::RopePulley(if a == Axis::X { Axis::Z } else { Axis::X })
@@ -256,6 +257,7 @@ impl Kind {
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::Gearbox(a)
+            | Kind::SplitShaft(_, a, _)
             | Kind::RopePulley(a) => Some(("axis", a.name())),
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
@@ -438,6 +440,9 @@ pub enum Kind {
     /// `ElevatorPulleyBlock`: its horizontal facing; the shaft runs across it
     /// (contraptions.rs runs the cabin).
     ElevatorPulley(Dir),
+    /// A gearshift (true) or clutch (false) along an axis, powered or not
+    /// (`SplitShaftBlock`).
+    SplitShaft(bool, Axis, bool),
 }
 
 impl Kind {
@@ -453,6 +458,12 @@ impl Kind {
             "create:cogwheel" => axis().map(Kind::Cogwheel),
             "create:large_cogwheel" => axis().map(Kind::LargeCogwheel),
             "create:gearbox" => axis().map(Kind::Gearbox),
+            "create:gearshift" => {
+                axis().map(|a| Kind::SplitShaft(true, a, prop("powered") == Some("true")))
+            }
+            "create:clutch" => {
+                axis().map(|a| Kind::SplitShaft(false, a, prop("powered") == Some("true")))
+            }
             "create:creative_motor" => facing().map(Kind::CreativeMotor),
             "create:hand_crank" => facing().map(Kind::HandCrank),
             "create:mechanical_press" => facing().map(Kind::MechanicalPress),
@@ -493,6 +504,8 @@ impl Kind {
             Kind::Cogwheel(_) => "create:cogwheel",
             Kind::LargeCogwheel(_) => "create:large_cogwheel",
             Kind::Gearbox(_) => "create:gearbox",
+            Kind::SplitShaft(true, ..) => "create:gearshift",
+            Kind::SplitShaft(false, ..) => "create:clutch",
             Kind::CreativeMotor(_) => "create:creative_motor",
             Kind::HandCrank(_) => "create:hand_crank",
             Kind::MechanicalPress(_) => "create:mechanical_press",
@@ -539,6 +552,7 @@ impl Kind {
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::Gearbox(a)
+            | Kind::SplitShaft(_, a, _)
             | Kind::RopePulley(a) => a,
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
@@ -564,9 +578,11 @@ impl Kind {
     /// `IRotate.hasShaftTowards`.
     pub fn has_shaft_towards(self, face: Dir) -> bool {
         match self {
-            Kind::Shaft(a) | Kind::Cogwheel(a) | Kind::LargeCogwheel(a) | Kind::RopePulley(a) => {
-                face.axis() == a
-            }
+            Kind::Shaft(a)
+            | Kind::Cogwheel(a)
+            | Kind::LargeCogwheel(a)
+            | Kind::SplitShaft(_, a, _)
+            | Kind::RopePulley(a) => face.axis() == a,
             Kind::Gearbox(a) => face.axis() != a,
             Kind::CreativeMotor(f) => face == f,
             Kind::HandCrank(f) => face == f.opposite(),
@@ -648,6 +664,13 @@ impl Kind {
     }
     /// `KineticBlock.areStatesKineticallyEquivalent`: same block, same axis.
     pub fn equivalent(self, other: Kind) -> bool {
+        // A gearshift or clutch powered or not is detached and attached again
+        // (`GearshiftBlock.neighborChanged`).
+        if let (Kind::SplitShaft(_, _, a), Kind::SplitShaft(_, _, b)) = (self, other)
+            && a != b
+        {
+            return false;
+        }
         self.block() == other.block() && self.rotation_axis() == other.rotation_axis()
     }
 }
@@ -1386,6 +1409,21 @@ impl Kinetics {
         if !(e.has_source() || e.is_source()) {
             return 1.0;
         }
+        // SplitShaftBlockEntity.getRotationSpeedModifier: the side away from
+        // the source is reversed by a powered gearshift, cut by a powered clutch.
+        if let Kind::SplitShaft(gearshift, _, powered) = e.kind {
+            let Some(source) = e.source else {
+                return 1.0;
+            };
+            if direction == Dir::nearest(sub(source, pos)) {
+                return 1.0;
+            }
+            return match (powered, gearshift) {
+                (false, _) => 1.0,
+                (true, true) => -1.0,
+                (true, false) => 0.0,
+            };
+        }
         let Kind::Gearbox(_) = e.kind else {
             return 1.0;
         };
@@ -1977,6 +2015,7 @@ fn kind_key(k: Kind) -> String {
         | Kind::Cogwheel(a)
         | Kind::LargeCogwheel(a)
         | Kind::Gearbox(a)
+        | Kind::SplitShaft(_, a, _)
         | Kind::RopePulley(a)
         | Kind::LargeWaterWheel(a) => a.name(),
         Kind::CreativeMotor(f)
@@ -2000,6 +2039,9 @@ fn kind_key(k: Kind) -> String {
             return format!("{}[{};{face}]", k.block(), b.facing.name());
         }
     };
+    if let Kind::SplitShaft(_, _, powered) = k {
+        return format!("{}[{state};{powered}]", k.block());
+    }
     format!("{}[{}]", k.block(), state)
 }
 
@@ -2009,7 +2051,7 @@ fn parse_kind_key(s: &str) -> Option<Kind> {
     let (first, second) = state.split_once(';').unwrap_or((state, ""));
     Kind::from_block(block, |key| match key {
         "axis" | "facing" => Some(first),
-        "face" => Some(second),
+        "face" | "powered" => Some(second),
         _ => None,
     })
 }
@@ -2127,6 +2169,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::Saw(d, along) => (22, dir(d) | u8::from(along) << 3),
         Kind::ElevatorPulley(d) => (23, dir(d)),
         Kind::LargeWaterWheel(a) => (24, axis(a)),
+        Kind::SplitShaft(g, a, p) => (26, axis(a) | u8::from(g) << 2 | u8::from(p) << 3),
         Kind::Gauge(stress, d, along) => {
             (25, dir(d) | u8::from(along) << 3 | u8::from(stress) << 4)
         }
@@ -2175,6 +2218,11 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         21 => Kind::Drill(dir?),
         23 => Kind::ElevatorPulley(dir?),
         24 => Kind::LargeWaterWheel(axis?),
+        26 => Kind::SplitShaft(
+            state & 4 != 0,
+            Axis::ALL.get(usize::from(state & 3)).copied()?,
+            state & 8 != 0,
+        ),
         25 => Kind::Gauge(
             state & 16 != 0,
             Dir::ALL.get(usize::from(state & 7)).copied()?,
@@ -2529,6 +2577,26 @@ mod tests {
         assert_eq!(r.speed([2, 64, 0]), -16.0);
         assert_eq!(r.speed([1, 64, 1]), 16.0);
         assert_eq!(r.speed([1, 64, -1]), -16.0);
+    }
+
+    #[test]
+    fn a_powered_gearshift_reverses_and_a_powered_clutch_cuts() {
+        for (gearshift, powered_speed) in [(true, -16.0), (false, 0.0)] {
+            let mut r = Rig::new();
+            r.place([0, 64, 0], Kind::CreativeMotor(Dir::East));
+            r.place([1, 64, 0], Kind::SplitShaft(gearshift, Axis::X, false));
+            r.place([2, 64, 0], Kind::Shaft(Axis::X));
+            r.ticks(2);
+            assert_eq!(r.speed([2, 64, 0]), 16.0);
+            // A signal: detached and attached again with the new state.
+            r.place([1, 64, 0], Kind::SplitShaft(gearshift, Axis::X, true));
+            r.ticks(4);
+            assert_eq!(r.speed([1, 64, 0]), 16.0);
+            assert_eq!(r.speed([2, 64, 0]), powered_speed, "gearshift {gearshift}");
+            r.place([1, 64, 0], Kind::SplitShaft(gearshift, Axis::X, false));
+            r.ticks(4);
+            assert_eq!(r.speed([2, 64, 0]), 16.0);
+        }
     }
 
     #[test]
@@ -2966,6 +3034,8 @@ mod tests {
             Kind::Saw(Dir::East, true),
             Kind::Saw(Dir::Up, false),
             Kind::Gauge(true, Dir::North, true),
+            Kind::SplitShaft(true, Axis::Z, true),
+            Kind::SplitShaft(false, Axis::X, false),
             Kind::Gauge(false, Dir::Up, false),
             Kind::ElevatorPulley(Dir::East),
             Kind::LargeWaterWheel(Axis::Z),

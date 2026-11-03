@@ -921,3 +921,9 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   `Remaining Capacity 262144su` (screenshot); the speedometer's dial needle shows turned. The overstressed state was not looked at; the tooltips' exact bar and colours are from memory of `SpeedLevel` and
   `StressImpact` (their classes are not in the sources kept here).
 
+## Clutch (macOS, offscreen)
+
+- A creative motor, a clutch and a speedometer in a line: 16 RPM on the goggles; a redstone block beside the clutch
+  (`powered=true`) drops the speedometer to 0 RPM (screenshots). The gearshift's reversal is covered by a unit test
+  only; the shaft halves' turning was not looked at.
+

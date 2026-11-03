@@ -284,6 +284,8 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         // PulleyBlock: HorizontalAxisKineticBlock's.
         Kind::RopePulley(_) => Kind::RopePulley(horizontal_axis(ctx, around)),
         Kind::MechanicalPump(_) => Kind::MechanicalPump(pump(ctx, around)),
+        // SplitShaftBlock (gearshift, clutch): RotatedPillarKineticBlock's.
+        Kind::SplitShaft(g, ..) => Kind::SplitShaft(g, rotated_pillar(ctx, around), false),
         Kind::Gauge(stress, ..) => {
             let (facing, along) = gauge(ctx, around);
             Kind::Gauge(stress, facing, along)
