@@ -8,7 +8,7 @@
 // entity draws (`MechanicalCrafterRenderer`). The rules are in crafter.rs.
 
 use super::Game;
-use super::create_crafter::{CrafterWorld, Grouped, MechanicalRecipe, Phase, Pointing};
+use super::create_crafter::{ConnectedInput, CrafterWorld, Grouped, InputWorld, MechanicalRecipe, Phase, Pointing};
 use super::create_kinetics::{Dir, Pos};
 use horizon_client::containers::{BlockEntity, ModBlockEntity};
 use horizon_client::crafting::Ingredient;
@@ -33,6 +33,7 @@ struct Crafter {
     lazy: i32,
     /// The slot was filled: `whenContentsChanged` checks the recipe.
     check: bool,
+    input: ConnectedInput,
 }
 
 impl Default for Crafter {
@@ -45,6 +46,7 @@ impl Default for Crafter {
             was_powered: true,
             lazy: 20,
             check: false,
+            input: ConnectedInput::default(),
         }
     }
 }
@@ -98,6 +100,7 @@ fn load(be: &ModBlockEntity) -> Crafter {
         count_down: int(be, "CountDown"),
         covered: int(be, "Cover") != 0,
         grid,
+        input: ConnectedInput::load(&text(be, "Input")),
         ..Crafter::default()
     }
 }
@@ -116,6 +119,7 @@ fn save(be: &mut ModBlockEntity, c: &Crafter) {
     be.nbt.insert(JavaString::from("CountDown"), Tag::Int(c.count_down));
     be.nbt.insert(JavaString::from("Cover"), Tag::Byte(i8::from(c.covered)));
     be.nbt.insert(JavaString::from("Grid"), Tag::String(JavaString::from(grid.as_str())));
+    be.nbt.insert(JavaString::from("Input"), Tag::String(JavaString::from(c.input.save().as_str())));
 }
 
 // ---- The world, as the chain sees it ------------------------------------------------
@@ -255,7 +259,13 @@ pub(super) fn tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     {
         let key = (game.dim.id().to_owned(), pos);
         let mut guard = crafters();
-        guard.get_or_insert_with(HashMap::new).entry(key).or_insert_with(|| load(entity));
+        let map = guard.get_or_insert_with(HashMap::new);
+        // A new block entity (never saved) starts afresh, whatever stood here.
+        if entity.nbt.get(&JavaString::from("Phase")).is_none() {
+            map.insert(key, Crafter::default());
+        } else {
+            map.entry(key).or_insert_with(|| load(entity));
+        }
     }
     let mut c = with_crafter(game, pos, |c| c.clone());
     let powered = super::create_glue::signal(game, pos);
@@ -516,40 +526,112 @@ fn eject_whole_grid(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) 
     }
 }
 
-/// `MechanicalCrafterBlockEntity.Inventory.insertItem` (a funnel or chute
-/// on the crafter): one item into an idle, uncovered, empty slot; what is
-/// left, none when it took all. Not yet: `ConnectedInput` (a wrenched group
-/// of crafters sharing one handler).
-pub(super) fn insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack) -> Option<ItemStack> {
-    let (phase, covered) = with_crafter(game, pos, |c| (c.phase, c.covered));
-    if phase != Phase::Idle || covered {
+/// `ConnectedInput.getItemHandler`'s insertion (a funnel, chute or click on
+/// the crafter): `ItemHandlerHelper.insertItem` over the group's
+/// inventories in order, each taking one item when idle, uncovered and
+/// empty (`Inventory.insertItem`). What is left, none when it took all.
+pub(super) fn insert(game: &mut Game<'_>, pos: Pos, mut stack: ItemStack) -> Option<ItemStack> {
+    let input = with_crafter(game, pos, |c| c.input.clone());
+    let controller = if input.controller { pos } else { input.controller_of(pos) };
+    let members = with_crafter(game, controller, |c| c.input.clone());
+    // A member whose controller isn't one has no inventories.
+    if !members.controller || crafter_at(game, controller).is_none() {
         return Some(stack);
     }
-    let took = game
-        .native_with_mod_block_entity(pos, |be| {
-            if be.items.is_empty() {
-                be.items.push(None);
-            }
-            if be.items[0].is_some() {
-                return false;
-            }
-            let mut one = stack.clone();
-            one.count = 1;
-            be.items[0] = Some(one);
-            true
-        })
-        .unwrap_or(false);
-    if !took {
-        return Some(stack);
+    let facing = crafter_at(game, controller).map_or(Dir::South, |c| c.0);
+    for member in super::create_crafter::inventory_order(controller, facing, &members.data) {
+        if stack.count == 0 {
+            break;
+        }
+        if crafter_at(game, member).is_none() {
+            continue;
+        }
+        let (phase, covered) = with_crafter(game, member, |c| (c.phase, c.covered));
+        if phase != Phase::Idle || covered {
+            continue;
+        }
+        let mut one = stack.clone();
+        one.count = 1;
+        let put = game
+            .native_with_mod_block_entity(member, |be| {
+                if be.items.is_empty() {
+                    be.items.push(None);
+                }
+                if be.items[0].is_some() {
+                    return false;
+                }
+                be.items[0] = Some(one);
+                true
+            })
+            .unwrap_or(false);
+        if put {
+            stack.count -= 1;
+            with_crafter(game, member, |c| c.check = true);
+            let at = member.map(|v| f64::from(v) + 0.5);
+            game.with_level(|_, level, _| {
+                level.native_play_sound("minecraft:entity.item_frame.add_item", at, super::create_sounds::BLOCKS, 0.25, 0.5);
+            });
+        }
     }
-    with_crafter(game, pos, |c| c.check = true);
-    let at = pos.map(|v| f64::from(v) + 0.5);
-    game.with_level(|_, level, _| {
-        level.native_play_sound("minecraft:entity.item_frame.add_item", at, super::create_sounds::BLOCKS, 0.25, 0.5);
-    });
-    let mut left = stack;
-    left.count -= 1;
-    (left.count > 0).then_some(left)
+    (stack.count > 0).then_some(stack)
+}
+
+/// The crafters' inputs, as `toggleConnection` changes them (each crafter's
+/// data is written on its next tick).
+struct Inputs<'a, 'g>(&'a Game<'g>);
+
+impl InputWorld for Inputs<'_, '_> {
+    fn input(&self, pos: Pos) -> Option<ConnectedInput> {
+        crafter_at(self.0, pos)?;
+        Some(with_crafter(self.0, pos, |c| c.input.clone()))
+    }
+    fn set_input(&mut self, pos: Pos, input: ConnectedInput) {
+        with_crafter(self.0, pos, |c| c.input = input);
+    }
+}
+
+/// `EdgeInteractionHandler.onBlockActivated` with the wrench (not
+/// sneaking): a hit near an edge of a side face toward a crafter facing
+/// the same way connects or splits their inputs. Not yet: the group drawn
+/// as one casing (`CrafterCTBehaviour`), splitting it when a crafter of it
+/// is broken.
+fn edge_wrench(game: &mut Game<'_>, pos: Pos, face: Dir, facing: Dir) -> bool {
+    let solid = |game: &Game<'_>, p: Pos, side: Dir| {
+        let state = game.world.block(p[0], p[1], p[2]);
+        game.res.facts().get(state).sturdy_full & (1 << side as u8) != 0
+    };
+    let out = face.normal();
+    let ahead = [pos[0] + out[0], pos[1] + out[1], pos[2] + out[2]];
+    if solid(game, ahead, face.opposite()) {
+        return false;
+    }
+    let hit = super::create_logistics::click_point(game, pos, face);
+    let hit = [0, 1, 2].map(|i| hit[i] + 0.5);
+    for d in Dir::ALL {
+        if d.axis() == face.axis() {
+            continue;
+        }
+        let n = d.normal();
+        let neighbour = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+        let neighbour_ahead = [neighbour[0] + out[0], neighbour[1] + out[1], neighbour[2] + out[2]];
+        if solid(game, neighbour_ahead, face.opposite()) {
+            continue;
+        }
+        let other = crafter_at(game, neighbour).map(|c| c.0);
+        if !super::create_crafter::should_connect(facing, face, d, other) {
+            continue;
+        }
+        let b = super::create_crafter::edge_box(d);
+        if (0..3).all(|i| hit[i] >= b[i] && hit[i] <= b[i + 3]) {
+            super::create_crafter::toggle_connection(&mut Inputs(game), pos, neighbour);
+            let at = pos.map(|v| f64::from(v) + 0.5);
+            game.with_level(|_, level, _| {
+                level.native_play_sound("minecraft:entity.item_frame.add_item", at, super::create_sounds::BLOCKS, 0.25, 0.1);
+            });
+            return true;
+        }
+    }
+    false
 }
 
 /// `MechanicalCrafterBlock.useItemOn` on the front, and `onWrenched` there
@@ -558,12 +640,15 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
     let Some((facing, pointing)) = crafter_at(game, pos) else {
         return false;
     };
-    if Dir::nearest(face) != facing {
-        return false;
-    }
     let held = game.held().cloned();
     let wrench = held.as_ref().is_some_and(|h| &*h.item == "create:wrench");
     let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    if wrench && !sneaking && edge_wrench(game, pos, Dir::nearest(face), facing) {
+        return true;
+    }
+    if Dir::nearest(face) != facing {
+        return false;
+    }
     if wrench {
         if sneaking {
             return false;

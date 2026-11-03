@@ -987,3 +987,7 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   both went through `EXPORTING`, `WAITING` and `CRAFTING`, and 4 sticks were in the chest. Screenshots showed the item in
   the upper crafter's slot, the belt between the two and the lower one's arrow.
   Not tried: covers, redstone starts, mechanical crafting recipes, belts as targets, funnels and chutes into the slot.
+- Three crafters side by side facing north: the wrench used near the east edge of the first's and the second's top
+  joined them (`Input` became `c;0,0,0;1,0,0;2,0,0` on the first, `m;-1,0,0` and `m;-2,0,0` on the others), and a
+  click with 3 oak logs on the third's front put one log into each. The wrench on the second's east edge again split
+  off the third (the second became the controller of the first, the third alone).

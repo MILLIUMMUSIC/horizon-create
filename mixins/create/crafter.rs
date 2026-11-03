@@ -440,6 +440,195 @@ pub fn count_down_speed(speed: f32) -> i32 {
     }
 }
 
+// ---- Connected inputs ---------------------------------------------------------------
+
+/// `ConnectedInputHandler.ConnectedInput`: a controller's members (offsets
+/// from it, itself first), or a member's offset to its controller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectedInput {
+    pub controller: bool,
+    pub data: Vec<Pos>,
+}
+
+impl Default for ConnectedInput {
+    fn default() -> Self {
+        ConnectedInput {
+            controller: true,
+            data: vec![[0, 0, 0]],
+        }
+    }
+}
+
+impl ConnectedInput {
+    /// `attachTo`.
+    pub fn attach_to(&mut self, controller: Pos, me: Pos) {
+        self.controller = false;
+        self.data = vec![sub(controller, me)];
+    }
+    /// Where its controller is.
+    pub fn controller_of(&self, me: Pos) -> Pos {
+        add(me, self.data.first().copied().unwrap_or([0, 0, 0]))
+    }
+    /// `write`, as text: `c` or `m`, then the offsets.
+    pub fn save(&self) -> String {
+        let mut out = String::from(if self.controller { "c" } else { "m" });
+        for d in &self.data {
+            out.push_str(&format!(";{},{},{}", d[0], d[1], d[2]));
+        }
+        out
+    }
+    /// `read` (no data: a controller of itself).
+    pub fn load(s: &str) -> ConnectedInput {
+        let mut parts = s.split(';');
+        let controller = parts.next() != Some("m");
+        let data: Vec<Pos> = parts
+            .filter_map(|p| {
+                let v: Vec<i32> = p.split(',').filter_map(|n| n.parse().ok()).collect();
+                (v.len() == 3).then(|| [v[0], v[1], v[2]])
+            })
+            .collect();
+        if data.is_empty() {
+            ConnectedInput::default()
+        } else {
+            ConnectedInput { controller, data }
+        }
+    }
+}
+
+fn add(a: Pos, b: Pos) -> Pos {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub(a: Pos, b: Pos) -> Pos {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+/// The crafters' connected inputs as `toggleConnection` changes them.
+pub trait InputWorld {
+    fn input(&self, pos: Pos) -> Option<ConnectedInput>;
+    fn set_input(&mut self, pos: Pos, input: ConnectedInput);
+}
+
+/// `ConnectedInputHandler.shouldConnect`: a crafter beside `pos` across an
+/// edge of `face`, facing the same way, not through the front.
+pub fn should_connect(
+    facing: Dir,
+    face: Dir,
+    direction: Dir,
+    neighbour_facing: Option<Dir>,
+) -> bool {
+    direction.axis() != facing.axis() && face != facing && neighbour_facing == Some(facing)
+}
+
+/// `EdgeInteractionHandler.getBB`: the strip of the block along its edge
+/// toward `direction` (3/16 deep, from the block's corner) a hit must be in.
+pub fn edge_box(direction: Dir) -> [f64; 6] {
+    let n = direction.normal();
+    let mut b = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    for i in 0..3 {
+        if n[i] == 0 {
+            continue;
+        }
+        let (lo, hi) = (
+            0.3125 + f64::from(n[i]) * 0.5,
+            0.6875 + f64::from(n[i]) * 0.5,
+        );
+        b[i] = lo;
+        b[i + 3] = hi;
+    }
+    let e = 1.0 / 256.0;
+    [b[0] - e, b[1] - e, b[2] - e, b[3] + e, b[4] + e, b[5] + e]
+}
+
+/// `toggleConnection(pos, pos2)`: in one group, the group split where they
+/// meet; else the two groups' controllers joined under the first.
+pub fn toggle_connection(world: &mut impl InputWorld, pos: Pos, pos2: Pos) {
+    let (Some(i1), Some(i2)) = (world.input(pos), world.input(pos2)) else {
+        return;
+    };
+    let c1 = i1.controller_of(pos);
+    let c2 = i2.controller_of(pos2);
+    if c1 == c2 {
+        let Some(controller) = world.input(c1) else {
+            return;
+        };
+        let mut positions: Vec<Pos> = controller.data.iter().map(|d| add(c1, *d)).collect();
+        positions.retain(|p| *p != pos2 && *p != pos);
+        let mut frontier = vec![pos2];
+        let mut split = Vec::new();
+        while !frontier.is_empty() {
+            let current = frontier.remove(0);
+            for d in Dir::ALL {
+                let next = offset(current, d);
+                if let Some(i) = positions.iter().position(|p| *p == next) {
+                    positions.remove(i);
+                    split.push(next);
+                    frontier.push(next);
+                }
+            }
+        }
+        init_and_add_all(world, pos, &positions);
+        init_and_add_all(world, pos2, &split);
+        return;
+    }
+    let first = if i1.controller { pos } else { c1 };
+    let second = if i2.controller { pos2 } else { c2 };
+    let (Some(mut a), Some(b)) = (world.input(first), world.input(second)) else {
+        return;
+    };
+    // connectControllers
+    for d in &b.data {
+        if *d == [0, 0, 0] {
+            continue;
+        }
+        let member = add(second, *d);
+        if let Some(mut m) = world.input(member) {
+            m.attach_to(first, member);
+            a.data.push(sub([0, 0, 0], m.data[0]));
+            world.set_input(member, m);
+        }
+    }
+    let mut b = b;
+    b.attach_to(first, second);
+    a.data.push(sub([0, 0, 0], b.data[0]));
+    world.set_input(second, b);
+    world.set_input(first, a);
+}
+
+/// `initAndAddAll`: `crafter` a new controller (of itself) and of
+/// `positions`.
+fn init_and_add_all(world: &mut impl InputWorld, crafter: Pos, positions: &[Pos]) {
+    let mut input = ConnectedInput::default();
+    for p in positions {
+        if let Some(mut i) = world.input(*p) {
+            i.attach_to(crafter, *p);
+            world.set_input(*p, i);
+            input.data.push(sub(*p, crafter));
+        }
+    }
+    world.set_input(crafter, input);
+}
+
+/// `ConnectedInput.getInventories`' order: top rows first, then along the
+/// facing's clockwise axis as Create sorts them.
+pub fn inventory_order(controller: Pos, facing: Dir, data: &[Pos]) -> Vec<Pos> {
+    let compare_axis = facing.clockwise(Axis::Y).axis();
+    let step = if facing.positive() { 1 } else { -1 };
+    let modifier = step * if compare_axis == Axis::Z { -1 } else { 1 };
+    let mut out: Vec<Pos> = data.to_vec();
+    out.sort_by(|p1, p2| {
+        p2[1].cmp(&p1[1]).then_with(|| {
+            let (c1, c2) = (compare_axis.choose(*p1), compare_axis.choose(*p2));
+            if modifier > 0 {
+                c1.cmp(&c2)
+            } else {
+                c2.cmp(&c1)
+            }
+        })
+    });
+    out.into_iter().map(|d| add(controller, d)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,5 +729,59 @@ mod tests {
             (Dir::North, Pointing::Up),
             Some((Dir::North, Pointing::Down))
         ));
+    }
+
+    struct Inputs(HashMap<Pos, ConnectedInput>);
+    impl InputWorld for Inputs {
+        fn input(&self, pos: Pos) -> Option<ConnectedInput> {
+            self.0.get(&pos).cloned()
+        }
+        fn set_input(&mut self, pos: Pos, input: ConnectedInput) {
+            self.0.insert(pos, input);
+        }
+    }
+
+    #[test]
+    fn connecting_and_splitting_inputs() {
+        let mut w = Inputs(
+            (0..3)
+                .map(|x| ([x, 0, 0], ConnectedInput::default()))
+                .collect(),
+        );
+        toggle_connection(&mut w, [0, 0, 0], [1, 0, 0]);
+        toggle_connection(&mut w, [1, 0, 0], [2, 0, 0]);
+        let c = w.input([0, 0, 0]).unwrap();
+        assert!(c.controller);
+        assert_eq!(c.data.len(), 3);
+        assert_eq!(
+            w.input([2, 0, 0]).unwrap().controller_of([2, 0, 0]),
+            [0, 0, 0]
+        );
+        // Cut between the middle and the end.
+        toggle_connection(&mut w, [1, 0, 0], [2, 0, 0]);
+        assert_eq!(w.input([2, 0, 0]).unwrap(), ConnectedInput::default());
+        assert_eq!(
+            w.input([0, 0, 0]).unwrap().controller_of([0, 0, 0]),
+            [1, 0, 0]
+        );
+        assert_eq!(ConnectedInput::load(&c.save()), c);
+        assert_eq!(ConnectedInput::load(""), ConnectedInput::default());
+        // Top row first; facing north, east (x) runs right to left.
+        let order = inventory_order([0, 0, 0], Dir::North, &[[0, 0, 0], [1, 0, 0], [0, 1, 0]]);
+        assert_eq!(order[0], [0, 1, 0]);
+        assert!(should_connect(
+            Dir::North,
+            Dir::Up,
+            Dir::East,
+            Some(Dir::North)
+        ));
+        assert!(!should_connect(
+            Dir::North,
+            Dir::North,
+            Dir::East,
+            Some(Dir::North)
+        ));
+        let b = edge_box(Dir::East);
+        assert!(b[0] < 0.82 && b[3] > 1.18 && b[1] < 0.0 && b[4] > 1.0);
     }
 }

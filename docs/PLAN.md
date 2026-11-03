@@ -466,8 +466,11 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    countdown speed, the last one crafts with vanilla's crafting recipes (not `_manual_only` ones) or
    `create:mechanical_crafting` ones (mirrored or not), crafting remainders beside the result, puts it into the
    inventory or belt it points at and ejects the whole grid when there is none or no recipe; the crafter sounds play.
-   Its lid, arrow or belt and the items before its face are drawn. Not yet: connected inputs (`ConnectedInputHandler`,
-   the wrench on its edge), arms and hoppers putting items in, items' components through the grid (only id and
+   Its lid, arrow or belt and the items before its face are drawn. Connected inputs (`ConnectedInputHandler`): the
+   wrench near an edge of a side face toward a crafter facing the same way (`EdgeInteractionHandler`'s 3/16 strip)
+   joins their groups or splits one where they meet; an item put into any crafter of a group goes one at a time into
+   its crafters in Create's order (top rows first). Not yet: splitting a group when one of its crafters is broken
+   (`onRemove`), arms and hoppers putting items in, items' components through the grid (only id and
    count are kept), the items moving and spinning while they pass and craft, the belt's scrolling texture, the
    connected casing (`CrafterCTBehaviour`), the firework recipe's ingredient limit, the particles, advancements.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
