@@ -484,6 +484,11 @@ fn put_back(game: &mut Game<'_>, at: Pos, state: BlockStateId, solid: bool, nbt:
 }
 
 /// `assemble`: the structure built, checked and taken out of the world.
+/// `AllSoundEvents.<name>.playOnServer(level, pos)`.
+fn sound(game: &mut Game<'_>, name: &str, pos: Pos) {
+    super::create_glue::play_create_sound(game, name, pos.map(|v| f64::from(v) + 0.5), 1.0, 1.0);
+}
+
 fn assemble(game: &mut Game<'_>, pos: Pos, facing: Dir, rpm: f32, actuator: &mut Actuator) -> Option<Running> {
     let retract = actuator.movement_speed(rpm, facing) < 0.0;
     let contraption = {
@@ -1226,6 +1231,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             ActuatorStep::Idle => {}
             ActuatorStep::Assemble => {
                 if let Some(r) = assemble(game, pos, facing, rpm, &mut piston.actuator) {
+                    sound(game, "contraption_assemble", pos);
                     piston.running = Some(r);
                     changed.push(pos);
                 }
@@ -1252,6 +1258,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 stop_actors(game, Mover::Piston(pos));
                 if let Some(r) = piston.running.take() {
                     disassemble(game, pos, r, grid_offset);
+                    sound(game, "contraption_disassemble", pos);
                     changed.push(pos);
                 }
                 piston.actuator.stopped(grid_offset);
@@ -2050,6 +2057,27 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
     if click_bearing(game, pos) || click_carriage(game, pos) || click_elevator(game, pos) {
         return true;
     }
+    // MechanicalPistonBlock.useItemOn: a slimeball on a retracted piston's
+    // front makes it sticky (one used up out of creative).
+    let here = game.world.block(pos[0], pos[1], pos[2]);
+    let piston = piston_of(&game.res.facts().get(here).name);
+    let slimeball = held.as_deref().is_some_and(|i| game.items().item_in_tag("c:slimeballs", i));
+    if !sneaking
+        && slimeball
+        && let Some((false, along, PistonState::Retracted)) = piston
+        && prop(game, here, "facing").and_then(|f| Dir::parse(&f)) == Some(face)
+    {
+        super::create_glue::play_create_sound(game, "slime_added", pos.map(|v| f64::from(v) + 0.5), 0.5, 1.0);
+        let creative = game.native_acting_player().map_or(game.mode_id(), |p| p.game_mode) == 1;
+        if !creative && let Some(s) = game.held_mut() {
+            s.count -= 1;
+            if s.count == 0 {
+                *game.held_mut() = None;
+            }
+        }
+        set_named(game, pos, piston_block(true, along, PistonState::Retracted), &[("facing", face.name())]);
+        return true;
+    }
     if let Some(c) = chassis_at(game, pos, DEFAULT_RANGE) {
         let slime = glue || held.as_deref().is_some_and(|i| game.items().item_in_tag("c:slimeballs", i));
         let side = super::create_contraption::glueable_side(c.kind, c.axis, face);
@@ -2057,6 +2085,8 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
             let next = c.use_item(face, slime, |d| chassis_at(game, add(pos, d), DEFAULT_RANGE));
             if let Some(bits) = next {
                 set_chassis(game, pos, &c, bits);
+                // AbstractChassisBlock.useItemOn: slime added or taken off.
+                super::create_glue::play_create_sound(game, "slime_added", pos.map(|v| f64::from(v) + 0.5), 0.5, 1.0);
             }
             return next.is_some() || glue;
         }
@@ -2536,6 +2566,7 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
             stop_actors(game, Mover::Bearing(pos));
             if let Some(t) = entry.turning.take() {
                 disassemble_bearing(game, t, if windmill { 0.0 } else { b.angle });
+                sound(game, "contraption_disassemble", pos);
                 changed.push(pos);
             }
             b.stopped();
@@ -2584,6 +2615,9 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
         };
         let step = b.tick(rpm, windmill, stalled, || {
             turning = assemble_bearing(game, pos, facing, windmill);
+            if turning.is_some() {
+                sound(game, "contraption_assemble", pos);
+            }
             turning.is_some()
         });
         match step {
@@ -2608,6 +2642,7 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
                 stop_actors(game, Mover::Bearing(pos));
                 if let Some(t) = turning.take() {
                     disassemble_bearing(game, t, angle);
+                    sound(game, "contraption_disassemble", pos);
                     changed.push(pos);
                 }
                 b.stopped();
@@ -3023,6 +3058,7 @@ fn pulleys_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
                 stop_actors(game, Mover::Pulley(pos));
                 let hanging = entry.hanging.take();
                 disassemble_pulley(game, pos, hanging, grid_offset, true);
+                sound(game, "contraption_disassemble", pos);
                 entry.pulley.stopped(grid_offset, reassemble);
                 changed.push(pos);
             }
@@ -3329,6 +3365,7 @@ fn gantries_tick(game: &mut Game<'_>, dimension: &str) {
     };
     for pos in queue {
         if let Some(g) = assemble_gantry(game, pos, &shafts, next_id) {
+            sound(game, "contraption_assemble", pos);
             next_id = next_id.wrapping_add(1);
             moving.push(g);
         }
@@ -3380,6 +3417,7 @@ fn gantries_tick(game: &mut Game<'_>, dimension: &str) {
             GantryStep::Disassemble(grid) => {
                 stop_actors(game, Mover::Gantry(g.id));
                 disassemble_gantry(game, g, grid);
+                sound(game, "contraption_disassemble", grid);
             }
         }
     }

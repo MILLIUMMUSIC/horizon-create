@@ -32,6 +32,8 @@ pub mod create_outline;
 pub mod create_processing;
 #[path = "../mixins/create/saw.rs"]
 pub mod create_saw;
+#[path = "../mixins/create/sounds.rs"]
+pub mod create_sounds;
 #[path = "../mixins/create/tank.rs"]
 pub mod create_tank;
 #[path = "../mixins/create/tunnel.rs"]

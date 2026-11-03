@@ -552,6 +552,20 @@ pub(super) fn attack_entity(game: &mut Game<'_>, entity: i32, canceled: &mut boo
     *canceled = true;
 }
 
+/// `AllSoundEvents.<name>.playOnServer`: each part of Create's sound
+/// event for the players near `at` (their resources define `create:*`).
+pub(super) fn play_create_sound(game: &mut Game<'_>, name: &str, at: [f64; 3], volume: f32, pitch: f32) {
+    let parts = super::create_sounds::parts(name, volume, pitch);
+    if parts.is_empty() {
+        return;
+    }
+    game.with_level(|_, level, _| {
+        for (id, category, v, p) in &parts {
+            level.native_play_sound(id, at, *category, *v, *p);
+        }
+    });
+}
+
 /// `BlockState.hasAnalogOutputSignal` for Create's blocks comparators read.
 pub(super) fn has_analog_output(level: &super::GameLevel<'_>, state: BlockStateId, output: &mut bool) {
     let Some(s) = level.registry.state(state) else {
@@ -889,11 +903,14 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
             return true;
         };
         let dimension = game.dim.id().to_owned();
-        if game.native_set_block(&dimension, pos, air, super::native_hooks::flags::UPDATE_ALL)
-            && mode != 1
-            && game.items().get(super::create_logistics::item_of(&name)).is_some()
-        {
+        let removed = game.native_set_block(&dimension, pos, air, super::native_hooks::flags::UPDATE_ALL);
+        if removed && mode != 1 && game.items().get(super::create_logistics::item_of(&name)).is_some() {
             game.give_or_drop(horizon_client::items::ItemStack::new(super::create_logistics::item_of(&name), 1));
+        }
+        if removed {
+            // IWrenchable.playRemoveSound.
+            let pitch = horizon_core::random::RandomSource::next_float(&mut game.world.random) * 0.5 + 0.5;
+            play_create_sound(game, "wrench_remove", pos.map(|v| f64::from(v) + 0.5), 1.0, pitch);
         }
         return true;
     }
@@ -905,6 +922,9 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
             // KineticBlockEntity.switchToBlockState: the kinetics see the
             // change at the tick's end.
             game.native_set_block_property(pos, key, value);
+            // IWrenchable.playRotateSound.
+            let pitch = horizon_core::random::RandomSource::next_float(&mut game.world.random) + 0.5;
+            play_create_sound(game, "wrench_rotate", pos.map(|v| f64::from(v) + 0.5), 1.0, pitch);
         }
     }
     true

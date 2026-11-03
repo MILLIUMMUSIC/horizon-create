@@ -586,6 +586,24 @@ pub(super) fn press_world_step(game: &mut Game<'_>, pos: Pos, step: PressStep, m
         .registry
         .state(game.world.block(pos[0], pos[1] - 2, pos[2]))
         .is_some_and(|s| s.name == DEPOT || super::create_logistics::is_belt(&s.name));
+    // PressingBehaviour.tick at the cycle's middle: a bonk over wool (a
+    // belt), else a clang pitched by the speed.
+    if step == PressStep::Press {
+        let at = pos.map(|v| f64::from(v) + 0.5);
+        let belt = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1] - 2, pos[2]))
+            .is_some_and(|s| super::create_logistics::is_belt(&s.name));
+        if belt {
+            super::create_glue::play_create_sound(game, "mechanical_press_activation_belt", at, 1.0, 1.0);
+        } else {
+            let speed = press_at(game, pos).map_or(0.0, |(s, _)| s);
+            let pitch = 0.75 + speed.abs() / 1024.0;
+            super::create_glue::play_create_sound(game, "mechanical_press_activation", at, 0.5, pitch);
+        }
+    }
     match step {
         PressStep::ScanWorld => {
             // A depot two below takes the work (TransportedItemStackHandlerBehaviour).
@@ -893,10 +911,22 @@ fn use_depot(game: &mut Game<'_>, pos: Pos) {
         put_bool(&mut be.nbt, "Locked", false);
         back
     });
+    let at = pos.map(|v| f64::from(v) + 0.5);
     match returned {
         Some(back) => {
+            // SharedDepotBlockMethods.onUse: the pick-up sound for what came
+            // back, the slide for what went on.
+            if !back.is_empty() {
+                let pitch = 1.0 + horizon_core::random::RandomSource::next_float(&mut game.world.random);
+                game.with_level(|_, level, _| {
+                    level.native_play_sound("minecraft:entity.item.pickup", at, super::create_sounds::PLAYERS, 0.2, pitch);
+                });
+            }
             for s in back {
                 game.give_or_drop(s);
+            }
+            if hand.is_some() {
+                super::create_glue::play_create_sound(game, "depot_slide", at, 1.0, 1.0);
             }
         }
         None => *game.held_mut() = hand,

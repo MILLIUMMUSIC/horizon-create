@@ -6,7 +6,11 @@ The port builds against Horizon main `674948d` (2026-11-03) and horizon-mixins `
 unchanged; the world with the earlier rigs loads and draws (tanks, vault, arm, belts, chutes).
 
 Comparators (`native_analog_output`): a tank with 4 buckets of 8 powers the wire behind its comparator to 8, and a
-depot holding 32 cobblestone to 8. Not checked yet: the vault (whole multiblock), the basin's inputs. The checks below this
+depot holding 32 cobblestone to 8. Not checked yet: the vault (whole multiblock), the basin's inputs.
+
+Create's sounds: the client hears `create:wrench_rotate` when a shaft is wrenched round and `create:slime_added`
+when a slimeball makes a mechanical piston sticky (it turns into a sticky one, a slimeball used up in survival).
+Not checked yet: the contraption, depot and press sounds. The checks below this
 section were made on the earlier pin `aa27eca`; they haven't all been repeated.
 
 ## Chute goggles, survival and the powered smart chute (macOS, offscreen)

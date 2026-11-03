@@ -40,6 +40,12 @@ name = "create_fan"
 source = "fan.rs"
 
 [[module]]
+id = "sounds"
+file = "crates/horizon-client/src/game.rs"
+name = "create_sounds"
+source = "sounds.rs"
+
+[[module]]
 id = "outline"
 file = "crates/horizon-client/src/game.rs"
 name = "create_outline"
