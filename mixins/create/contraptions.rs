@@ -756,7 +756,7 @@ fn save_text(s: &State, dimension: &str) -> String {
         }
         let q = &e.pulley;
         out += &format!(
-            "pulley {} {} {} {} {} {} {} {}\n",
+            "pulley {} {} {} {} {} {} {} {} {}\n",
             p[0],
             p[1],
             p[2],
@@ -764,7 +764,8 @@ fn save_text(s: &State, dimension: &str) -> String {
             u8::from(q.running),
             u8::from(q.carrying),
             q.last_rpm,
-            u8::from(e.elevator)
+            u8::from(e.elevator),
+            q.mode
         );
         if let Some(h) = &e.hanging {
             let c = &h.contraption;
@@ -957,6 +958,7 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                 entry.pulley.last_rpm = f[7].parse().unwrap_or(0.0);
                 entry.pulley.assemble_next_tick = false;
                 entry.elevator = f.get(8) == Some(&"1");
+                entry.pulley.mode = f.get(9).and_then(|m| m.parse().ok()).unwrap_or(0);
                 current = Some(Target::Pulley(pos));
             }
             Some("gantry") if f.len() >= 9 => {
@@ -2456,8 +2458,9 @@ fn range_display_tick(game: &Game<'_>) {
     });
 }
 
-/// The mouse wheel over a mechanical piston steps its movement mode (the
-/// value box's `ScrollOptionBehaviour`): the new mode's name.
+/// The mouse wheel over a mechanical piston or a rope pulley steps its
+/// movement mode (the value box's `ScrollOptionBehaviour`): the new mode's
+/// name.
 pub(super) fn step_piston_mode(game: &Game<'_>, pos: Pos, up: bool) -> Option<&'static str> {
     let name = game
         .pack
@@ -2465,15 +2468,25 @@ pub(super) fn step_piston_mode(game: &Game<'_>, pos: Pos, up: bool) -> Option<&'
         .registry
         .state(game.world.block(pos[0], pos[1], pos[2]))
         .map(|s| s.name.clone())?;
-    piston_of(&name)?;
+    let next = |mode: u8| if up { (mode + 1) % 3 } else { (mode + 2) % 3 };
+    let key = (game.dim.id().to_owned(), pos);
     let mut guard = state();
     let s = guard.get_or_insert_with(State::default);
-    let piston = s.pistons.entry((game.dim.id().to_owned(), pos)).or_default();
-    let a = &mut piston.actuator;
-    a.mode = if up { (a.mode + 1) % 3 } else { (a.mode + 2) % 3 };
     // `movementMode.withCallback`: the structure waits no more.
-    a.waiting = false;
-    Some(match a.mode {
+    let mode = if piston_of(&name).is_some() {
+        let a = &mut s.pistons.entry(key).or_default().actuator;
+        a.mode = next(a.mode);
+        a.waiting = false;
+        a.mode
+    } else if name == "create:rope_pulley" {
+        let q = &mut s.pulleys.entry(key).or_default().pulley;
+        q.mode = next(q.mode);
+        q.waiting = false;
+        q.mode
+    } else {
+        return None;
+    };
+    Some(match mode {
         0 => "Always Place when Stopped",
         1 => "Place only in Starting Position",
         _ => "Place only when Anchor Destroyed",
@@ -4088,11 +4101,12 @@ fn elevators_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) 
     }
 }
 
-/// Whether the block at `pos` is a mechanical piston (the wheel steps its mode).
+/// Whether the block at `pos` is a mechanical piston or a rope pulley (the
+/// wheel steps its movement mode).
 pub(super) fn is_piston(game: &Game<'_>, pos: Pos) -> bool {
     game.pack
         .assets
         .registry
         .state(game.world.block(pos[0], pos[1], pos[2]))
-        .is_some_and(|s| piston_of(&s.name).is_some())
+        .is_some_and(|s| piston_of(&s.name).is_some() || s.name == "create:rope_pulley")
 }

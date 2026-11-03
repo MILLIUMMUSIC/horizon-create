@@ -294,7 +294,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       between ticks), carries what stands on them (the window's player from `native_tick` on its own side, mobs
       and items on the server), and saves running pistons beside the world. Blocks: a lightning rod's template
       per piston, `axis_along_first` and state, placed as `DirectionalAxisKineticBlock` places them; poles and
-      heads on lightning rods. The movement mode (`MovementMode`, `LinearActuatorBlockEntity.tryDisassemble`: place when stopped, only in the starting position, or never until the speed changes) is stepped by the mouse wheel over the piston in place of the value box, saved with it; pulleys and gantries have none yet. Not yet:
+      heads on lightning rods. The movement mode (`MovementMode`, `LinearActuatorBlockEntity.tryDisassemble`: place when stopped, only in the starting position, or never until the speed changes) is stepped by the mouse wheel over the piston or the rope pulley in place of the value box, saved with it; gantries have none yet. Not yet:
       redstone and sequenced gearshifts, pistons inside other contraptions (`moveMechanicalPiston`), breaking a
       pole or the head breaking the rest, natively drawn parts other than shafts' and cogs' models, the drill's head and the harvester's blade drawn while moving (shafts and cogs don't turn), block entity renderers while moving (chests), colliding with other contraptions,
       pushing entities that stand in the way (only riders and entities inside move), LAN guests carried (the

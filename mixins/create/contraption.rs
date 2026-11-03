@@ -1307,6 +1307,11 @@ pub struct Pulley {
     pub last_rpm: f32,
     /// Something hangs on the rope (`needsContraption`).
     pub carrying: bool,
+    /// `MovementMode` (as the piston's) and the rope's length it started at.
+    pub mode: u8,
+    pub initial: i32,
+    /// Waiting for a speed change (`waitingForSpeedChange`).
+    pub waiting: bool,
 }
 
 impl Default for Pulley {
@@ -1318,6 +1323,9 @@ impl Default for Pulley {
             assemble_next_tick: true,
             last_rpm: 0.0,
             carrying: false,
+            mode: 0,
+            initial: 0,
+            waiting: false,
         }
     }
 }
@@ -1346,8 +1354,21 @@ impl Pulley {
         }
         self.last_rpm = rpm;
         self.assemble_next_tick = true;
+        self.waiting = false;
         if self.running && prev != 0.0 && prev.signum() != rpm.signum() {
             self.offset = ((self.offset * 16.0).round() as i32 / 16) as f32;
+        }
+    }
+
+    /// `tryDisassemble`: the movement mode may keep the structure.
+    fn try_stop(&mut self, grid_offset: i32) -> PulleyStep {
+        if self.mode == 2 || (self.mode == 1 && (self.offset + 0.5) as i32 != self.initial) {
+            self.waiting = true;
+            return PulleyStep::Idle;
+        }
+        PulleyStep::Disassemble {
+            grid_offset,
+            reassemble: false,
         }
     }
 
@@ -1365,6 +1386,7 @@ impl Pulley {
         }
         self.carrying = built == Some(true);
         self.running = true;
+        self.initial = ropes;
         true
     }
 
@@ -1380,6 +1402,9 @@ impl Pulley {
         colliding: impl Fn(Pos, Dir) -> bool,
         anchor_at: impl Fn(f32) -> Option<[f32; 3]>,
     ) -> PulleyStep {
+        if self.waiting {
+            return PulleyStep::Idle;
+        }
         if self.assemble_next_tick {
             self.assemble_next_tick = false;
             if self.running {
@@ -1424,19 +1449,13 @@ impl Pulley {
             }
             if colliding(grid, dir) {
                 let at = self.grid_offset(self.offset);
-                return PulleyStep::Disassemble {
-                    grid_offset: self.grid_offset(at as f32 - speed),
-                    reassemble: false,
-                };
+                return self.try_stop(self.grid_offset(at as f32 - speed));
             }
         }
         self.offset = new;
         if self.offset <= 0.0 || self.offset >= self.range as f32 {
             self.offset = self.offset.clamp(0.0, self.range as f32);
-            return PulleyStep::Disassemble {
-                grid_offset: self.offset as i32,
-                reassemble: false,
-            };
+            return self.try_stop(self.offset as i32);
         }
         PulleyStep::Moved
     }
@@ -2260,6 +2279,25 @@ mod tests {
             w.0.insert([-i, 0, 0], B::Part(PistonPart::Pole { facing: Dir::East }));
         }
         w
+    }
+
+    #[test]
+    fn a_pulley_waits_at_the_end_in_a_keeping_mode() {
+        let mut p = Pulley {
+            running: true,
+            offset: 5.995,
+            range: 6,
+            assemble_next_tick: false,
+            carrying: true,
+            mode: 2,
+            ..Pulley::default()
+        };
+        let step = p.tick(16.0, false, |_| false, |_, _| false, |_| None);
+        assert_eq!(step, PulleyStep::Idle);
+        assert!(p.waiting);
+        // A speed change lets it go on (and place, in the default mode).
+        p.speed(-16.0);
+        assert!(!p.waiting);
     }
 
     #[test]

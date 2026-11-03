@@ -936,4 +936,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - The mouse wheel over a mechanical piston steps its movement mode: one scroll up reads
   `Movement Mode: Place only in Starting Position` on the action bar (screenshot). The modes' effect on a running
   piston is covered by a unit test only; it was not run in the game.
+- The rope pulley's movement mode has the same rule (a unit test with a pulley waiting at the end of its rope); the wheel
+  over a pulley was not tried in the game.
 
