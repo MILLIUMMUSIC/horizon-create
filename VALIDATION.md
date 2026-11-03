@@ -995,3 +995,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   destroy`): the two left were each a controller of themselves (`c;0,0,0`).
 - A mechanical arm taking from a depot and depositing into a crafter (selected with the arm item: the depot once,
   the crafter twice): an oak log dropped on the depot ended in the crafter's slot.
+- A mechanical arm taking from a depot and depositing into a blaze burner: of 2 coal on the depot one went into the
+  burner (`fuelLevel: 1`), the other stayed while the burner was full (as `tryUpdateFuel` refuses). Saws as arm points
+  were not tried. A lava bucket clicked on a burner now gives the empty bucket back (`tryInsert`'s container).

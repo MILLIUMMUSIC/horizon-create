@@ -114,6 +114,10 @@ pub enum PointType {
     RespawnAnchor,
     /// `CrafterPoint`, with the crafter's facing.
     Crafter(Dir),
+    /// `BlazeBurnerPoint`: fuel in, nothing out.
+    BlazeBurner,
+    /// `SawType`'s `DepotPoint`: a turning saw facing up.
+    Saw,
 }
 
 impl PointType {
@@ -131,13 +135,18 @@ impl PointType {
             PointType::Composter => "create:composter",
             PointType::RespawnAnchor => "create:respawn_anchor",
             PointType::Crafter(_) => "create:crafter",
+            PointType::BlazeBurner => "create:blaze_burner",
+            PointType::Saw => "create:saw",
         }
     }
     /// `DepositOnlyArmInteractionPoint`.
     pub fn deposit_only(self) -> bool {
         matches!(
             self,
-            PointType::Funnel(_) | PointType::Campfire | PointType::RespawnAnchor
+            PointType::Funnel(_)
+                | PointType::Campfire
+                | PointType::RespawnAnchor
+                | PointType::BlazeBurner
         )
     }
     /// `getInteractionPositionVector`, from the block's corner.
@@ -146,7 +155,7 @@ impl PointType {
             // TopFaceArmInteractionPoint
             PointType::Chute => [0.5, 1.0, 0.5],
             // DepotPoint (and BeltPoint)
-            PointType::Depot | PointType::Belt => [0.5, 14.0 / 16.0, 0.5],
+            PointType::Depot | PointType::Belt | PointType::Saw => [0.5, 14.0 / 16.0, 0.5],
             PointType::Deployer(f) => {
                 let n = f.opposite().normal();
                 [0, 1, 2].map(|i| 0.5 + f64::from(n[i]) * 0.65)
@@ -155,7 +164,10 @@ impl PointType {
                 let n = f.normal();
                 [0, 1, 2].map(|i| 0.5 + f64::from(n[i]) * -0.15)
             }
-            PointType::Basin | PointType::Millstone | PointType::Campfire => [0.5, 0.5, 0.5],
+            PointType::Basin
+            | PointType::Millstone
+            | PointType::Campfire
+            | PointType::BlazeBurner => [0.5, 0.5, 0.5],
             PointType::Composter => [0.5, 13.0 / 16.0, 0.5],
             PointType::RespawnAnchor => [0.5, 1.0, 0.5],
             // The block's centre moved half a block out of its front.

@@ -712,49 +712,18 @@ fn blaze_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
 /// `BlazeBurnerBlock.useItemOn` / `tryInsert`: fuel in the hand feeds the
 /// burner. True when it took the click.
 fn blaze_click(game: &mut Game<'_>, pos: Pos) -> bool {
-    use super::create_blaze::Fuel;
     let Some(held) = game.held().cloned() else {
         return false;
     };
     if game.native_acting_player().is_some_and(|p| p.game_mode == 3) {
         return false;
     }
-    let item = held.item.to_string();
-    // Special fuel (the superheated data map: the blaze cake), the creative
-    // blaze cake, else what burns in a furnace.
-    let creative = item == "create:creative_blaze_cake";
-    let (kind, burn_time) = if item == "create:blaze_cake" {
-        (Fuel::Special, 3200)
-    } else {
-        let time = game.res.providers().burn_time(game.items(), &held, false);
-        if time > 0 { (Fuel::Normal, time) } else { (Fuel::None, 0) }
-    };
-    if !creative && kind == Fuel::None {
+    let Some(container) = burner_insert(game, pos, &held, false) else {
         return false;
-    }
+    };
+    // BlazeBurnerBlock.useItemOn: one used up and its container given back,
+    // unless creative.
     let creative_player = game.native_acting_player().is_some_and(|p| p.game_mode == 1);
-    let mut burner = game.native_with_mod_block_entity(pos, |be| read_burner(&be.nbt)).unwrap_or_default();
-    let before = burner_heat(game, pos);
-    let taken = if creative {
-        // applyCreativeFuel: the burner stays lit at the next level up.
-        let mut next = before.next_active_level();
-        if next == super::create_blaze::HeatLevel::Fading {
-            next = next.next_active_level();
-        }
-        burner = super::create_blaze::Burner { fuel: Fuel::None, remaining: 0, creative: true };
-        set_burner_heat(game, pos, next);
-        true
-    } else {
-        let taken = burner.try_update_fuel(kind, burn_time, false, false);
-        if taken {
-            set_burner_heat(game, pos, burner.heat_level());
-        }
-        taken
-    };
-    if !taken {
-        return false;
-    }
-    game.native_with_mod_block_entity(pos, |be| write_burner(&mut be.nbt, &burner));
     if !creative_player {
         let hand = game.held_mut();
         if let Some(h) = hand.as_mut() {
@@ -763,7 +732,58 @@ fn blaze_click(game: &mut Game<'_>, pos: Pos) -> bool {
                 *hand = None;
             }
         }
+        if let Some(c) = container {
+            if game.held().is_none() {
+                *game.held_mut() = Some(c);
+            } else {
+                game.give_or_drop(c);
+            }
+        }
     }
+    true
+}
+
+/// `BlazeBurnerBlock.tryInsert` of one item of `stack` (not taken from it):
+/// none when the burner doesn't take it, else its crafting remainder (a
+/// lava bucket's bucket). The creative blaze cake lights it for good.
+pub(super) fn burner_insert(game: &mut Game<'_>, pos: Pos, stack: &ItemStack, simulate: bool) -> Option<Option<ItemStack>> {
+    use super::create_blaze::Fuel;
+    let item = stack.item.to_string();
+    // Special fuel (the superheated data map: the blaze cake), the creative
+    // blaze cake, else what burns in a furnace.
+    let creative = item == "create:creative_blaze_cake";
+    let (kind, burn_time) = if item == "create:blaze_cake" {
+        (Fuel::Special, 3200)
+    } else {
+        let time = game.res.providers().burn_time(game.items(), stack, false);
+        if time > 0 { (Fuel::Normal, time) } else { (Fuel::None, 0) }
+    };
+    if !creative && kind == Fuel::None {
+        return None;
+    }
+    let mut burner = game.native_with_mod_block_entity(pos, |be| read_burner(&be.nbt))?;
+    let before = burner_heat(game, pos);
+    if creative {
+        if simulate {
+            return Some(None);
+        }
+        // applyCreativeFuel: the burner stays lit at the next level up.
+        let mut next = before.next_active_level();
+        if next == super::create_blaze::HeatLevel::Fading {
+            next = next.next_active_level();
+        }
+        burner = super::create_blaze::Burner { fuel: Fuel::None, remaining: 0, creative: true };
+        set_burner_heat(game, pos, next);
+    } else {
+        if !burner.try_update_fuel(kind, burn_time, false, simulate) {
+            return None;
+        }
+        if simulate {
+            return Some(game.items().get(&item).and_then(|i| i.crafting_remainder.clone()).map(|r| ItemStack::new(&r, 1)));
+        }
+        set_burner_heat(game, pos, burner.heat_level());
+    }
+    game.native_with_mod_block_entity(pos, |be| write_burner(&mut be.nbt, &burner));
     // playSound, and the blaze's ambient when the level changed.
     let at = pos.map(|v| f64::from(v) + 0.5);
     let changed = burner_heat(game, pos) != before;
@@ -773,7 +793,10 @@ fn blaze_click(game: &mut Game<'_>, pos: Pos) -> bool {
             level.native_play_sound("minecraft:entity.blaze.ambient", at, super::create_sounds::BLOCKS, 0.2, 1.05);
         }
     });
-    true
+    if creative {
+        return Some(None);
+    }
+    Some(game.items().get(&item).and_then(|i| i.crafting_remainder.clone()).map(|r| ItemStack::new(&r, 1)))
 }
 
 /// `native_block_entity_tick`.
