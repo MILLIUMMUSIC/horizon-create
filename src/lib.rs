@@ -42,6 +42,8 @@ pub mod create_outline;
 pub mod create_placement;
 #[path = "../mixins/create/processing.rs"]
 pub mod create_processing;
+#[path = "../mixins/create/redstone.rs"]
+pub mod create_redstone;
 #[path = "../mixins/create/saw.rs"]
 pub mod create_saw;
 #[path = "../mixins/create/sounds.rs"]

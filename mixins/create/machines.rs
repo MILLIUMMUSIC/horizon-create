@@ -133,6 +133,7 @@ pub(super) fn reset() {
     super::create_spout_glue::reset();
     super::create_crafter_glue::reset();
     super::create_crusher_glue::reset();
+    super::create_redstone_glue::reset();
     *CLIENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
@@ -147,7 +148,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || is_saw(block)) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block)) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -157,7 +158,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || is_saw(block) || super::create_logistics::is_chute_block(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || super::create_logistics::is_chute_block(block) {
         *ticks = true;
     }
 }
@@ -815,6 +816,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         super::create_spout_glue::DRAIN => super::create_spout_glue::drain_tick(game, pos, entity),
         super::create_crafter_glue::CRAFTER => super::create_crafter_glue::tick(game, pos, entity),
         super::create_crusher_glue::CONTROLLER => super::create_crusher_glue::tick(game, pos, entity),
+        n if super::create_redstone_glue::is_ours(n) => super::create_redstone_glue::tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {

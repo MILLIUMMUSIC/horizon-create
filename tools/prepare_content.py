@@ -229,6 +229,8 @@ PARTIALS = {
     "encased_fan_inner": "create:block/encased_fan/propeller",
     "cogwheel_shaftless": "create:block/cogwheel_shaftless",
     "turntable": "create:block/turntable",
+    "analog_lever_handle": "create:block/analog_lever/handle",
+    "analog_lever_indicator": "create:block/analog_lever/indicator",
     "speed_controller_bracket": "create:block/rotation_speed_controller/bracket",
     "large_cogwheel_shaftless": "create:block/large_cogwheel_shaftless",
     "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
@@ -723,6 +725,7 @@ def fit_logistics(content, names):
     fit_crushing_wheel_controller(content)
     fit_encased_cogwheels(content)
     fit_turntable(content)
+    fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
     fit_psi(content)
@@ -1339,7 +1342,7 @@ def fit_blaze_burner(content, names):
     states = content / "assets" / "create" / "blockstates"
     models = content / "assets" / "create" / "models" / "block"
     decl = read_json(blocks / "blaze_burner.json") if (blocks / "blaze_burner.json").exists() else {}
-    decl["template"] = "minecraft:stone"
+    decl["template"] = "minecraft:iron_chain"
     decl["state_properties"] = {"heat_level": {"type": "enum", "values": HEAT_LEVELS}}
     decl["default_state"] = {"heat_level": "smouldering"}
     decl["shapes"] = {"property": "heat_level", "values": {h: [box(1, 0, 1, 15, 14, 15)] for h in HEAT_LEVELS}}
@@ -1357,7 +1360,7 @@ def fit_redstone_link(content, names):
     states = content / "assets" / "create" / "blockstates"
     original = read_json(states / "redstone_link.json") if (states / "redstone_link.json").exists() else None
     decl = read_json(blocks / "redstone_link.json") if (blocks / "redstone_link.json").exists() else {}
-    decl["template"] = "minecraft:stone"
+    decl["template"] = "minecraft:iron_chain"
     decl["state_properties"] = {"facing": {"type": "enum", "values": FACINGS},
                                 "powered": {"type": "boolean"}, "receiver": {"type": "boolean"}}
     decl["default_state"] = {"facing": "north", "powered": "false", "receiver": "false"}
@@ -1371,6 +1374,28 @@ def fit_redstone_link(content, names):
             props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
             out[f"facing={props['facing']},powered={props['powered']},receiver={props['receiver']}"] = model
         write_json(states / "redstone_link.json", {"variants": out})
+
+
+# The analog lever (a lever's template: its `face` and `facing`, its use and
+# signal the native mod's) and the diodes (a chain's template, which hides
+# nothing, with their own properties; AbstractDiodeBlock's 2/16 plate).
+def fit_redstone_logic(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    decl = read_json(blocks / "analog_lever.json") if (blocks / "analog_lever.json").exists() else {}
+    decl["template"] = "minecraft:lever"
+    write_json(blocks / "analog_lever.json", decl)
+    horizontal = {"type": "enum", "values": ["north", "south", "west", "east"]}
+    flag = {"type": "boolean"}
+    plate = {"default": [box(0, 0, 0, 16, 2, 16)]}
+    for name, extra in [("powered_toggle_latch", []), ("powered_latch", ["powered_side"]),
+                        ("pulse_repeater", ["inverted"]), ("pulse_extender", ["inverted"]), ("pulse_timer", ["inverted"])]:
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:iron_chain"
+        decl["state_properties"] = {"facing": horizontal, "powered": flag, "powering": flag, **{e: flag for e in extra}}
+        decl["default_state"] = {"facing": "north", "powered": "false", "powering": "false", **{e: "false" for e in extra}}
+        decl["shapes"] = plate
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
 
 
 # The rotation speed controller: a log's `axis`, AllShapes.SPEED_CONTROLLER; the
@@ -1390,7 +1415,7 @@ def fit_turntable(content):
     states = content / "assets" / "create" / "blockstates"
     models = content / "assets" / "create" / "models" / "block"
     decl = read_json(blocks / "turntable.json") if (blocks / "turntable.json").exists() else {}
-    decl["template"] = "minecraft:stone"
+    decl["template"] = "minecraft:iron_chain"
     decl["shapes"] = {"default": [box(1, 4, 1, 15, 8, 15), box(5, 0, 5, 11, 4, 11)]}
     decl.setdefault("properties", {})["light"] = 0
     write_json(blocks / "turntable.json", decl)

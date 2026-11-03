@@ -1048,3 +1048,13 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   steps of the mouse wheel on the controller's value box set the speedometer to 96 RPM (the steps as the motor's: 4 up to
   32, then 16), the motor's own 16 unchanged, and the bracket showed under the cog. The default 16 wasn't read first
   (that speedometer's shaft wasn't aligned). Not tried: a target below the input, reversing, placing it by hand under a cog.
+
+## Redstone logic (macOS, offscreen)
+
+- Analog lever: 3 clicks gave `State: 3`, and the wire beside it read `power=3` after the delay.
+- Toggle latch: a redstone block behind it set `powered` and `powering`, the wire at its front to 15; taken away, `powering`
+  stayed and the wire stayed at 15; placed again, `powering` went off and the wire to 0.
+- Pulse timer (interval 20): `powering` seen in 5 of 40 quick reads with no input. Pulse extender with `MaxState: 40` and a
+  0.3 second input: the wire stayed at 15 about 1.5 seconds more, then 0. Pulse repeater: the wire pulsed to 15 once and went back to 0.
+- The models show on the floor with no hole under them.
+  Not tried: the powered latch, inverted diodes (a click), the wheel on an interval, a lever on a wall or ceiling.

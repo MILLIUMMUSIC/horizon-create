@@ -519,6 +519,17 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    the kinetics. The mouse wheel over its value box steps the target in place of Create 6's value board, as on the
    motor (so 0, which the board allows, isn't reached). Its shaft and the bracket under the cog are drawn. Not yet: its
    value's tooltip, `PlacementHelper` (a large cog placed from the controller), the advancement.
+   Redstone logic (`redstone.rs`, `redstone_glue.rs`): the analog lever (`AnalogLeverBlockEntity`: a lever's template,
+   its use and `native_block_signal`, 0 to 15, sneaking lowers it, its neighbours told after 15 ticks; handle and
+   indicator drawn), the toggle and powered latches (`ToggleLatchBlock`, `PoweredLatchBlock`) and the pulse repeater,
+   extender and timer (`BrassDiodeBlockEntity`). Decisions: a diode's input is read in its block entity's tick with its
+   delay counted there, not with block ticks; `SignalGetter.getSignal` is private to `horizon-world`, so a small module
+   (`level_signal.rs`) is injected there; the mouse wheel steps a brass diode's interval over the board's rows (said on the
+   action bar) in place of Create 6's value board. Not yet: the wrench on diodes (turning, sneaking), the lever's easing
+   and the indicators' colours (diodes' `FLEXPEATER_INDICATOR`), goggles on the lever, the particles, wires
+   connecting only along a diode's axis (`canConnectRedstone`), the clipboard.
+   Blocks that aren't full (the link, the blaze burner, the turntable, the diodes) stand on a chain's template, which
+   hides nothing: on stone's they cut holes in the block under them.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that
    pipes drain from every side but the top and can't fill. Items come in from belts and chutes

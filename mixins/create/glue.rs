@@ -662,6 +662,10 @@ pub(super) fn state_for_placement(
     let chosen = match s.name.as_str() {
         // RedstoneLinkBlock: mounted on the face clicked.
         super::create_machines::LINK => set(&[("facing", face.name())]),
+        // DiodeBlock.getStateForPlacement: facing the placer.
+        n if super::create_redstone_glue::is_diode(n) => {
+            set(&[("facing", super::create_placement::horizontal(context.yaw).opposite().name())])
+        }
         // MechanicalCrafterBlock.getStateForPlacement.
         super::create_crafter_glue::CRAFTER => {
             let other = against
@@ -855,6 +859,14 @@ pub(super) fn update_shape(
             *new = chain_state(level, state, next);
         }
     }
+    // DiodeBlock.canSurvive: a diode without the block under it breaks.
+    if d == Dir::Down
+        && level.registry.state(state).is_some_and(|s| super::create_redstone_glue::is_diode(&s.name))
+        && level.facts.get(level.world.block(pos[0], pos[1] - 1, pos[2])).sturdy_full & (1 << Dir::Up as u8) == 0
+    {
+        *new = level.registry.default_state("minecraft:air");
+        return;
+    }
     // RedstoneLinkBlock.neighborChanged: its support gone, it breaks (with
     // its drops, as the level removes a block whose shape update is air).
     if let Some(facing) = link_facing(level, state)
@@ -890,6 +902,9 @@ pub(super) fn can_survive(level: &super::GameLevel<'_>, pos: Pos, state: BlockSt
     if let Some(facing) = link_facing(level, state) {
         *survives = Some(link_supported(level, pos, facing));
     }
+    if level.registry.state(state).is_some_and(|s| super::create_redstone_glue::is_diode(&s.name)) {
+        *survives = Some(level.facts.get(level.world.block(pos[0], pos[1] - 1, pos[2])).sturdy_full & (1 << Dir::Up as u8) != 0);
+    }
 }
 
 /// `RedstoneLinkBlock.getSignal` and `getDirectSignal`: a powered receiver
@@ -907,6 +922,18 @@ pub(super) fn block_signal(
     let Some(s) = level.registry.state(state) else {
         return;
     };
+    if super::create_redstone_glue::is_ours(&s.name) {
+        super::create_redstone_glue::block_signal(
+            level,
+            level_dimension_id(dimension),
+            pos,
+            state,
+            Dir::nearest(face.normal()),
+            _direct,
+            signal,
+        );
+        return;
+    }
     if s.name != super::create_machines::LINK {
         return;
     }
@@ -923,6 +950,9 @@ pub(super) fn is_signal_source(level: &super::GameLevel<'_>, state: BlockStateId
     let Some(s) = level.registry.state(state) else {
         return;
     };
+    if super::create_redstone_glue::is_ours(&s.name) {
+        *source = true;
+    }
     if s.name == super::create_machines::LINK {
         *source = s.properties.get("receiver").map(String::as_str) == Some("true")
             && s.properties.get("powered").map(String::as_str) == Some("true");
@@ -1023,7 +1053,7 @@ fn right_click_hand(
         *canceled = true;
         return;
     }
-    if try_encase(game, pos) {
+    if try_encase(game, pos) || super::create_redstone_glue::right_click(game, pos) {
         *canceled = true;
         return;
     }
@@ -1545,6 +1575,13 @@ pub(super) fn from_client(game: &mut Game<'_>, player: u128, channel: &str, data
         }
         return;
     }
+    if (value == TUNNEL_MODE_UP || value == TUNNEL_MODE_DOWN)
+        && let Some(label) = super::create_redstone_glue::step_interval(game, pos, value == TUNNEL_MODE_UP)
+    {
+        let line = format!("Interval: {label}");
+        super::create_contraptions::tell_later(player, horizon_client::text::Text::literal(line));
+        return;
+    }
     if value == TUNNEL_MODE_UP || value == TUNNEL_MODE_DOWN {
         if let Some(label) = super::create_logistics::step_tunnel_mode(game, pos, value == TUNNEL_MODE_UP) {
             let line = format!("Brass Tunnel: {label}");
@@ -1674,6 +1711,17 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         let step = if steps > 0.0 { PISTON_MODE_UP } else { PISTON_MODE_DOWN };
         if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
             log::debug!("Create: piston mode: {e}");
+        }
+        return;
+    }
+    // A brass diode's interval, likewise.
+    if let Some(hit) = game.pick()
+        && super::create_redstone_glue::is_brass(&block_name(game, hit.pos))
+    {
+        *claimed = true;
+        let step = if steps > 0.0 { TUNNEL_MODE_UP } else { TUNNEL_MODE_DOWN };
+        if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
+            log::debug!("Create: diode interval: {e}");
         }
         return;
     }

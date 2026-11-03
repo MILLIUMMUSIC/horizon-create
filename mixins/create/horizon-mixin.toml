@@ -166,6 +166,24 @@ name = "create_crafter"
 source = "crafter.rs"
 
 [[module]]
+id = "level_signal"
+file = "crates/horizon-world/src/level/mod.rs"
+name = "create_level_signal"
+source = "level_signal.rs"
+
+[[module]]
+id = "redstone"
+file = "crates/horizon-client/src/game.rs"
+name = "create_redstone"
+source = "redstone.rs"
+
+[[module]]
+id = "redstone_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_redstone_glue"
+source = "redstone_glue.rs"
+
+[[module]]
 id = "chain"
 file = "crates/horizon-client/src/game.rs"
 name = "create_chain"

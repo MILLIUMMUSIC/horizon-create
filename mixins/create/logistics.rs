@@ -2305,7 +2305,7 @@ pub(super) fn flap(game: &mut Game<'_>, pos: Pos, side: Dir, inward: bool) {
 
 /// `native_block_entity_update_tag`: a funnel's or tunnel's flaps.
 pub(super) fn update_tag(entity: &horizon_client::containers::ModBlockEntity, tag: &mut Option<Compound>) {
-    if entity.id == FUNNEL_ENTITY || entity.id == TUNNEL_ENTITY {
+    if entity.id == FUNNEL_ENTITY || entity.id == TUNNEL_ENTITY || entity.id == super::create_redstone_glue::LEVER {
         *tag = Some(entity.nbt.clone());
     }
 }
