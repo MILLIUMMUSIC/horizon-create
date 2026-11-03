@@ -112,6 +112,8 @@ pub enum PointType {
     Composter,
     /// `RespawnAnchorPoint`: glowstone in.
     RespawnAnchor,
+    /// `CrafterPoint`, with the crafter's facing.
+    Crafter(Dir),
 }
 
 impl PointType {
@@ -128,6 +130,7 @@ impl PointType {
             PointType::Campfire => "create:campfire",
             PointType::Composter => "create:composter",
             PointType::RespawnAnchor => "create:respawn_anchor",
+            PointType::Crafter(_) => "create:crafter",
         }
     }
     /// `DepositOnlyArmInteractionPoint`.
@@ -155,12 +158,17 @@ impl PointType {
             PointType::Basin | PointType::Millstone | PointType::Campfire => [0.5, 0.5, 0.5],
             PointType::Composter => [0.5, 13.0 / 16.0, 0.5],
             PointType::RespawnAnchor => [0.5, 1.0, 0.5],
+            // The block's centre moved half a block out of its front.
+            PointType::Crafter(f) => {
+                let n = f.normal();
+                [0, 1, 2].map(|i| 0.5 + f64::from(n[i]) * 0.5)
+            }
         }
     }
     /// `getInteractionDirection`: the way the claw faces.
     pub fn interaction_direction(self) -> Dir {
         match self {
-            PointType::Deployer(f) | PointType::Funnel(f) => f.opposite(),
+            PointType::Deployer(f) | PointType::Funnel(f) | PointType::Crafter(f) => f.opposite(),
             _ => Dir::Down,
         }
     }
@@ -202,7 +210,7 @@ impl Point {
     /// `serialize(anchor)`: type, position relative to the arm, mode.
     pub fn serialize(&self, anchor: Pos) -> String {
         let facing = match self.kind {
-            PointType::Deployer(f) | PointType::Funnel(f) => f.name(),
+            PointType::Deployer(f) | PointType::Funnel(f) | PointType::Crafter(f) => f.name(),
             _ => "",
         };
         format!(

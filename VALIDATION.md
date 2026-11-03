@@ -993,3 +993,5 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   off the third (the second became the controller of the first, the third alone).
 - The three joined again (the middle one the controller of both others), the middle one broken (`setblock ... air
   destroy`): the two left were each a controller of themselves (`c;0,0,0`).
+- A mechanical arm taking from a depot and depositing into a crafter (selected with the arm item: the depot once,
+  the crafter twice): an oak log dropped on the depot ended in the crafter's slot.

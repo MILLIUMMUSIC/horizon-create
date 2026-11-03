@@ -536,49 +536,87 @@ fn eject_whole_grid(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) 
 /// inventories in order, each taking one item when idle, uncovered and
 /// empty (`Inventory.insertItem`). What is left, none when it took all.
 pub(super) fn insert(game: &mut Game<'_>, pos: Pos, mut stack: ItemStack) -> Option<ItemStack> {
-    let input = with_crafter(game, pos, |c| c.input.clone());
-    let controller = if input.controller { pos } else { input.controller_of(pos) };
-    let members = with_crafter(game, controller, |c| c.input.clone());
-    // A member whose controller isn't one has no inventories.
-    if !members.controller || crafter_at(game, controller).is_none() {
-        return Some(stack);
-    }
-    let facing = crafter_at(game, controller).map_or(Dir::South, |c| c.0);
-    for member in super::create_crafter::inventory_order(controller, facing, &members.data) {
+    for member in group(game, pos) {
         if stack.count == 0 {
             break;
         }
-        if crafter_at(game, member).is_none() {
-            continue;
-        }
-        let (phase, covered) = with_crafter(game, member, |c| (c.phase, c.covered));
-        if phase != Phase::Idle || covered {
-            continue;
-        }
-        let mut one = stack.clone();
-        one.count = 1;
-        let put = game
-            .native_with_mod_block_entity(member, |be| {
-                if be.items.is_empty() {
-                    be.items.push(None);
-                }
-                if be.items[0].is_some() {
-                    return false;
-                }
-                be.items[0] = Some(one);
-                true
-            })
-            .unwrap_or(false);
-        if put {
-            stack.count -= 1;
-            with_crafter(game, member, |c| c.check = true);
-            let at = member.map(|v| f64::from(v) + 0.5);
-            game.with_level(|_, level, _| {
-                level.native_play_sound("minecraft:entity.item_frame.add_item", at, super::create_sounds::BLOCKS, 0.25, 0.5);
-            });
+        if let Some(left) = slot_insert(game, member, stack.clone(), false) {
+            stack = left;
+        } else {
+            stack.count = 0;
         }
     }
     (stack.count > 0).then_some(stack)
+}
+
+/// `ConnectedInput.getInventories`: the crafters of `pos`'s group in
+/// Create's order; none for a member whose controller isn't one.
+pub(super) fn group(game: &Game<'_>, pos: Pos) -> Vec<Pos> {
+    let input = with_crafter(game, pos, |c| c.input.clone());
+    let controller = if input.controller { pos } else { input.controller_of(pos) };
+    let members = with_crafter(game, controller, |c| c.input.clone());
+    let Some((facing, _)) = crafter_at(game, controller).filter(|_| members.controller) else {
+        return Vec::new();
+    };
+    super::create_crafter::inventory_order(controller, facing, &members.data)
+        .into_iter()
+        .filter(|p| crafter_at(game, *p).is_some())
+        .collect()
+}
+
+/// `MechanicalCrafterBlockEntity.Inventory.insertItem` into one crafter:
+/// one item when idle, uncovered and empty. What is left.
+pub(super) fn slot_insert(game: &mut Game<'_>, member: Pos, stack: ItemStack, simulate: bool) -> Option<ItemStack> {
+    let (phase, covered) = with_crafter(game, member, |c| (c.phase, c.covered));
+    if phase != Phase::Idle || covered {
+        return Some(stack);
+    }
+    let empty = matches!(game.world.block_entities.get(&(member[0], member[1], member[2])),
+        Some(BlockEntity::Mod(m)) if m.items.first().is_none_or(Option::is_none));
+    if !empty {
+        return Some(stack);
+    }
+    if !simulate {
+        let mut one = stack.clone();
+        one.count = 1;
+        game.native_with_mod_block_entity(member, |be| {
+            if be.items.is_empty() {
+                be.items.push(None);
+            }
+            be.items[0] = Some(one);
+        });
+        with_crafter(game, member, |c| c.check = true);
+        let at = member.map(|v| f64::from(v) + 0.5);
+        game.with_level(|_, level, _| {
+            level.native_play_sound("minecraft:entity.item_frame.add_item", at, super::create_sounds::BLOCKS, 0.25, 0.5);
+        });
+    }
+    let mut left = stack;
+    left.count -= 1;
+    (left.count > 0).then_some(left)
+}
+
+/// `CrafterPoint.extract` (extraction allowed for the arm): the item in one
+/// crafter's slot.
+pub(super) fn slot_extract(game: &mut Game<'_>, member: Pos, amount: u32, simulate: bool) -> Option<ItemStack> {
+    let item = match game.world.block_entities.get(&(member[0], member[1], member[2])) {
+        Some(BlockEntity::Mod(m)) => m.items.first().cloned().flatten()?,
+        _ => return None,
+    };
+    let n = amount.min(item.count);
+    let mut out = item.clone();
+    out.count = n;
+    if !simulate {
+        game.native_with_mod_block_entity(member, |be| {
+            if let Some(Some(s)) = be.items.first_mut() {
+                s.count -= n;
+            }
+            if be.items.first().is_some_and(|s| s.as_ref().is_some_and(|s| s.count == 0)) {
+                be.items[0] = None;
+            }
+        });
+    }
+    (n > 0).then_some(out)
 }
 
 /// The crafters' inputs, as `toggleConnection` changes them (each crafter's

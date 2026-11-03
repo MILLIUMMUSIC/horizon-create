@@ -448,6 +448,8 @@ pub(super) enum Inv {
     /// A portable storage interface's `InterfaceItemHandler`: the storage of
     /// the structure it is connected to.
     Psi(Pos),
+    /// A crafter's `ConnectedInput` handler: its group's slots in order.
+    Crafter(Vec<Pos>),
     /// The arm's `CampfirePoint`, `ComposterPoint` and `RespawnAnchorPoint`.
     Campfire(Pos),
     Composter(Pos),
@@ -545,6 +547,9 @@ pub(super) fn handler_at(game: &Game<'_>, pos: Pos) -> Option<Inv> {
     }
     if super::create_logistics::is_belt(block_name(game, pos)?.as_str()) {
         return Some(Inv::Belt(pos));
+    }
+    if block_name(game, pos).as_deref() == Some(super::create_crafter_glue::CRAFTER) {
+        return Some(Inv::Crafter(super::create_crafter_glue::group(game, pos)));
     }
     match game.world.block_entities.get(&(pos[0], pos[1], pos[2]))? {
         B::Mod(m) => Some(match m.id.as_str() {
@@ -670,6 +675,7 @@ impl ItemHandler for Inv {
             }
             Inv::Chest(pos) => chest_items(game, *pos).map_or(0, |i| i.len()),
             Inv::Psi(pos) => super::create_actor_glue::psi_slots(game, *pos),
+            Inv::Crafter(members) => members.len(),
             Inv::Campfire(_) | Inv::Composter(_) | Inv::Anchor(_) => 1,
         }
     }
@@ -838,6 +844,10 @@ impl ItemHandler for Inv {
                 }
             })
             .unwrap_or(Some(stack)),
+            Inv::Crafter(members) => match members.get(slot) {
+                Some(m) => super::create_crafter_glue::slot_insert(game, *m, stack, simulate),
+                None => Some(stack),
+            },
             Inv::Campfire(pos) => campfire_insert(game, *pos, stack, simulate),
             Inv::Composter(pos) => composter_insert(game, *pos, stack, simulate),
             Inv::Anchor(pos) => anchor_insert(game, *pos, stack, simulate),
@@ -932,6 +942,7 @@ impl ItemHandler for Inv {
             })
             .flatten(),
             Inv::Composter(pos) => composter_extract(game, *pos, simulate).filter(|_| amount > 0),
+            Inv::Crafter(members) => super::create_crafter_glue::slot_extract(game, *members.get(slot)?, amount, simulate),
             Inv::Campfire(_) | Inv::Anchor(_) => None,
         }
     }
@@ -1061,6 +1072,9 @@ fn point_type_at(game: &Game<'_>, pos: Pos) -> Option<PointType> {
         super::create_machines::DEPOT => Some(PointType::Depot),
         name if super::create_logistics::is_chute_block(name) => Some(PointType::Chute),
         "create:millstone" => Some(PointType::Millstone),
+        super::create_crafter_glue::CRAFTER => {
+            Some(PointType::Crafter(super::create_crafter_glue::crafter_at(game, pos)?.0))
+        }
         "minecraft:campfire" | "minecraft:soul_campfire" => Some(PointType::Campfire),
         "minecraft:composter" => Some(PointType::Composter),
         "minecraft:respawn_anchor" => Some(PointType::RespawnAnchor),
