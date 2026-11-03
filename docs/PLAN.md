@@ -259,7 +259,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      (`updateTunnelConnections`); an empty hand takes the group's stacks (`grabAllStacksOfGroup`); a broken one
      drops its stack. Mode and stack are saved in `create_logistics_*.txt`. Not yet: sided filters on the tunnel itself
      (`SidedFilteringBehaviour`); the brass tunnel's connected textures (`BrassTunnelCTBehaviour`); its window
-     toggle (the wrench switches the mode instead); the goggles list the stacks the connected brass tunnels hold (`addToGoggleTooltip`, from their block entities' data); the distribution's stack drawn (`BrassTunnelRenderer`).
+     toggle is the wrench's (`onWrenched`), and the mouse wheel over a brass tunnel steps its selection mode in place of the value box; the goggles list the stacks the connected brass tunnels hold (`addToGoggleTooltip`, from their block entities' data); the distribution's stack drawn (`BrassTunnelRenderer`).
    Later: the remaining belt features above.
 5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions). In Create a
    contraption is an entity (`AbstractContraptionEntity`) holding the moved blocks (`Contraption`), drawn by its

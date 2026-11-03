@@ -2641,28 +2641,30 @@ fn set_mode(game: &Game<'_>, pos: Pos, mode: SelectionMode) {
     });
 }
 
-/// The wrench on a tunnel: a brass tunnel steps to its next selection mode
-/// (standing in for its value box, which Horizon can't open;
-/// the window of a straight brass tunnel isn't toggled), an andesite one
-/// opens or closes its window (`onWrenched`). True when it was a tunnel.
+/// The wrench on a tunnel (`BeltTunnelBlock.onWrenched`): a straight tunnel
+/// with a window opens or closes it, any other is left to the wrench's
+/// own use. True when it was a tunnel.
 pub(super) fn wrench_tunnel(game: &mut Game<'_>, pos: Pos) -> bool {
     let Some(t) = tunnel_at(game, pos) else {
         return false;
     };
-    if t.brass {
-        let dim = game.dim.id().to_owned();
-        let mode = with_state(|s| s.tunnels.get(&(dim, pos)).map(|d| d.brass.mode).unwrap_or_default()).next();
-        set_mode(game, pos, mode);
-        if let Some(player) = game.native_acting_player() {
-            let line = format!("Brass Tunnel: {}", mode.label());
-            game.native_action_bar(player.uuid, horizon_client::text::Text::literal(line));
-        }
-        return true;
-    }
     if let Some(w) = t.wrenched() {
         set_tunnel(game, pos, w);
     }
     true
+}
+
+/// The mouse wheel over a brass tunnel steps its selection mode (standing in
+/// for its value box, which Horizon can't open): the new mode's name.
+pub(super) fn step_tunnel_mode(game: &mut Game<'_>, pos: Pos, up: bool) -> Option<&'static str> {
+    if !tunnel_at(game, pos).is_some_and(|t| t.brass) {
+        return None;
+    }
+    let dim = game.dim.id().to_owned();
+    let current = with_state(|s| s.tunnels.get(&(dim, pos)).map(|d| d.brass.mode).unwrap_or_default());
+    let mode = if up { current.next() } else { current.prev() };
+    set_mode(game, pos, mode);
+    Some(mode.label())
 }
 
 /// The world as a brass tunnel's distribution sees it.
@@ -3574,4 +3576,9 @@ pub(super) fn draw_filter_item(
     let resolved =
         game.resolve_item(&stack, horizon_assets::item_model::DisplayContext::Fixed, Some(&owner), pos[0] ^ pos[2]);
     game.submit_item_world(&resolved, m, horizon_client::block_entity_render::vertex_light(light), out);
+}
+
+/// Whether the block at `pos` is a brass tunnel (the wheel steps its mode).
+pub(super) fn is_brass_tunnel(game: &Game<'_>, pos: Pos) -> bool {
+    tunnel_at(game, pos).is_some_and(|t| t.brass)
 }

@@ -928,4 +928,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   only; the shaft halves' turning was not looked at.
 - The deployer's filter item (an iron ingot) shows lying on its top face (screenshot); the other filter side and the
   orientation on sides other than the top were not compared with Create's.
+- The mouse wheel over a brass tunnel steps its selection mode: two scrolls up read `Brass Tunnel: Round Robin` on the
+  action bar (screenshot). The wrench's window toggle was not tried.
 

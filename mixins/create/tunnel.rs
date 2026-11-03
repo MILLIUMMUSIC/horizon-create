@@ -355,6 +355,11 @@ impl SelectionMode {
         let i = Self::ALL.iter().position(|m| *m == self).unwrap_or(0);
         Self::ALL[(i + 1) % Self::ALL.len()]
     }
+    /// The previous option.
+    pub fn prev(self) -> SelectionMode {
+        let i = Self::ALL.iter().position(|m| *m == self).unwrap_or(0);
+        Self::ALL[(i + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
     /// `create.tunnel.selection_mode.*`'s English names.
     pub fn label(self) -> &'static str {
         match self {
