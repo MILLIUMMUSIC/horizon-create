@@ -482,12 +482,26 @@ pub(super) fn drain_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
 
 /// The held item at the far side (`ItemDrainBlockEntity.tick`): into what
 /// takes items from belts there, else ejected when nothing solid is in
-/// the way. Not yet: belt funnels on the drain (`tryExportingToBeltFunnel`).
+/// the way; a pulling belt funnel on the drain takes it first
+/// (`tryExportingToBeltFunnel`).
 fn drain_output(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     let (Some(stack), Some(item)) = (entity.items[0].clone(), drain_item(entity)) else {
         return;
     };
     let side = item.inserted_from;
+    // A belt funnel on its edge takes it first.
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    if let Some(left) = super::create_logistics::export_to_belt_funnel(game, above, side.opposite(), &stack) {
+        match left {
+            None => {
+                entity.items[0] = None;
+                set_drain_item(entity, None);
+            }
+            Some(l) if l.count != stack.count => entity.items[0] = Some(l),
+            _ => {}
+        }
+        return;
+    }
     let n = side.normal();
     let next = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
     if !super::create_logistics::has_belt_input(game, next) {

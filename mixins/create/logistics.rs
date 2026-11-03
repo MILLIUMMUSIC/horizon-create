@@ -2126,10 +2126,42 @@ fn belt_funnel_shape(game: &Game<'_>, pos: Pos, f: FunnelState) -> &'static str 
         }
         return if b.facing.axis() != f.facing.axis() { perpendicular } else { "retracted" };
     }
-    if block_name(game, below).as_deref() == Some(super::create_machines::DEPOT) {
-        return perpendicular;
+    // A DirectBeltInputBehaviour that `canSupportBeltFunnels`: the depot,
+    // the item drain, a saw facing up (`canProcess`).
+    match block_name(game, below).as_deref() {
+        Some(super::create_machines::DEPOT | super::create_spout_glue::DRAIN) => return perpendicular,
+        Some(n) if super::create_machines::is_saw(n) && prop(game, below, "facing").as_deref() == Some("up") => {
+            return perpendicular;
+        }
+        _ => {}
     }
     "wall"
+}
+
+/// `DirectBeltInputBehaviour.tryExportingToBeltFunnel` of the block below
+/// `funnel_pos`: none when there is no pulling belt funnel facing `side`
+/// there, else what is left of `stack` (all of it while it is powered),
+/// put into what is behind the funnel, whose flap swings in.
+pub(super) fn export_to_belt_funnel(game: &mut Game<'_>, funnel_pos: Pos, side: Dir, stack: &ItemStack) -> Option<Option<ItemStack>> {
+    let f = funnel_at(game, funnel_pos)?;
+    if prop(game, funnel_pos, "shape").as_deref() != Some("pulling") || f.facing != side {
+        return None;
+    }
+    if prop(game, funnel_pos, "powered").as_deref() == Some("true") {
+        return Some(Some(stack.clone()));
+    }
+    if !funnel_accepts(game, funnel_pos, stack) {
+        return Some(Some(stack.clone()));
+    }
+    let behind = f.behind(funnel_pos);
+    if !has_inventory(game, behind) {
+        return Some(Some(stack.clone()));
+    }
+    let left = insert_into(game, behind, f.facing, stack.clone());
+    if left.as_ref().is_none_or(|l| l.count != stack.count) {
+        flap(game, funnel_pos, f.facing, true);
+    }
+    Some(left)
 }
 
 /// `BeltFunnelBlock.updateShape`: the funnel's `shape` follows what is

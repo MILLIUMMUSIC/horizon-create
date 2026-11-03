@@ -485,7 +485,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    the tank can take the fluid, is emptied at five (`create:emptying` recipes whose fluid Horizon has, water and lava
    buckets, the water bottle), then goes on to what takes items from belts beyond, or is ejected when nothing solid
    is there. A full bucket clicked on it empties into the tank; another click takes the held item back. The tank's
-   fluid and the item lying on it are drawn. Not yet: belt funnels on its sides (`tryExportingToBeltFunnel`), the
+   fluid and the item lying on it are drawn. A belt funnel on it (pulling, as on a depot or a saw facing up:
+   `canSupportBeltFunnels`) takes the item at its edge first (`tryExportingToBeltFunnel`). Not yet: the
    item's roll and the stream over it while emptying, potion and other fluids Horizon has no block for (honey, tea,
    milk), the comparator, advancements.
 

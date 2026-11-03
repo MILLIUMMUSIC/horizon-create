@@ -1000,3 +1000,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   were not tried. A lava bucket clicked on a burner now gives the empty bucket back (`tryInsert`'s container).
 - A crafter's data while it crafted showed its grid as item compounds (`Grid: [{item: {count: 4, id:
   "minecraft:oak_planks"}, x: 0, y: 0}]`), as `GroupedItems.write` keeps them.
+- A collecting funnel set on an item drain against a chest beside it took the `pulling` shape; a water bucket put
+  on the drain (its data) travelling toward the funnel was drained and the empty bucket went through the funnel into
+  the chest.
