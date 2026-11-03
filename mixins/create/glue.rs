@@ -635,6 +635,15 @@ pub(super) fn state_for_placement(
     let chosen = match s.name.as_str() {
         // RedstoneLinkBlock: mounted on the face clicked.
         super::create_machines::LINK => set(&[("facing", face.name())]),
+        // MechanicalCrafterBlock.getStateForPlacement.
+        super::create_crafter_glue::CRAFTER => {
+            let other = against
+                .filter(|a| a.name == super::create_crafter_glue::CRAFTER)
+                .and_then(|a| a.properties.get("facing").and_then(|f| Dir::parse(f)));
+            let horizontal = super::create_placement::horizontal(context.yaw);
+            let (facing, pointing) = super::create_crafter::placement(face, other, context.sneaking, horizontal);
+            set(&[("facing", facing.name()), ("pointing", pointing.name())])
+        }
         // RedstoneContactBlock: facing away from the placer, or onto the
         // clicked block when sneaking.
         "create:redstone_contact" => {
@@ -886,6 +895,7 @@ fn right_click_hand(
 ) {
     if super::create_contraptions::right_click(game, pos, face)
         || super::create_arms::right_click(game, pos, face)
+        || super::create_crafter_glue::right_click(game, pos, face)
     {
         *canceled = true;
         return;
@@ -1709,6 +1719,11 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
         Kind::Drill(f) => {
             // DrillRenderer: its head, turned to face its way.
             want.push(("create:hz_part_drill_head", None, rotate_to_face(f), f.axis(), standard, 0.0));
+        }
+        Kind::MechanicalCrafter(f) => {
+            // MechanicalCrafterRenderer.renderFast: the shaftless cog about
+            // the facing's axis.
+            want.push(("create:hz_part_cogwheel_shaftless", None, rotate_to_face_vertical(f), f.axis(), standard, 0.0));
         }
         Kind::MechanicalPump(f) => {
             // PumpRenderer: its cog, turned to face its way.

@@ -14,6 +14,8 @@ pub mod create_blaze;
 pub mod create_chute;
 #[path = "../mixins/create/contraption.rs"]
 pub mod create_contraption;
+#[path = "../mixins/create/crafter.rs"]
+pub mod create_crafter;
 #[path = "../mixins/create/ct.rs"]
 pub mod create_ct;
 #[path = "../mixins/create/deployer.rs"]

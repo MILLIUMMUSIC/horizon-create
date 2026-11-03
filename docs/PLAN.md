@@ -456,6 +456,20 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    `SpoutRenderer` draws them. Not yet: `BlockSpoutingBehaviour` (filling blocks below: other mods' only),
    sequenced assembly's filling steps, potion and tea fluids (no fluid in Horizon), the splash and processing
    particles, the comparator (`levelOfSmartFluidTank`), the food advancements, spouts on contraptions.
+   The mechanical crafter (`crafter.rs`, `crafter_glue.rs`: `MechanicalCrafterBlock`, `MechanicalCrafterBlockEntity`,
+   `RecipeGridHandler`, `MechanicalCraftingInput`, `MechanicalCraftingRecipe`): `Kind::MechanicalCrafter`, a small cog
+   about its facing's axis (2 su per rpm), on a stone template with its own `facing` and `pointing` and a block entity;
+   placed against another crafter it takes its facing and points back at it (`getStateForPlacement`), the wrench on
+   its front cycles `pointing`. Its slot takes one item from a click on the front, funnels and chutes; a cover goes
+   on an empty slot and comes off with an empty hand. With its cog turning, a chain whose crafters all hold an item
+   or a cover (any item, on a redstone signal) begins: items pass along the pointing crafters (`mergeOnto`) at the
+   countdown speed, the last one crafts with vanilla's crafting recipes (not `_manual_only` ones) or
+   `create:mechanical_crafting` ones (mirrored or not), crafting remainders beside the result, puts it into the
+   inventory or belt it points at and ejects the whole grid when there is none or no recipe; the crafter sounds play.
+   Its lid, arrow or belt and the items before its face are drawn. Not yet: connected inputs (`ConnectedInputHandler`,
+   the wrench on its edge), arms and hoppers putting items in, items' components through the grid (only id and
+   count are kept), the items moving and spinning while they pass and craft, the belt's scrolling texture, the
+   connected casing (`CrafterCTBehaviour`), the firework recipe's ingredient limit, the particles, advancements.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that
    pipes drain from every side but the top and can't fill. Items come in from belts and chutes

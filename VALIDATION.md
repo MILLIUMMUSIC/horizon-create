@@ -977,3 +977,13 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   emptied (`data merge`), then drained into it. Screenshots showed the fluid through the grate and the item lying on
   top, moving along its way. Not tried: belts, chutes, funnels or pipes on the drain, the bucket click, water
   bottles.
+
+## Mechanical crafter (macOS, offscreen)
+
+- One crafter facing north, pointing up at a chest, turned at 16 rpm by a creative motor through a cogwheel (goggles:
+  32 su): an oak log clicked onto its front became 4 oak planks (`CRAFTING`, then `IDLE`), and the planks were in the
+  chest.
+- Two crafters, the upper pointing down onto the lower, the lower pointing left (east) at a chest: planks clicked into
+  both went through `EXPORTING`, `WAITING` and `CRAFTING`, and 4 sticks were in the chest. Screenshots showed the item in
+  the upper crafter's slot, the belt between the two and the lower one's arrow.
+  Not tried: covers, redstone starts, mechanical crafting recipes, belts as targets, funnels and chutes into the slot.

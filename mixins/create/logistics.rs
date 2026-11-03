@@ -410,6 +410,10 @@ fn has_inventory(game: &Game<'_>, pos: Pos) -> bool {
 /// `stack` into the inventory at `pos` through its side `face`: what is
 /// left (all of it when there is none).
 fn insert_into(game: &mut Game<'_>, pos: Pos, face: Dir, stack: ItemStack) -> Option<ItemStack> {
+    // The mechanical crafter's slot takes one item at a time.
+    if block_name(game, pos).as_deref() == Some(super::create_crafter_glue::CRAFTER) {
+        return super::create_crafter_glue::insert(game, pos, stack);
+    }
     // A whole vault, or a deployer's hand.
     if let Some(left) = super::create_arms::insert_into(game, pos, &stack) {
         return left;
@@ -3553,6 +3557,16 @@ pub(super) fn has_belt_input(game: &Game<'_>, pos: Pos) -> bool {
     has_direct_input(game, pos)
 }
 
+/// For the crafter: whether a funnel or chute would find an inventory at
+/// `pos`, and putting `stack` into it through `face`.
+pub(super) fn has_inventory_at(game: &Game<'_>, pos: Pos) -> bool {
+    has_inventory(game, pos)
+}
+
+pub(super) fn inventory_insert(game: &mut Game<'_>, pos: Pos, face: Dir, stack: ItemStack) -> Option<ItemStack> {
+    insert_into(game, pos, face, stack)
+}
+
 pub(super) fn can_insert_side(game: &Game<'_>, pos: Pos, side: Dir) -> bool {
     can_insert_from_side(game, pos, side)
 }
@@ -3560,6 +3574,16 @@ pub(super) fn can_insert_side(game: &Game<'_>, pos: Pos, side: Dir) -> bool {
 /// `handleInsertion` from `side`: what is left of `stack`.
 pub(super) fn insert_side(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack) -> Option<ItemStack> {
     side_insert(game, pos, side, stack, false)
+}
+
+/// The light a block entity's parts are drawn with: its block may keep none
+/// (an opaque template), so the brightest of it and its neighbours, sky and
+/// block light apart (packed `sky << 4 | block`).
+pub(super) fn neighbour_light(game: &Game<'_>, pos: Pos) -> u8 {
+    [[0, 0, 0], [0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+        .iter()
+        .map(|d: &[i32; 3]| game.world.light(pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]))
+        .fold(0u8, |a, l| (a & 0xF0).max(l & 0xF0) | (a & 15).max(l & 15))
 }
 
 /// `ValueBoxRenderer.renderItemIntoValueBox`: `id` in a filter slot at
@@ -3577,12 +3601,7 @@ pub(super) fn draw_filter_item(
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
     let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
-    // The slot's own block may keep no light (an opaque template), so the
-    // brightest of it and its neighbours, sky and block light apart.
-    let light = [[0, 0, 0], [0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
-        .iter()
-        .map(|d: &[i32; 3]| game.world.light(pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]))
-        .fold(0u8, |a, l| (a & 0xF0).max(l & 0xF0) | (a & 15).max(l & 15));
+    let light = neighbour_light(game, pos);
     // isGui3d: block items stand at full size, others lie flat at half.
     let block = game.pack.assets.registry.default_state(id).is_some();
     let scale = if block { 1.0 } else { 0.5 } + 1.0 / 64.0;

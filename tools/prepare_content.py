@@ -240,6 +240,10 @@ PARTIALS = {
     "blaze_rods_2": "create:block/blaze_burner/rods_large",
     "blaze_super_rods": "create:block/blaze_burner/superheated_rods_small",
     "blaze_super_rods_2": "create:block/blaze_burner/superheated_rods_large",
+    "crafter_lid": "create:block/mechanical_crafter/lid",
+    "crafter_arrow": "create:block/mechanical_crafter/arrow",
+    "crafter_belt": "create:block/mechanical_crafter/belt_animated",
+    "crafter_belt_frame": "create:block/mechanical_crafter/belt",
     "spout_top": "create:block/spout/top",
     "spout_middle": "create:block/spout/middle",
     "spout_bottom": "create:block/spout/bottom",
@@ -708,6 +712,7 @@ def fit_logistics(content, names):
     fit_split_shafts(content, names)
     fit_blaze_burner(content, names)
     fit_redstone_link(content, names)
+    fit_mechanical_crafter(content)
     fit_psi(content)
     fit_contacts(content, names)
     fit_large_wheel(content, names)
@@ -1354,6 +1359,21 @@ def fit_redstone_link(content, names):
             props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
             out[f"facing={props['facing']},powered={props['powered']},receiver={props['receiver']}"] = model
         write_json(states / "redstone_link.json", {"variants": out})
+
+
+# The mechanical crafter (HorizontalKineticBlock with `pointing`): a stone
+# template with its own `facing` and `pointing` and a block entity (its slot);
+# Create's blockstate turns the model by facing, the native mod draws its cog,
+# lid, arrow or belt and items.
+def fit_mechanical_crafter(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    decl = read_json(blocks / "mechanical_crafter.json") if (blocks / "mechanical_crafter.json").exists() else {}
+    decl["template"] = "minecraft:stone"
+    decl["state_properties"] = {"facing": {"type": "enum", "values": ["north", "south", "west", "east"]},
+                                "pointing": {"type": "enum", "values": ["up", "left", "down", "right"]}}
+    decl["default_state"] = {"facing": "north", "pointing": "up"}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "mechanical_crafter.json", decl)
 
 
 # The portable storage interface: a lightning rod's template (six facings);

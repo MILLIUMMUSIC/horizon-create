@@ -246,6 +246,11 @@ impl Kind {
             Kind::WindmillBearing(f) => Kind::WindmillBearing(turn_facing(f)),
             // PumpBlock.getRotatedBlockState: turned round, whatever the face.
             Kind::MechanicalPump(f) => Kind::MechanicalPump(f.opposite()),
+            // HorizontalKineticBlock.HORIZONTAL_FACING: only from above or below
+            // (its front face cycles `pointing` instead, in the native mod).
+            Kind::MechanicalCrafter(f) if face.axis() == Axis::Y => {
+                Kind::MechanicalCrafter(f.clockwise(Axis::Y))
+            }
             // No property to turn (millstone, mixer), or a press's side.
             k => k,
         }
@@ -265,6 +270,7 @@ impl Kind {
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
             | Kind::MechanicalPump(f)
+            | Kind::MechanicalCrafter(f)
             | Kind::MechanicalBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => Some(("facing", f.name())),
@@ -443,6 +449,9 @@ pub enum Kind {
     /// A gearshift (true) or clutch (false) along an axis, powered or not
     /// (`SplitShaftBlock`).
     SplitShaft(bool, Axis, bool),
+    /// `MechanicalCrafterBlock`: its horizontal facing (its `pointing` is in
+    /// the block); a small cog about that axis, no shafts (crafter.rs).
+    MechanicalCrafter(Dir),
 }
 
 impl Kind {
@@ -472,6 +481,7 @@ impl Kind {
             "create:large_water_wheel" => axis().map(Kind::LargeWaterWheel),
             "create:encased_fan" => facing().map(Kind::EncasedFan),
             "create:mechanical_pump" => facing().map(Kind::MechanicalPump),
+            "create:mechanical_crafter" => facing().map(Kind::MechanicalCrafter),
             "create:mechanical_mixer" => Some(Kind::MechanicalMixer),
             "create:mechanical_arm" => Some(Kind::MechanicalArm),
             "create:mechanical_bearing" => facing().map(Kind::MechanicalBearing),
@@ -514,6 +524,7 @@ impl Kind {
             Kind::LargeWaterWheel(_) => "create:large_water_wheel",
             Kind::EncasedFan(_) => "create:encased_fan",
             Kind::MechanicalPump(_) => "create:mechanical_pump",
+            Kind::MechanicalCrafter(_) => "create:mechanical_crafter",
             Kind::MechanicalMixer => "create:mechanical_mixer",
             Kind::Belt(b) => b.block().map_or("create:belt", |(name, _)| name),
             Kind::MechanicalArm => "create:mechanical_arm",
@@ -560,6 +571,7 @@ impl Kind {
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
             | Kind::MechanicalPump(f)
+            | Kind::MechanicalCrafter(f)
             | Kind::MechanicalBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => f.axis(),
@@ -592,7 +604,7 @@ impl Kind {
             | Kind::MechanicalBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => face == f.opposite(),
-            Kind::MechanicalPump(_) => false,
+            Kind::MechanicalPump(_) | Kind::MechanicalCrafter(_) => false,
             Kind::MechanicalMixer | Kind::MechanicalArm => false,
             Kind::Belt(b) => b.has_shaft_towards(face),
             Kind::Deployer(f, along)
@@ -614,6 +626,7 @@ impl Kind {
             Kind::Cogwheel(_)
                 | Kind::MechanicalMixer
                 | Kind::MechanicalPump(_)
+                | Kind::MechanicalCrafter(_)
                 | Kind::MechanicalArm
         )
     }
@@ -628,6 +641,7 @@ impl Kind {
             Kind::Millstone => 4.0,
             Kind::EncasedFan(_) => 2.0,
             Kind::MechanicalPump(_) => 4.0,
+            Kind::MechanicalCrafter(_) => 2.0,
             Kind::MechanicalMixer => 4.0,
             Kind::MechanicalArm => 2.0,
             Kind::Deployer(..) => 4.0,
@@ -2024,6 +2038,7 @@ fn kind_key(k: Kind) -> String {
         | Kind::WaterWheel(f)
         | Kind::EncasedFan(f)
         | Kind::MechanicalPump(f)
+        | Kind::MechanicalCrafter(f)
         | Kind::MechanicalBearing(f)
         | Kind::WindmillBearing(f)
         | Kind::Drill(f) => f.name(),
@@ -2149,6 +2164,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::WaterWheel(d) => (8, dir(d)),
         Kind::EncasedFan(d) => (9, dir(d)),
         Kind::MechanicalPump(d) => (12, dir(d)),
+        Kind::MechanicalCrafter(d) => (27, dir(d)),
         Kind::MechanicalMixer => (10, 0),
         Kind::Belt(b) => {
             let slope = Slope::ALL.iter().position(|s| *s == b.slope).unwrap_or(0) as u8;
@@ -2191,6 +2207,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         8 => Kind::WaterWheel(dir?),
         9 => Kind::EncasedFan(dir?),
         12 => Kind::MechanicalPump(dir?),
+        27 => Kind::MechanicalCrafter(dir?),
         10 => Kind::MechanicalMixer,
         11 => Kind::Belt(BeltState {
             facing: Dir::ALL.get(usize::from(state & 7)).copied()?,

@@ -160,10 +160,22 @@ name = "create_fluids"
 source = "fluids.rs"
 
 [[module]]
+id = "crafter"
+file = "crates/horizon-client/src/game.rs"
+name = "create_crafter"
+source = "crafter.rs"
+
+[[module]]
 id = "spout"
 file = "crates/horizon-client/src/game.rs"
 name = "create_spout"
 source = "spout.rs"
+
+[[module]]
+id = "crafter_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_crafter_glue"
+source = "crafter_glue.rs"
 
 [[module]]
 id = "spout_glue"
