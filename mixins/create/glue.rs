@@ -1950,6 +1950,11 @@ pub(super) fn show_outline(slot: &str, bounds: [f64; 6], params: super::create_o
         .show_aabb(slot, bounds, params, 1);
 }
 
+/// `Outliner.showCluster` on the window's own side, and `keep` / `remove`.
+pub(super) fn with_outliner<R>(f: impl FnOnce(&mut super::create_outline::Outliner) -> R) -> R {
+    f(CLIENT_OUTLINES.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default))
+}
+
 /// `Outliner.tickOutlines`, each tick of the window's game.
 pub(super) fn outlines_tick(game: &Game<'_>) {
     if !game.native_window() {
@@ -1972,9 +1977,11 @@ fn draw_outlines(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_cli
         o.entries
             .values()
             .flat_map(|e| {
-                super::create_outline::edge_boxes(e.bounds, e.params.width)
-                    .into_iter()
-                    .map(|b| (b, e.params.rgb))
+                let boxes = match &e.cluster {
+                    Some(blocks) => super::create_outline::cluster_boxes(blocks, e.params.width),
+                    None => super::create_outline::edge_boxes(e.bounds, e.params.width),
+                };
+                boxes.into_iter().map(|b| (b, e.params.rgb))
             })
             .collect()
     };

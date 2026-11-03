@@ -1722,6 +1722,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
     if !game.native_window() {
         return;
     }
+    range_display_tick(game);
     let turning: Vec<(Pos, BearingView)> = CLIENT_BEARINGS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -2241,6 +2242,143 @@ pub(super) fn placed_chassis(game: &mut Game<'_>, pos: Pos, sneaking: bool, look
             set_chassis(game, other, &o, theirs);
         }
     }
+}
+
+/// `ChassisRangeDisplay.DISPLAY_TIME`.
+const RANGE_DISPLAY_TICKS: i32 = 200;
+
+/// `ChassisRangeDisplay`: the outlined chassis (by position) and groups on
+/// this client, each with the blocks it outlines and its timer.
+#[derive(Default)]
+struct RangeDisplay {
+    entries: HashMap<Pos, (Vec<Pos>, i32)>,
+    /// (the group's chassis, the blocks, the timer)
+    groups: Vec<(Vec<Pos>, Vec<Pos>, i32)>,
+}
+
+static RANGE_DISPLAY: Mutex<Option<RangeDisplay>> = Mutex::new(None);
+
+fn range_slot(pos: Pos) -> String {
+    format!("chassis:{},{},{}", pos[0], pos[1], pos[2])
+}
+
+/// The blocks `chassis`' range includes (`getIncludedBlockPositions(null,
+/// true)`).
+fn range_blocks(world: &Scan<'_, '_>, pos: Pos) -> Vec<Pos> {
+    world.facts(pos).chassis.map_or_else(Vec::new, |c| super::create_contraption::chassis_positions(world, pos, &c, None))
+}
+
+/// `collectChassisGroup`.
+fn chassis_group(world: &Scan<'_, '_>, pos: Pos) -> Vec<Pos> {
+    let mut group = vec![pos];
+    let mut i = 0;
+    while i < group.len() {
+        if let Some(c) = world.facts(group[i]).chassis {
+            for n in attached_chassis(world, group[i], &c) {
+                if !group.contains(&n) {
+                    group.push(n);
+                }
+            }
+        }
+        i += 1;
+    }
+    group
+}
+
+/// `ChassisRangeDisplay.tick`: the wrench pointing at a chassis outlines
+/// what it takes in (Ctrl: its whole group), for ten seconds, or one
+/// second once the wrench is put away.
+fn range_display_tick(game: &Game<'_>) {
+    use super::create_glue::with_outliner;
+    let has_wrench = game.held().is_some_and(|s| &*s.item == super::create_glue::WRENCH);
+    let ctrl = game.keys.contains(&winit::keyboard::KeyCode::ControlLeft);
+    let params = super::create_outline::Params {
+        rgb: 0xFFFFFF,
+        width: 1.0 / 16.0,
+    };
+    let looked = if has_wrench { game.pick().map(|h| h.pos) } else { None };
+    let world = scan(game);
+    let mut guard = RANGE_DISPLAY.lock().unwrap_or_else(|e| e.into_inner());
+    let d = guard.get_or_insert_with(Default::default);
+    let alive = |pos: Pos| world.loaded(pos) && world.facts(pos).chassis.is_some();
+    // tickEntry on each, then `keep`.
+    let tick = |timer: &mut i32, gone: bool| -> bool {
+        if gone {
+            return true;
+        }
+        if !has_wrench && *timer > 20 {
+            *timer = 20;
+            return false;
+        }
+        *timer -= 1;
+        *timer == 0
+    };
+    let mut removed: Vec<String> = Vec::new();
+    d.entries.retain(|&pos, (_, timer)| {
+        let done = tick(timer, !alive(pos));
+        if done {
+            removed.push(range_slot(pos));
+        }
+        !done
+    });
+    d.groups.retain_mut(|(chassis, _, timer)| {
+        let done = tick(timer, chassis.first().is_none_or(|&p| !alive(p)));
+        if done {
+            removed.push(range_slot(chassis[0]) + ":group");
+        }
+        !done
+    });
+    with_outliner(|o| {
+        for slot in &removed {
+            o.remove(slot);
+        }
+        for &pos in d.entries.keys() {
+            o.keep(&range_slot(pos));
+        }
+        for (chassis, ..) in &d.groups {
+            o.keep(&(range_slot(chassis[0]) + ":group"));
+        }
+    });
+    let Some(pos) = looked.filter(|&p| world.facts(p).chassis.is_some()) else {
+        return;
+    };
+    if ctrl {
+        if let Some((chassis, _, timer)) = d.groups.iter_mut().find(|(c, ..)| c.contains(&pos)) {
+            for c in chassis.iter() {
+                d.entries.remove(c);
+            }
+            *timer = RANGE_DISPLAY_TICKS;
+            return;
+        }
+    } else if let Some((_, timer)) = d.entries.get_mut(&pos) {
+        *timer = RANGE_DISPLAY_TICKS;
+        return;
+    }
+    // display: a group kills the singles, a single kills the groups.
+    with_outliner(|o| {
+        for slot in d.entries.keys().map(|&p| range_slot(p)).chain(d.groups.iter().map(|(c, ..)| range_slot(c[0]) + ":group")) {
+            o.remove(&slot);
+        }
+        d.entries.clear();
+        d.groups.clear();
+        if ctrl {
+            let group = chassis_group(&world, pos);
+            let mut blocks: Vec<Pos> = Vec::new();
+            for &c in &group {
+                for b in range_blocks(&world, c) {
+                    if !blocks.contains(&b) {
+                        blocks.push(b);
+                    }
+                }
+            }
+            o.show_cluster(&(range_slot(group[0]) + ":group"), blocks.clone(), params, 1);
+            d.groups.push((group, blocks, RANGE_DISPLAY_TICKS));
+        } else {
+            let blocks = range_blocks(&world, pos);
+            o.show_cluster(&range_slot(pos), blocks.clone(), params, 1);
+            d.entries.insert(pos, (blocks, RANGE_DISPLAY_TICKS));
+        }
+    });
 }
 
 /// `native_wheel` on this client: the wrench over a chassis scrolls its
