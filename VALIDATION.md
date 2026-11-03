@@ -917,7 +917,7 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 
 - A speedometer and a stressometer on a creative motor's shaft line: their blocks place and join the network, the
   heads with their dials are drawn on the two open sides, and the goggles on the speedometer read `Gauge Information:`,
-  `Rotation Speed`, a bar and `16 RPM` (screenshot). The dial's turn to its target, the stressometer's lines and the
-  overstressed state were not looked at; the tooltips' exact bar and colours are from memory of `SpeedLevel` and
+  `Rotation Speed`, a bar and `16 RPM` (screenshot). The stressometer's goggles read `Network Stress`, `Low` and
+  `Remaining Capacity 262144su` (screenshot); the speedometer's dial needle shows turned. The overstressed state was not looked at; the tooltips' exact bar and colours are from memory of `SpeedLevel` and
   `StressImpact` (their classes are not in the sources kept here).
 
