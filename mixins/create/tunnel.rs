@@ -401,6 +401,8 @@ pub trait TunnelWorld<S>: TunnelLevel {
     /// The tunnel at `tunnel` throws `stack` off the belt's end towards
     /// `side` (an item entity).
     fn eject(&mut self, tunnel: Pos, side: Dir, stack: S);
+    /// `BeltTunnelBlockEntity.flap`: the tunnel's flap on `side` swings.
+    fn flap(&mut self, _tunnel: Pos, _side: Dir, _inward: bool) {}
     /// `level.random.nextInt(n)`.
     fn random(&mut self, _n: usize) -> usize {
         0
@@ -452,10 +454,15 @@ pub fn insert_into_tunnel<S: Stack>(
         if !world.can_insert_from_side(out, side) {
             return None;
         }
-        return Some(world.insert(out, side, stack, simulate));
+        let left = world.insert(out, side, stack, simulate);
+        if left.as_ref().is_none_or(|l| l.count() == 0) && !simulate {
+            world.flap(tunnel, side, false);
+        }
+        return Some(left);
     }
     if side == movement && !world.solid_side(out, side.opposite()) {
         if !simulate {
+            world.flap(tunnel, side, true);
             world.eject(tunnel, side, stack);
         }
         return Some(None);

@@ -595,6 +595,18 @@ pub(super) fn state_for_placement(
         let p = [context.pos.x + n[0], context.pos.y + n[1], context.pos.z + n[2]];
         level.registry.state(level.world.block(p[0], p[1], p[2]))
     };
+    // BeltTunnelItem.canPlace: only on a flat belt.
+    if super::create_tunnel::TunnelState::from_block(&s.name, |_| None).is_some() {
+        let below = level.registry.state(level.world.block(context.pos.x, context.pos.y - 1, context.pos.z));
+        let flat_belt = below.is_some_and(|b| {
+            super::create_belt::BeltState::from_block(&b.name, |k| b.properties.get(k).map(String::as_str))
+                .is_some_and(|belt| belt.slope == super::create_belt::Slope::Horizontal)
+        });
+        if !flat_belt {
+            *answer = Some(None);
+        }
+        return;
+    }
     let chosen = match s.name.as_str() {
         // RedstoneContactBlock: facing away from the placer, or onto the
         // clicked block when sneaking.

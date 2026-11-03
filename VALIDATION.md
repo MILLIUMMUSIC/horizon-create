@@ -842,3 +842,11 @@ Seen in the game:
 
 Not checked yet: a LAN or dedicated server with a second player, building through the Horizon launcher, and anything against Create running
 on NeoForge (no oracle yet: values are compared by hand with Create's code).
+
+## Belt tunnels placed on belts (macOS, offscreen)
+
+- An andesite tunnel is refused on stone and placed on a flat belt, where it turns to the belt's axis (`axis=x` on an
+  eastward belt) at its next tick. A tunnel placed with the template's default axis (`y`) read as X before, so it
+  stayed unturned; fixed.
+- Seen in a screenshot: the tunnel over the belt. The belt's casing under it and the brass tunnel's flaps swinging
+  when it distributes (the funnel's flaps swing, same code) are not checked in the game yet.

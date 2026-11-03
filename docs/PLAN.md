@@ -246,10 +246,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      along the belt puts one item onto each side with a flap that takes it, and waits while one doesn't
      (`flapTunnelsAndCheckIfStuck`). Flaps are drawn at rest (`BeltTunnelRenderer`/`FlapStuffs`: the content's blockstates add four flaps on the sides
      `updateTunnelConnections` gives each shape). The flaps swing as items cross into and out of the tunnel on the belt (`flapTunnelsAndCheckIfStuck`) and as a
-     junction hands one sideways. Not yet: brass tunnels' flaps when distributing, hidden by a tunnel
-     or extended funnel beside,
-     the belt's casing under it (belts have no casing here), placing it only on belts (`BeltTunnelItem`; one placed
-     elsewhere breaks at once), display links (its item handler, `cap`, reaches the belt below it: funnels, chutes and arms insert and extract through it).
+     junction hands one sideways. Brass tunnels flap when they distribute and the belt under a new tunnel takes
+     its casing (`BeltTunnelItem.updateCustomBlockEntityTag`); a tunnel is placed only on a flat belt
+     (`BeltTunnelItem.canPlace`, refused through `native_state_for_placement`). Not yet: flaps hidden by a tunnel
+     or extended funnel beside, display links (its item handler, `cap`, reaches the belt below it: funnels, chutes and arms insert and extract through it).
    - Brass tunnel (`tunnel.rs`, `logistics.rs`): the andesite tunnel's blocks, holding the stack that enters it when it
      distributes (`hasDistributionBehaviour`: a flap to the side or a connected brass tunnel) and keeping the
      next item waiting until it is empty (`stuckAtTunnel`). Connected tunnels side by side over parallel belts share

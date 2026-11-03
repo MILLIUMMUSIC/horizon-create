@@ -1837,6 +1837,19 @@ pub(super) fn placed(game: &Game<'_>, pos: Pos) {
         });
         return;
     }
+    // BeltTunnelItem.updateCustomBlockEntityTag: the belt under a new
+    // tunnel takes its casing when it has none.
+    if let Some(t) = tunnel_at(game, pos) {
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        let casing = super::create_glue::with_kinetics(game, |k, _| {
+            super::create_belt::material_casing(k.get(below).map_or(0, |e| e.material))
+        });
+        if casing == super::create_belt::CASING_NONE {
+            let kind = if t.brass { super::create_belt::CASING_BRASS } else { super::create_belt::CASING_ANDESITE };
+            set_belt_casing(game, below, kind);
+        }
+        return;
+    }
     let Some(f) = funnel_at(game, pos) else {
         return;
     };
@@ -2594,6 +2607,9 @@ impl TunnelWorld<ItemStack> for TunnelsAt<'_, '_> {
     fn insert(&mut self, pos: Pos, side: Dir, stack: ItemStack, simulate: bool) -> Option<ItemStack> {
         side_insert(self.game, pos, side, stack, simulate)
     }
+    fn flap(&mut self, tunnel: Pos, side: Dir, inward: bool) {
+        flap(self.game, tunnel, side, inward);
+    }
     fn eject(&mut self, tunnel: Pos, side: Dir, stack: ItemStack) {
         let segment = [tunnel[0], tunnel[1] - 1, tunnel[2]];
         let Some((controller, index)) = segment_of(self.game, segment) else {
@@ -2706,7 +2722,9 @@ pub(super) fn tunnels_tick(game: &mut Game<'_>, dimension: &str) {
             continue;
         }
         let new = updated_state(&World { game }, pos, state);
-        if new != state {
+        // A tunnel placed with the template's default axis (y) reads as X.
+        let turned = prop(game, pos, "axis").as_deref() == Some(if new.axis == Axis::Z { "z" } else { "x" });
+        if new != state || !turned {
             set_tunnel(game, pos, new);
         }
         if fresh {
