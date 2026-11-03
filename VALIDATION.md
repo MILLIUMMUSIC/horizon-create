@@ -910,4 +910,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   `shape=pushing` and a collecting one `shape=pulling`, along it `shape=retracted`, off a belt `shape=wall`
   (`/data`-less: `horizon-ctl block`). Screenshot: the belt funnels' own models stand on the belt. The flap models'
   offsets and the shapes' collision were not checked.
+- The wrench on a belt funnel along a belt: `shape=retracted` becomes `shape=extended` and back (`horizon-ctl block`).
+  The extended model, its flap offset and a tunnel's window beside it were not looked at.
 

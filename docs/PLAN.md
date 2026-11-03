@@ -139,7 +139,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      wrenched) puts items at its opening into the inventory behind; a horizontal one over a belt is a belt
      funnel (`getShapeForPosition`): pulling items off the belt into the inventory behind
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
-     wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. A funnel above a belt or depot has Create's belt funnel shape as its own `shape` state property (`retracted` along the belt, `pushing` when it extracts and `pulling` when it doesn't across it, `wall` elsewhere: `BeltFunnelBlock.getShapeForPosition`/`updateShape`, the shapes from `AllShapes`, the models from Create's belt funnel blockstate), with the belt funnel's flap (`FunnelBlockEntity.getFlapOffset`). Not yet: the extended shape (`EXTENDED`) and the wrench's retracted/extended toggle (it still toggles extracting). Brass funnels: part 3. Funnels and tunnels have block entities (any template, #5549): their flaps swing as
+     wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. A funnel above a belt or depot has Create's belt funnel shape as its own `shape` state property (`retracted` along the belt, `pushing` when it extracts and `pulling` when it doesn't across it, `wall` elsewhere: `BeltFunnelBlock.getShapeForPosition`/`updateShape`, the shapes from `AllShapes`, the models from Create's belt funnel blockstate), with the belt funnel's flap (`FunnelBlockEntity.getFlapOffset`). The extended shape works too (the wrench swaps retracted and extended, a sloped belt keeps it retracted, an extended funnel stays so along the belt, tunnels' windows look for it: `extended_funnel`). Not yet: upright items beside an extended funnel (`getShapeForPosition`'s item shapes). Brass funnels: part 3. Funnels and tunnels have block entities (any template, #5549): their flaps swing as
      items pass (`FunnelBlockEntity.flap`, `BeltTunnelBlockEntity.flap`: told to clients in the block entity's
      update tag) and are drawn by `native_block_entity_submit` as `FlapStuffs.renderFlaps` does, chasing back to rest.
    Fluids (run in the game: see VALIDATION.md):
@@ -247,8 +247,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      `updateTunnelConnections` gives each shape). The flaps swing as items cross into and out of the tunnel on the belt (`flapTunnelsAndCheckIfStuck`) and as a
      junction hands one sideways. Brass tunnels flap when they distribute and the belt under a new tunnel takes
      its casing (`BeltTunnelItem.updateCustomBlockEntityTag`); a tunnel is placed only on a flat belt
-     (`BeltTunnelItem.canPlace`, refused through `native_state_for_placement`). Not yet: flaps hidden by a tunnel
-     or extended funnel beside, display links (its item handler, `cap`, reaches the belt below it: funnels, chutes and arms insert and extract through it).
+     (`BeltTunnelItem.canPlace`, refused through `native_state_for_placement`). Not yet: display links (its item handler, `cap`, reaches the belt below it: funnels, chutes and arms insert and extract through it).
    - Brass tunnel (`tunnel.rs`, `logistics.rs`): the andesite tunnel's blocks, holding the stack that enters it when it
      distributes (`hasDistributionBehaviour`: a flap to the side or a connected brass tunnel) and keeping the
      next item waiting until it is empty (`stuckAtTunnel`). Connected tunnels side by side over parallel belts share

@@ -314,7 +314,9 @@ BELT_FUNNEL_PERPENDICULAR_NORTH = [
     box(2, 0, 14, 14, 14, 16), box(1, 8, 12, 15, 15, 14), box(0.1, 13, 7, 15.9, 15, 11),
     box(0.1, 9, 8, 15.9, 13, 12), box(0.1, 5, 9, 15.9, 9, 13), box(0.1, 1, 10, 15.9, 5, 14),
     box(0.1, 0, 11, 15.9, 1, 15)]
-FUNNEL_SHAPE_VALUES = ["wall", "retracted", "pushing", "pulling"]
+BELT_FUNNEL_EXTENDED_NORTH = [box(2, 0, 14, 14, 14, 16), box(3, 0, 10, 13, 13, 14), box(2, 0, 6, 14, 14, 10),
+                              box(0, 0, 0, 16, 16, 6)]
+FUNNEL_SHAPE_VALUES = ["wall", "retracted", "extended", "pushing", "pulling"]
 FUNNEL_SHAPES = {
     "up": [box(2, 0, 2, 14, 8, 14), box(1, 1, 1, 15, 8, 15), box(0, 4, 0, 16, 10, 16)],
     "down": [box(2, 8, 2, 14, 16, 14), box(1, 8, 1, 15, 15, 15), box(0, 6, 0, 16, 12, 16)],
@@ -600,6 +602,8 @@ def fit_logistics(content, names):
                         combos[f"{f},{sh}"] = shapes[f]
                     elif sh == "retracted":
                         combos[f"{f},{sh}"] = [turn_y(b, turns[f]) for b in BELT_FUNNEL_RETRACTED_NORTH]
+                    elif sh == "extended":
+                        combos[f"{f},{sh}"] = [turn_y(b, turns[f]) for b in BELT_FUNNEL_EXTENDED_NORTH]
                     else:
                         combos[f"{f},{sh}"] = [turn_y(b, turns[f]) for b in BELT_FUNNEL_PERPENDICULAR_NORTH]
             decl["shapes"] = {"properties": ["facing", "shape"], "values": combos}
@@ -629,7 +633,7 @@ def fit_logistics(content, names):
             for key, model in (belt or {}).get("variants", {}).items():
                 props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
                 if props.get("powered", "false") == "false" and props.get("waterlogged", "false") == "false" \
-                        and props.get("shape") in ("retracted", "pushing", "pulling"):
+                        and props.get("shape") in ("retracted", "extended", "pushing", "pulling"):
                     parts.append({"when": {"facing": props["facing"], "shape": props["shape"]}, "apply": model})
             write_json(states / f"{name}.json", {"multipart": parts})
 

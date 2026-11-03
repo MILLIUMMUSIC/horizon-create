@@ -355,10 +355,8 @@ impl TunnelLevel for World<'_, '_> {
     fn can_insert_from_side(&self, pos: Pos, side: Dir) -> bool {
         can_insert_from_side(self.game, pos, side)
     }
-    fn extended_funnel(&self, _: Pos) -> Option<Dir> {
-        // Belt funnels here are never extended (`getShapeForPosition`'s
-        // upright items aren't ported).
-        None
+    fn extended_funnel(&self, pos: Pos) -> Option<Dir> {
+        extended_funnel_at(self.game, pos)
     }
 }
 
@@ -1902,7 +1900,32 @@ pub(super) fn wrench_funnel(game: &mut Game<'_>, pos: Pos) -> bool {
     let Some(f) = funnel_at(game, pos) else {
         return false;
     };
-    set_funnel(game, pos, f.wrenched());
+    // BeltFunnelBlock.onWrenched: retracted and extended swap (a funnel on
+    // a sloped belt stays retracted); pushing and pulling swap, which is
+    // flipping `extracting`.
+    let shape = prop(game, pos, "shape");
+    let swap = match shape.as_deref() {
+        Some("extended") => Some("retracted"),
+        Some("retracted") => {
+            let sloped = belt_at(game, [pos[0], pos[1] - 1, pos[2]]).is_some_and(|b| b.slope != super::create_belt::Slope::Horizontal);
+            (!sloped).then_some("extended")
+        }
+        _ => None,
+    };
+    match (shape.as_deref(), swap) {
+        (Some("retracted" | "extended"), swap) => {
+            if let Some(new) = swap
+                && let Some(base) = game.pack.assets.registry.default_state(f.block())
+                && let Some(id) = game.with_props(base, &[("facing", f.facing.name()), ("shape", new)])
+            {
+                let dimension = game.dim.id().to_owned();
+                game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+            }
+        }
+        _ => {
+            set_funnel(game, pos, f.wrenched());
+        }
+    }
     true
 }
 
@@ -2062,6 +2085,13 @@ pub(super) fn wrench_chute(game: &mut Game<'_>, pos: Pos) -> bool {
 
 /// `FunnelBlockEntity.tick` and `FunnelBlock.entityInside` for every funnel
 /// of the level.
+/// The way an extended belt funnel at `pos` faces (what a tunnel's window
+/// looks for).
+fn extended_funnel_at(game: &Game<'_>, pos: Pos) -> Option<Dir> {
+    let f = funnel_at(game, pos)?;
+    (prop(game, pos, "shape").as_deref() == Some("extended")).then_some(f.facing)
+}
+
 /// `BeltFunnelBlock.getShapeForPosition` (and `isOnValidBelt`): what a
 /// horizontal funnel is above a belt or depot (`retracted` along a belt,
 /// else `pushing` when it extracts and `pulling` when it doesn't), `wall`
@@ -2088,7 +2118,11 @@ fn belt_funnel_shape(game: &Game<'_>, pos: Pos, f: FunnelState) -> &'static str 
 /// below it.
 fn update_funnel_shape(game: &mut Game<'_>, pos: Pos, f: FunnelState) {
     let want = belt_funnel_shape(game, pos, f);
-    if prop(game, pos, "shape").as_deref().unwrap_or("wall") == want {
+    let current = prop(game, pos, "shape");
+    let current = current.as_deref().unwrap_or("wall");
+    // Don't revert wrenched states (an extended funnel stays extended
+    // along the belt).
+    if current == want || (current == "extended" && want == "retracted") {
         return;
     }
     let Some(base) = game.pack.assets.registry.default_state(f.block()) else {
@@ -2251,6 +2285,7 @@ pub(super) fn submit(
                 let (model, offset) = match prop(game, pos, "shape").as_deref() {
                     Some("pushing" | "pulling") => ("create:hz_part_belt_funnel_flap", 2.0 / 16.0),
                     Some("retracted") => ("create:hz_part_belt_funnel_flap", 0.0),
+                    Some("extended") => ("create:hz_part_belt_funnel_flap", -8.0 / 16.0),
                     _ => ("create:hz_part_funnel_flap", 1.0 / 16.0),
                 };
                 vec![(f.facing, [0.0, 10.0 / 16.0, 9.5 / 16.0], offset, model)]
@@ -2651,8 +2686,8 @@ impl TunnelLevel for TunnelsAt<'_, '_> {
     fn can_insert_from_side(&self, pos: Pos, side: Dir) -> bool {
         can_insert_from_side(self.game, pos, side)
     }
-    fn extended_funnel(&self, _: Pos) -> Option<Dir> {
-        None
+    fn extended_funnel(&self, pos: Pos) -> Option<Dir> {
+        extended_funnel_at(self.game, pos)
     }
 }
 
