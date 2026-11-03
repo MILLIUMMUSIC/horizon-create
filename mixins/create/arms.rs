@@ -780,6 +780,10 @@ impl ItemHandler for Inv {
                     if slot < d.overflow.len() {
                         return Some(stack);
                     }
+                    // DeployerItemHandler.isItemValid: the filter's item.
+                    if d.filter.as_deref().is_some_and(|f| f != &*stack.item) {
+                        return Some(stack);
+                    }
                     match &mut d.held {
                         None => {
                             let n = stack.count.min(max);
@@ -895,6 +899,10 @@ impl ItemHandler for Inv {
                             d.dirty = true;
                         }
                         return (n > 0).then_some(out);
+                    }
+                    // A held item the filter takes isn't taken out.
+                    if d.filter.is_some() && d.filter.as_deref() == d.held.as_ref().map(|h| &*h.item) {
+                        return None;
                     }
                     let held = d.held.as_mut()?;
                     let n = amount.min(held.count);
@@ -1700,6 +1708,22 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
             let Some((facing, _)) = deployer_at(game, pos) else {
                 return false;
             };
+            // The filter slot (`DeployerFilterSlot`, centred on each side that
+            // is neither its front nor along its rotation axis; the hook has no
+            // hit position: the clicked face stands for the slot).
+            let clicked = Dir::nearest(face);
+            let (_, along) = deployer_at(game, pos).unwrap_or((facing, false));
+            if clicked.axis() != facing.axis()
+                && clicked.axis() != super::create_deployer::rotation_axis(facing, along)
+                && !holding_wrench
+                && game.held().is_none_or(|s| &*s.item != ARM)
+                && game.native_acting_player().is_none_or(|p| p.game_mode != 3)
+            {
+                let held = game.held().map(|s| s.item.to_string());
+                let dim = game.dim.id().to_owned();
+                with_state(|s| s.deployers.entry((dim, pos)).or_default().filter = held);
+                return true;
+            }
             // DeployerBlock.useItemOn: only its front (the hook has no hit
             // position: the clicked face stands for `location.length()`).
             if Dir::nearest(face) != facing {
@@ -2097,6 +2121,9 @@ fn deployer_text(p: Pos, d: &Deployer<ItemStack>) -> String {
         d.reach,
         u8::from(d.redstone_locked)
     );
+    if let Some(f) = &d.filter {
+        out.push_str(&format!("filter {f}\n"));
+    }
     if let Some(h) = &d.held {
         out.push_str(&stack_line("held", h));
     }
@@ -2124,6 +2151,11 @@ fn parse_deployers<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<(Pos, Deploy
                 d.reach = f[7].parse().unwrap_or(0.0);
                 d.redstone_locked = f[8] == "1";
                 out.push(([n(1), n(2), n(3)], d));
+            }
+            Some("filter") if f.len() == 2 => {
+                if let Some((_, d)) = out.last_mut() {
+                    d.filter = Some(f[1].to_owned());
+                }
             }
             Some("held") => {
                 if let (Some((_, d)), Some(s)) = (out.last_mut(), parse_stack(&f)) {
@@ -2317,6 +2349,20 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         let locked = super::create_glue::signal(game, pos);
         if d.redstone_locked != locked {
             d.redstone_locked = locked;
+            d.dirty = true;
+        }
+        // DeployerBlockEntity.tick: a held item the filter doesn't take goes to
+        // the overflow (`item != stack || !filtering.test(item)`).
+        if speed != 0.0
+            && d.state == State::Waiting
+            && d.timer <= 0
+            && d.overflow.is_empty()
+            && let (Some(h), Some(f)) = (&d.held, &d.filter)
+            && &*h.item != f.as_str()
+        {
+            let rejected = d.held.take();
+            d.overflow.extend(rejected);
+            d.timer = timer_speed(speed) * 10;
             d.dirty = true;
         }
         d.tick(

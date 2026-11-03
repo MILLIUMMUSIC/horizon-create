@@ -899,4 +899,8 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - The saw's filter: an iron ingot set on its top (a click with it in hand, `Filter` in the block data); an andesite
   alloy dropped on it then came out uncut (no recipe with an iron ingot output). The filter item drawn on the saw's
   top was not looked at in a screenshot.
+- The deployer's goggle line with an item: `Item: Iron Ingot x4` shows when the deployer holds four iron ingots.
+- The deployer's filter: an iron ingot set by a click on its top; andesite alloy put in its hand by a click on its
+  front was sent away (no item line on the goggles), iron ingots stay (the line shows). The overflow's contents and the
+  save and load of the filter were not looked at.
 

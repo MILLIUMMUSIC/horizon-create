@@ -65,6 +65,8 @@ pub struct Deployer<S> {
     pub inventory: Vec<S>,
     pub overflow: Vec<S>,
     pub redstone_locked: bool,
+    /// `filtering`: the item id the held item must be (none: any).
+    pub filter: Option<String>,
     /// Something changed for saving and clients (`sendData`).
     pub dirty: bool,
 }
@@ -95,6 +97,7 @@ impl<S: Clone> Deployer<S> {
             inventory: Vec::new(),
             overflow: Vec::new(),
             redstone_locked: false,
+            filter: None,
             dirty: false,
         }
     }

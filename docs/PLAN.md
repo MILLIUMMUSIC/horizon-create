@@ -222,7 +222,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      the client between updates. Punching, a mob in the block in front takes the fist's 1 plus the held item's
      attack damage (`player.attack`, through Horizon's mob hooks; no armour, knockback, enchantments or tool wear,
      its drops falling where it dies). Not yet: other item uses and blocks' own uses, using items on entities
-     (feeding, shearing), fist bumps, the filter slot, sandpaper polishing and sequenced assembly, the
+     (feeding, shearing), fist bumps, sandpaper polishing and sequenced assembly, the
      crafting remainder of a damaged tool, hoppers into it (no block entity), sounds and particles. The goggles show its mode and held item with its count above the kinetic lines (`DeployerBlockEntity.addToGoggleTooltip`).
    Part 3, brass funnel and belt tunnels (**a brass tunnel on a belt with two depots beside it was run in the game: its cross shape, flaps and the distribution to both depots; the brass funnel and the rest are compiled and unit-tested only**; VALIDATION.md
    lists the in-game checks):
@@ -408,7 +408,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       (`PortableStorageInterfaceBlockEntity`'s timer). `actors.rs` has the slot rules (`insertItem`,
       `ItemHelper.extract`), the interface's timer and the actors' ticks. Item vaults count as storage too (each
       captured block's own slots). Not yet: toolboxes, depots and creative crates as storage, double chests as one, the fluid interface, the interfaces' extension drawn moving, vanilla hoppers reaching a stationary interface (they don't go through
-      the item handler), the deployer's pole and hand drawn on a moving structure, deployer filters, schematics.
+      the item handler), the deployer's pole and hand drawn on a moving structure, schematics. The deployer's filter works (`DeployerItemHandler.isItemValid`, a held item it doesn't take goes to the overflow, a taken held item isn't extracted; set by a click on a side face with the item, saved with its state) but isn't drawn (`DeployerFilterSlot`'s value box).
    5. Minecart contraptions (cart assembler): need mod entities riding carts; likely blocked on the engine.
 6. **Trains**: track graph, signals, stations, schedules. Depends on 5.
 7. **Everything else**: Ponder scenes, schematics and the schematicannon, decoration sets, Create's
