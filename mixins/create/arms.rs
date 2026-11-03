@@ -1241,11 +1241,18 @@ fn arm_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     let speed = speed_at(game, pos);
     // ArmBlock.neighborChanged: a signal locks it.
     let powered = super::create_glue::signal(game, pos);
-    arm.redstone_update(powered, pos, false, &mut ArmAt { game });
-    arm.tick(speed, pos, false, &mut ArmAt { game });
-    // The pick-up sound (`collectItem`) isn't played: Horizon's
-    // `native_play_sound` belongs to the level's hooks (`GameLevel`), not to
-    // the game a block entity's tick gets.
+    // ArmBlock.CEILING: an arm hung from a ceiling reaches down.
+    let ceiling = arm_on_ceiling(game, pos);
+    arm.redstone_update(powered, pos, ceiling, &mut ArmAt { game });
+    arm.tick(speed, pos, ceiling, &mut ArmAt { game });
+    // collectItem: the pick-up sound.
+    if arm.picked_up {
+        let pitch = 0.5 + horizon_core::random::RandomSource::next_float(&mut game.world.random) * 0.25;
+        let at = pos.map(|v| f64::from(v) + 0.5);
+        game.with_level(|_, level, _| {
+            level.native_play_sound("minecraft:entity.item.pickup", at, super::create_sounds::BLOCKS, 0.125, pitch);
+        });
+    }
     arm.picked_up = false;
     entity.items[0] = arm.held.clone();
     if arm.dirty {
@@ -1265,6 +1272,11 @@ fn note(s: &mut Arms, dim: &str, pos: Pos, view: Vec<u8>) {
         s.shown.insert(key, view.clone());
         s.pending.push((dim.to_owned(), pos, Some(view)));
     }
+}
+
+/// `ArmBlock.CEILING` of the arm at `pos`.
+fn arm_on_ceiling(game: &Game<'_>, pos: Pos) -> bool {
+    prop(game, pos, "ceiling").as_deref() == Some("true")
 }
 
 /// `ArmInteractionPoint.Mode.getColor`.
@@ -2955,6 +2967,10 @@ pub(super) fn draw(
                     (lerp(0), lerp(1) - 135.0, lerp(2) - 90.0, lerp(3));
                 let deg = |d: f32| d.to_radians();
                 let mut m = origin * glam::Mat4::from_translation(glam::Vec3::splat(0.5));
+                // ArmRenderer: upside down on a ceiling (`rotateXDegrees(180)`).
+                if arm_on_ceiling(game, *pos) {
+                    m *= glam::Mat4::from_rotation_x(std::f32::consts::PI);
+                }
                 // transformBase
                 m *= glam::Mat4::from_translation(glam::Vec3::new(0.0, 4.0 / 16.0, 0.0))
                     * glam::Mat4::from_rotation_y(deg(base));

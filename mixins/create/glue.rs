@@ -580,6 +580,15 @@ pub(super) fn state_for_placement(
         return;
     };
     let pos = [context.pos.x, context.pos.y, context.pos.z];
+    // ArmBlock.getStateForPlacement: hung when placed against a ceiling.
+    if s.name == super::create_arms::ARM {
+        let f = context.face.normal();
+        let ceiling = if f == [0, -1, 0] { "true" } else { "false" };
+        if let Some(next) = level.native_state_with_property(state, "ceiling", ceiling) {
+            *answer = Some(Some(next));
+        }
+        return;
+    }
     if s.name == super::create_fluid_glue::PIPE {
         let looking = super::create_placement::nearest_looking(context.yaw, context.pitch);
         if let Some(next) = super::create_fluid_glue::pipe_placement(level, state, pos, looking) {

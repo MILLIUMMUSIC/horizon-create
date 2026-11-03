@@ -12,6 +12,10 @@ Create's sounds: the client hears `create:wrench_rotate` when a shaft is wrenche
 when a slimeball makes a mechanical piston sticky (it turns into a sticky one, a slimeball used up in survival).
 Not checked yet: the contraption, depot and press sounds.
 
+Ceiling arms: a mechanical arm placed against the underside of a stone block hangs from it (`ceiling=true`),
+drawn upside down; with a depot to take from and one to deposit to (cogwheel and creative motor beside it), it
+moved 8 iron ingots from the one to the other.
+
 Fluid pipes on their own properties: a pipe placed by a tank opens towards it with a drain, a second placed on top
 turns the first into a junction once a third goes beside it (casing drawn), open ends have rims and joined pipes
 join without them, as Create's `PipeAttachmentModel` draws them. Lava from a creative tank runs through a pipe that

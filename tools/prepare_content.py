@@ -128,7 +128,21 @@ CONTAINERS = {
     "basin": {"template": "minecraft:enchanting_table", "model": "create:block/basin/block"},
     # ArmBlock's `ceiling` needs a template property: arms stand on the floor.
     # The block keeps its base model; the native mod draws the cog and body.
-    "mechanical_arm": {"template": "minecraft:enchanting_table", "model": "create:block/mechanical_arm/block"},
+    # ArmBlock's `ceiling` as its own state property (its blockstate is
+    # Create's: the model turned over), AllShapes' MECHANICAL_ARM[_CEILING].
+    "mechanical_arm": {
+        "template": "minecraft:enchanting_table",
+        "state_properties": {"ceiling": {"type": "boolean"}},
+        "default_state": {"ceiling": "false"},
+        "shapes": {"property": "ceiling", "values": {
+            "false": [box(2, 0, 2, 14, 10, 14), box(3, 0, 3, 13, 14, 13), box(0, 0, 0, 16, 6, 16)],
+            "true": [box(2, 6, 2, 14, 16, 14), box(3, 2, 3, 13, 16, 13), box(0, 10, 0, 16, 16, 16)],
+        }},
+        "states": {"variants": {
+            "ceiling=false": {"model": "create:block/mechanical_arm/block"},
+            "ceiling=true": {"model": "create:block/mechanical_arm/block", "x": 180},
+        }},
+    },
 }
 
 # NeoForge's convention tags the recipes name and Horizon has no copy of
@@ -468,10 +482,15 @@ def fit(content):
         decl["template"] = spec["template"]
         decl.pop("default_state", None)
         decl.pop("shapes", None)
+        for key in ("state_properties", "default_state", "shapes"):
+            if key in spec:
+                decl[key] = spec[key]
         decl.setdefault("properties", {})["light"] = 0
         write_json(blocks / f"{name}.json", decl)
         if "model" in spec:
             write_json(states / f"{name}.json", {"variants": {"": {"model": spec["model"]}}})
+        if "states" in spec:
+            write_json(states / f"{name}.json", spec["states"])
 
     # Horizon reads `data/<ns>/recipe/*.json` only, not its subfolders, where
     # vanilla reads them all (`create:pressing/iron_ingot`): bring each up as
