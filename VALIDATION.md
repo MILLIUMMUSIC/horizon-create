@@ -938,4 +938,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   piston is covered by a unit test only; it was not run in the game.
 - The rope pulley's movement mode has the same rule (a unit test with a pulley waiting at the end of its rope); the wheel
   over a pulley was not tried in the game.
+- The mechanical bearing's rotation mode follows `canDisassemble` (a unit test over the four cases); the wheel over a
+  bearing was not tried in the game.
 

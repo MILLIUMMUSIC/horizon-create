@@ -734,13 +734,14 @@ fn save_text(s: &State, dimension: &str) -> String {
         }
         let bearing = &b.bearing;
         out += &format!(
-            "bearing {} {} {} {} {} {}\n",
+            "bearing {} {} {} {} {} {} {}\n",
             p[0],
             p[1],
             p[2],
             bearing.angle,
             u8::from(bearing.running),
-            bearing.last_rpm
+            bearing.last_rpm,
+            bearing.mode
         );
         if let Some(t) = &b.turning {
             let c = &t.contraption;
@@ -904,6 +905,7 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                 entry.bearing.running = f[5] == "1";
                 // KineticBlockEntity.read: a loaded speed isn't a change.
                 entry.bearing.last_rpm = f.get(6).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                entry.bearing.mode = f.get(7).and_then(|v| v.parse().ok()).unwrap_or(0);
                 current = Some(Target::Bearing(pos));
             }
             Some("t") if f.len() >= 3 => {
@@ -2478,6 +2480,15 @@ pub(super) fn step_piston_mode(game: &Game<'_>, pos: Pos, up: bool) -> Option<&'
         a.mode = next(a.mode);
         a.waiting = false;
         a.mode
+    } else if name == "create:mechanical_bearing" {
+        // `RotationMode`: the same three, worded for angles.
+        let b = &mut s.bearings.entry(key).or_default().bearing;
+        b.mode = next(b.mode);
+        return Some(match b.mode {
+            0 => "Always Place when Stopped",
+            1 => "Only Place near Initial Angle",
+            _ => "Only Place when Anchor Destroyed",
+        });
     } else if name == "create:rope_pulley" {
         let q = &mut s.pulleys.entry(key).or_default().pulley;
         q.mode = next(q.mode);
@@ -4108,5 +4119,5 @@ pub(super) fn is_piston(game: &Game<'_>, pos: Pos) -> bool {
         .assets
         .registry
         .state(game.world.block(pos[0], pos[1], pos[2]))
-        .is_some_and(|s| piston_of(&s.name).is_some() || s.name == "create:rope_pulley")
+        .is_some_and(|s| piston_of(&s.name).is_some() || s.name == "create:rope_pulley" || s.name == "create:mechanical_bearing")
 }

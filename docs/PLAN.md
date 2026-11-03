@@ -322,8 +322,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       draws it turned about the anchor's centre on clients (the angle running on between updates), carries what
       stands on a structure turning about Y (players on their own side, as pistons do), saves turning bearings, and
       sets a windmill's speed in the kinetics (`flow_score` holds it). The bearings use a lightning rod's
-      template; their tops are partials turned with the structure. Not yet: the movement mode value box
-      (`ROTATE_PLACE_RETURNED`, `ROTATE_NEVER_PLACE`) and the windmill's rotation direction box (it turns
+      template; their tops are partials turned with the structure. The mechanical bearing's rotation mode (`RotationMode`: place when stopped, only near the initial angle, only when the anchor is destroyed; the mouse wheel over it, saved with it) is ported. Not yet: the windmill's rotation direction box (it turns
       clockwise), sequenced gearshift angles, the clockwork bearing, structures on bearings inside other
       contraptions (`StabilizedContraption`), riders on horizontal bearings, colliding with turning blocks, kinetic
       and block-entity-rendered blocks drawn while turning, rails' and stairs' shapes and bells turned, the

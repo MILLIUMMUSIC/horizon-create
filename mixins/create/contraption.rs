@@ -2077,6 +2077,9 @@ pub struct Bearing {
     pub angle: f32,
     pub assemble_next_tick: bool,
     pub last_rpm: f32,
+    /// `RotationMode`: 0 always place when stopped, 1 only near the initial
+    /// angle, 2 only when the anchor is destroyed.
+    pub mode: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2133,6 +2136,12 @@ impl Bearing {
             self.assemble_next_tick = false;
             if self.running {
                 if rpm == 0.0 {
+                    // `canDisassemble`: ROTATE_PLACE, or ROTATE_PLACE_RETURNED near the
+                    // initial angle (a windmill has no mode).
+                    let near = self.angle.abs() < 22.5 || self.angle.abs() > 360.0 - 22.5;
+                    if !windmill && !(self.mode == 0 || (self.mode == 1 && near)) {
+                        return BearingStep::Idle;
+                    }
                     // A windmill goes back as it was built.
                     let angle = if windmill { 0.0 } else { self.angle };
                     return BearingStep::Disassemble { angle };
@@ -2298,6 +2307,30 @@ mod tests {
         // A speed change lets it go on (and place, in the default mode).
         p.speed(-16.0);
         assert!(!p.waiting);
+    }
+
+    #[test]
+    fn a_bearing_in_a_keeping_mode_stays_assembled_when_stopped() {
+        for (mode, angle, placed) in [
+            (0u8, 100.0, true),
+            (1, 100.0, false),
+            (1, 10.0, true),
+            (2, 10.0, false),
+        ] {
+            let mut b = Bearing {
+                running: true,
+                angle,
+                assemble_next_tick: true,
+                last_rpm: 16.0,
+                mode,
+            };
+            let step = b.tick(0.0, false, false, || false);
+            assert_eq!(
+                matches!(step, BearingStep::Disassemble { .. }),
+                placed,
+                "mode {mode} at {angle}"
+            );
+        }
     }
 
     #[test]
