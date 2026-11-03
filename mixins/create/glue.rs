@@ -552,6 +552,69 @@ pub(super) fn attack_entity(game: &mut Game<'_>, entity: i32, canceled: &mut boo
     *canceled = true;
 }
 
+/// `BlockState.hasAnalogOutputSignal` for Create's blocks comparators read.
+pub(super) fn has_analog_output(level: &super::GameLevel<'_>, state: BlockStateId, output: &mut bool) {
+    let Some(s) = level.registry.state(state) else {
+        return;
+    };
+    let name = s.name.as_str();
+    if super::create_fluid_glue::is_tank_block(name)
+        || name == super::create_arms::VAULT
+        || name == super::create_machines::DEPOT
+        || name == super::create_machines::BASIN
+    {
+        *output = true;
+    }
+}
+
+/// `getAnalogOutputSignal` of Create's blocks: a tank's fill
+/// (`ComparatorUtil.fractionToRedstoneLevel` of its controller), the whole
+/// vault's and a basin's inputs (`ItemHelper.calcRedstoneFromInventory`), a
+/// depot's stacks (`SharedDepotBlockMethods.getComparatorInputOverride`).
+pub(super) fn analog_output(
+    level: &super::GameLevel<'_>,
+    dimension: horizon_world::level::Dimension,
+    pos: Pos,
+    output: &mut i32,
+) {
+    let Some(s) = level.registry.state(level.world.block(pos[0], pos[1], pos[2])) else {
+        return;
+    };
+    let name = s.name.as_str();
+    let max_stack = |id: &str| level.items.get(id).map_or(64, |i| i.max_stack.max(1));
+    if super::create_fluid_glue::is_tank_block(name) {
+        *output = super::create_fluid_glue::tank_analog(level_dimension_id(dimension), pos);
+    } else if name == super::create_arms::VAULT {
+        *output = super::create_arms::vault_analog(level, pos, &max_stack);
+    } else if name == super::create_machines::DEPOT || name == super::create_machines::BASIN {
+        *output = super::create_machines::container_analog(level, pos, name, &max_stack);
+    }
+}
+
+/// `ItemHelper.calcRedstoneFromInventory` over `slots` (each holding up to
+/// `limit`, an item at most its own stack size).
+pub(super) fn redstone_from_inventory<'a>(
+    slots: impl Iterator<Item = Option<&'a horizon_client::items::ItemStack>>,
+    limit: u32,
+    max_stack: &dyn Fn(&str) -> u32,
+) -> i32 {
+    let mut total = 0;
+    let mut filled = 0;
+    let mut f = 0.0f32;
+    for s in slots {
+        total += 1;
+        if let Some(s) = s.filter(|s| s.count > 0) {
+            f += s.count as f32 / limit.min(max_stack(&s.item)) as f32;
+            filled += 1;
+        }
+    }
+    if total == 0 {
+        return 0;
+    }
+    f /= total as f32;
+    (f * 14.0).floor() as i32 + i32::from(filled > 0)
+}
+
 /// `native_use_item`: Create's client answers SUCCESS to a click its block
 /// took and sends no `UseItem` after it; Horizon's client sends one (a
 /// bucket would then pour beside a tank). The use of the hand whose click

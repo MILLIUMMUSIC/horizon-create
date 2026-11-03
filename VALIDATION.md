@@ -3,7 +3,10 @@
 ## Horizon pin moved to 674948d (macOS, offscreen)
 
 The port builds against Horizon main `674948d` (2026-11-03) and horizon-mixins `ddd9700` with every mixin applied
-unchanged; the world with the earlier rigs loads and draws (tanks, vault, arm, belts, chutes). The checks below this
+unchanged; the world with the earlier rigs loads and draws (tanks, vault, arm, belts, chutes).
+
+Comparators (`native_analog_output`): a tank with 4 buckets of 8 powers the wire behind its comparator to 8, and a
+depot holding 32 cobblestone to 8. Not checked yet: the vault (whole multiblock), the basin's inputs. The checks below this
 section were made on the earlier pin `aa27eca`; they haven't all been repeated.
 
 ## Chute goggles, survival and the powered smart chute (macOS, offscreen)

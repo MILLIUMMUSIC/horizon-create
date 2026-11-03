@@ -86,6 +86,22 @@ pub(super) fn client_set_count(pos: Pos, slot: usize, count: u32) {
     slots[slot].1 = count;
 }
 
+/// A depot's (`getComparatorInputOverride`: its stacks against 64) or a
+/// basin's comparator level (`calcRedstoneFromInventory` of its inputs).
+pub(super) fn container_analog(level: &super::GameLevel<'_>, pos: Pos, name: &str, max_stack: &dyn Fn(&str) -> u32) -> i32 {
+    let Some(horizon_client::containers::BlockEntity::Mod(m)) = level.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+    else {
+        return 0;
+    };
+    if name == DEPOT {
+        let present: u32 = m.items.iter().flatten().map(|s| s.count).sum();
+        let f = present as f32 / 64.0;
+        return ((f * 14.0).floor() as i32 + i32::from(f > 0.0)).clamp(0, 15);
+    }
+    let inputs = (0..BASIN_SLOTS).map(|i| m.items.get(i).and_then(Option::as_ref));
+    super::create_glue::redstone_from_inventory(inputs, 64, max_stack)
+}
+
 /// What this client was last told the block at `pos` holds.
 pub(super) fn client_slots(pos: Pos) -> Option<Vec<(String, u32)>> {
     CLIENT.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(&pos).cloned()

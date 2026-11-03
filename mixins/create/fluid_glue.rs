@@ -96,6 +96,8 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 /// tick: their own lock, as our own tick changes blocks while holding the
 /// state. Whether the block was one of ours.
 static PENDING: Mutex<Vec<(String, Pos, bool)>> = Mutex::new(Vec::new());
+/// Tanks whose comparators read them again after this tick.
+static COMPARATORS: Mutex<Vec<Pos>> = Mutex::new(Vec::new());
 /// Whether any pipe exists, so other blocks' changes are only noted then.
 static HAS_PIPES: AtomicBool = AtomicBool::new(false);
 /// Clients' tanks and basins: dimension code and contents by position.
@@ -513,6 +515,10 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
             save(s);
         }
     }
+    let changed: Vec<Pos> = std::mem::take(&mut *COMPARATORS.lock().unwrap_or_else(|e| e.into_inner()));
+    for p in changed {
+        game.native_update_output_neighbors(dimension, p);
+    }
     let Some(message) = message else {
         return;
     };
@@ -560,7 +566,13 @@ fn updates(
     for p in gone {
         tanks.remove(p);
     }
-    tanks.changed.clear();
+    // Level.updateNeighbourForOutputSignal (`onFluidStackChanged`): the
+    // comparators beside a changed tank read it again, once the state is
+    // let go (they ask `tank_analog`).
+    COMPARATORS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend(tanks.changed.drain().filter(|p| in_world(game, *p)));
     basins.retain(|p, _| !in_world(game, *p) || is_basin(game, *p));
     let now: HashMap<Pos, Shown> = tanks
         .parts
@@ -755,6 +767,25 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
         }
     }
     true
+}
+
+/// `FluidTankBlock.getAnalogOutputSignal`: the controller's fill as a
+/// comparator level (`ComparatorUtil.fractionToRedstoneLevel`).
+pub(super) fn tank_analog(dimension: &str, pos: Pos) -> i32 {
+    let guard = state();
+    let Some(part) = guard
+        .as_ref()
+        .and_then(|s| s.tanks.get(dimension))
+        .and_then(|t| t.controller_part(pos))
+    else {
+        return 0;
+    };
+    let frac = if part.tank.capacity > 0 {
+        f64::from(part.amount()) / f64::from(part.tank.capacity)
+    } else {
+        0.0
+    };
+    (frac * 14.0 + if frac > 0.0 { 1.0 } else { 0.0 }).clamp(0.0, 15.0).floor() as i32
 }
 
 /// `FluidTankBlock.onWrenched`: the wrench toggles the whole tank's windows

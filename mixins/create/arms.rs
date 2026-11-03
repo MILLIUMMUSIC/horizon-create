@@ -343,6 +343,42 @@ fn vault_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     with_state(|s| note(s, &dim, pos, view));
 }
 
+/// `ItemVaultBlock.getAnalogOutputSignal`: the whole vault's slots
+/// (`ItemHelper.calcRedstoneFromBlockEntity` of its combined inventory).
+pub(super) fn vault_analog(level: &super::GameLevel<'_>, pos: Pos, max_stack: &dyn Fn(&str) -> u32) -> i32 {
+    let axis_of = |p: Pos| {
+        let facing = level
+            .registry
+            .state(level.world.block(p[0], p[1], p[2]))
+            .and_then(|s| s.properties.get("facing").cloned());
+        match facing.as_deref() {
+            Some("east" | "west") => Axis::X,
+            _ => Axis::Z,
+        }
+    };
+    let part_at = |p: Pos| match level.world.block_entities.get(&(p[0], p[1], p[2])) {
+        Some(horizon_client::containers::BlockEntity::Mod(m)) if m.id == VAULT => Some((read_part(axis_of(p), &m.nbt), m)),
+        _ => None,
+    };
+    let Some((part, _)) = part_at(pos) else {
+        return 0;
+    };
+    let controller = part.controller_of(pos);
+    let members = match part_at(controller) {
+        Some((c, _)) => members(controller, &c),
+        None => vec![pos],
+    };
+    let mut slots = Vec::new();
+    for p in members {
+        if let Some((_, m)) = part_at(p) {
+            for i in 0..VAULT_CAPACITY {
+                slots.push(m.items.get(i).and_then(Option::as_ref));
+            }
+        }
+    }
+    super::create_glue::redstone_from_inventory(slots.into_iter(), 64, max_stack)
+}
+
 /// The vault blocks whose slots make the vault at `pos`, in slot order.
 fn vault_members(game: &Game<'_>, pos: Pos) -> Vec<Pos> {
     let part_at = |p: Pos| -> Option<VaultPart> {
