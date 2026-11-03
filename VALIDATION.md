@@ -1008,3 +1008,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - The stone under a receiver link facing up set to air: the link broke and dropped as an item.
 - A spout filling a bottle on a depot: the game's status counted 32 block particles (the splash and the falling
   ones) while it poured.
+- Screenshots through a two-crafter craft: the planks moved from the upper crafter toward the lower while it exported,
+  its lid stayed shut until the items had passed, and the stick showed turned at an angle before the lower crafter while
+  it crafted; 4 more sticks ended in the chest.

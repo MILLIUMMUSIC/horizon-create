@@ -477,7 +477,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    (`CrafterPoint`: half a block out of the front, its group's slots). Hoppers putting items in are **blocked on the engine** (no issue):
    a mod block entity's container has no slot limit or `isItemValid` hook, so a hopper would fill the slot past one
    item and while the crafter works; the crafter keeps its slot shut to them. The grid is saved with each item's
-   components (`GroupedItems.write`). Not yet: the items moving and spinning while they pass and craft, the belt's scrolling texture, the
+   components (`GroupedItems.write`). The items move along the way out while exporting, gather and shrink as it crafts,
+   and the result spins out (`renderItems`, the countdown told to clients). Not yet: the belt's scrolling texture, the
    connected casing (`CrafterCTBehaviour`), the firework recipe's ingredient limit, the particles, advancements.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that

@@ -36,6 +36,10 @@ struct Crafter {
     input: ConnectedInput,
     /// Its facing and pointing at its last tick (for its `onRemove`).
     was: Option<(Dir, Pointing)>,
+    /// `groupedItemsBeforeCraft`, for clients.
+    before: Grouped<Option<ItemStack>>,
+    /// `getCountDownSpeed` at its last tick, for clients.
+    speed: i32,
 }
 
 impl Default for Crafter {
@@ -50,6 +54,8 @@ impl Default for Crafter {
             check: false,
             input: ConnectedInput::default(),
             was: None,
+            before: Grouped::default(),
+            speed: 0,
         }
     }
 }
@@ -297,6 +303,7 @@ pub(super) fn tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
             }
         }
         let cds = super::create_crafter::count_down_speed(speed);
+        c.speed = cds;
         match c.phase {
             Phase::Assembling => {
                 c.count_down -= cds;
@@ -315,6 +322,7 @@ pub(super) fn tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
                             .filter_map(|s| game.items().get(&s.item).and_then(|i| i.crafting_remainder.clone()))
                             .map(|r| ItemStack::new(&r, 1))
                             .collect();
+                        c.before = std::mem::take(&mut c.grid);
                         c.grid = Grouped::of(Some(result));
                         for (i, stack) in containers.into_iter().enumerate() {
                             let mut g = Grouped::default();
@@ -804,9 +812,19 @@ fn note_client(game: &Game<'_>, pos: Pos, entity: &ModBlockEntity, c: &Crafter) 
             view.push((format!("0,0,{}", s.item), 1));
         }
     } else {
+        // The countdown in eighths and its speed (bytes on `create:depots`).
+        view.push(("#".to_owned(), (c.count_down / 8).clamp(0, 255) as u32));
+        view.push(("s".to_owned(), c.speed.clamp(0, 255) as u32));
         for ((x, y), s) in &c.grid.grid {
             if let Some(s) = s {
                 view.push((format!("{x},{y},{}", s.item), 1));
+            }
+        }
+        if c.phase == Phase::Crafting {
+            for ((x, y), s) in &c.before.grid {
+                if let Some(s) = s {
+                    view.push((format!("b,{x},{y},{}", s.item), 1));
+                }
             }
         }
     }
@@ -814,10 +832,11 @@ fn note_client(game: &Game<'_>, pos: Pos, entity: &ModBlockEntity, c: &Crafter) 
 }
 
 /// `MechanicalCrafterRenderer` through `native_block_entity_submit`: the
-/// items before its face, the lid (covered or working), and the belt to the
-/// crafter it passes to or the arrow. Its cog turns with the kinetics.
-/// Not yet: the items moving while they pass on and spinning as they're
-/// crafted, the belt's scrolling texture, the connected casing.
+/// items before its face (moving toward the next crafter while it exports,
+/// drawn together, shrinking and the result spinning out as it crafts), the
+/// lid (covered or working), and the belt to the crafter it passes to or the
+/// arrow. Its cog turns with the kinetics. Not yet: the belt's scrolling
+/// texture, the connected casing.
 pub(super) fn submit(
     game: &Game<'_>,
     pos: Pos,
@@ -836,6 +855,31 @@ pub(super) fn submit(
     let code = view.first().map_or(0, |v| v.1);
     let phase = Phase::ALL.get((code % 8) as usize).copied().unwrap_or(Phase::Idle);
     let covered = code >= 8;
+    let mut told = (0, 0);
+    let mut grid: Vec<(i32, i32, String)> = Vec::new();
+    let mut before: Vec<(i32, i32, String)> = Vec::new();
+    for (key, n) in view.iter().skip(1) {
+        if key == "#" {
+            told.0 = *n as i32 * 8;
+            continue;
+        }
+        if key == "s" {
+            told.1 = *n as i32;
+            continue;
+        }
+        let (list, key) = match key.strip_prefix("b,") {
+            Some(k) => (&mut before, k),
+            None => (&mut grid, key.as_str()),
+        };
+        let mut parts = key.splitn(3, ',');
+        let (Some(x), Some(y), Some(id)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if let (Ok(x), Ok(y)) = (x.parse::<i32>(), y.parse::<i32>()) {
+            list.push((x, y, id.to_owned()));
+        }
+    }
+    let count_down = client_count_down(pos, phase, told.0, told.1);
     let y_rot = match facing {
         Dir::South => 0.0,
         Dir::West => -90.0,
@@ -863,33 +907,104 @@ pub(super) fn submit(
     } else {
         part(draw, "create:hz_part_crafter_arrow");
     }
-    // renderItems: before the face, half size, turned with the crafter.
+    // renderSafe: before the face, moved along the way out while exporting.
     let f = facing.normal();
+    let mut vec = [0.5 + f[0] as f32 * 0.58, 0.5, 0.5 + f[2] as f32 * 0.58];
+    if phase == Phase::Exporting {
+        let progress = ((1000.0 - count_down) / 1000.0).clamp(0.0, 1.0);
+        for i in 0..3 {
+            vec[i] += n[i] as f32 * progress * 0.75;
+        }
+    }
+    let item = |draw: &mut super::native_block_entity_draw::BlockEntityDraw, id: &str| {
+        game.native_draw_item(draw, &ItemStack::new(id, 1), horizon_assets::item_model::DisplayContext::Fixed, None, 0);
+    };
     draw.push();
-    draw.translate([0.5 + f[0] as f32 * 0.58, 0.5, 0.5 + f[2] as f32 * 0.58]);
+    draw.translate(vec);
     draw.scale([0.5; 3]);
     draw.rotate_about([0.0, 1.0, 0.0], y_rot, [0.0; 3]);
-    let only_first = phase == Phase::Inserting || phase == Phase::Crafting;
-    for (key, _) in view.iter().skip(1) {
-        let mut parts = key.splitn(3, ',');
-        let (Some(x), Some(y), Some(id)) = (parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        let (Ok(x), Ok(y)) = (x.parse::<i32>(), y.parse::<i32>()) else {
-            continue;
-        };
-        if only_first && (x != 0 || y != 0) {
+    if phase == Phase::Idle {
+        if let Some((_, _, id)) = grid.first() {
+            draw.push();
+            draw.translate([0.0, 0.0, -1.0 / 256.0]);
+            draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0; 3]);
+            item(draw, id);
+            draw.pop();
+        }
+        draw.pop();
+        return;
+    }
+    // renderItems: the grid (while crafting, as it was before), spaced out.
+    let mut distance = 0.5;
+    let items = if phase == Phase::Crafting { &before } else { &grid };
+    draw.push();
+    if phase == Phase::Crafting && !items.is_empty() {
+        let min_x = items.iter().map(|i| i.0).min().unwrap_or(0).min(0);
+        let max_x = items.iter().map(|i| i.0).max().unwrap_or(0).max(0);
+        let min_y = items.iter().map(|i| i.1).min().unwrap_or(0).min(0);
+        let max_y = items.iter().map(|i| i.1).max().unwrap_or(0).max(0);
+        let (width, height) = ((max_x - min_x + 1) as f32, (max_y - min_y + 1) as f32);
+        let progress = ((2000.0 - count_down) / 1000.0).clamp(0.0, 1.0);
+        let early = (progress * 2.0).clamp(0.0, 1.0);
+        let late = (progress * 2.0 - 1.0).clamp(0.0, 1.0);
+        draw.scale([1.0 - late; 3]);
+        let centre = [(-min_x as f32 + (-width + 1.0) / 2.0) * early, (-min_y as f32 + (-height + 1.0) / 2.0) * early];
+        draw.translate([centre[0] * 0.5, centre[1] * 0.5, 0.0]);
+        distance += (-4.0 * (progress - 0.5) * (progress - 0.5) + 1.0) * 0.25;
+    }
+    let only_first = phase == Phase::Inserting || (phase == Phase::Crafting && count_down < 1000.0);
+    let offset = match (phase, pointing) {
+        (Phase::Exporting, Pointing::Up) => -1,
+        (Phase::Exporting, Pointing::Left) => 2,
+        (Phase::Exporting, Pointing::Right) => -2,
+        (Phase::Exporting, Pointing::Down) => 1,
+        _ => 0,
+    };
+    for (x, y, id) in items {
+        if only_first && (*x != 0 || *y != 0) {
             continue;
         }
-        let spacing = if phase == Phase::Idle { 0.0 } else { 0.5 };
         draw.push();
-        draw.translate([x as f32 * spacing, y as f32 * spacing, 0.0]);
+        draw.translate([*x as f32 * distance, *y as f32 * distance, 0.0]);
         draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0; 3]);
-        draw.translate([0.0, 0.0, (x + y * 3) as f32 / 1024.0 - 1.0 / 256.0]);
-        game.native_draw_item(draw, &ItemStack::new(id, 1), horizon_assets::item_model::DisplayContext::Fixed, None, 0);
+        draw.translate([0.0, 0.0, (x + y * 3 + offset * 9) as f32 / 1024.0]);
+        item(draw, id);
         draw.pop();
     }
     draw.pop();
+    // The result spinning up out of them.
+    if phase == Phase::Crafting
+        && let Some((_, _, id)) = grid.iter().find(|i| i.0 == 0 && i.1 == 0)
+    {
+        let progress = ((1000.0 - count_down) / 1000.0).clamp(0.0, 1.0);
+        let early = (progress * 2.0).clamp(0.0, 1.0);
+        let late = (progress * 2.0 - 1.0).clamp(0.0, 1.0);
+        draw.rotate_about([0.0, 0.0, 1.0], early * 2.0 * 360.0, [0.0; 3]);
+        let up = early * 1.125;
+        let down = 1.0 + (1.0 - late) * 0.125;
+        draw.scale([up * down; 3]);
+        draw.push();
+        draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0; 3]);
+        item(draw, id);
+        draw.pop();
+    }
+    draw.pop();
+}
+
+/// Clients' countdowns: what the server last told (in eighths) and its
+/// speed a tick, counted on between messages.
+type ClientCountDowns = HashMap<Pos, (Phase, i32, i32, std::time::Instant)>;
+static CLIENT_COUNT_DOWNS: Mutex<Option<ClientCountDowns>> = Mutex::new(None);
+
+fn client_count_down(pos: Pos, phase: Phase, told: i32, speed: i32) -> f32 {
+    let mut guard = CLIENT_COUNT_DOWNS.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    let now = std::time::Instant::now();
+    let e = map.entry(pos).or_insert((phase, told, speed, now));
+    if e.0 != phase || e.1 != told || e.2 != speed {
+        *e = (phase, told, speed, now);
+    }
+    (told as f32 - speed as f32 * e.3.elapsed().as_secs_f32() * 20.0).max(0.0)
 }
 
 // ---- Broken crafters ------------------------------------------------------------------
