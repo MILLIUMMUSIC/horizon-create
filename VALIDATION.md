@@ -941,3 +941,11 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - The mechanical bearing's rotation mode follows `canDisassemble` (a unit test over the four cases); the wheel over a
   bearing was not tried in the game.
 
+
+
+## Blaze burner (macOS, offscreen)
+
+- A blaze burner set down is `heat_level=smouldering`; a click with coal makes it `kindled` (screenshot: the cage with
+  its rods and head drawn by the block entity). Not checked in the game: a mixer over a basin over a burner running a
+  `heated` recipe (the rule is a unit test), the blaze cake, the burn time running out, and the head's pose over a
+  basin.

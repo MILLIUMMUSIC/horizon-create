@@ -6,4 +6,5 @@ fn create_block_entity_submit(
     draw: &mut crate::game::native_block_entity_draw::BlockEntityDraw,
 ) {
     crate::game::create_logistics::submit(game, pos, entity, draw);
+    crate::game::create_machines::submit_blaze(game, pos, entity, draw);
 }

@@ -537,10 +537,13 @@ pub enum Heat {
 }
 
 impl Heat {
-    /// `testBlazeBurner` with no blaze burner (not ported): a basin is
-    /// unheated or, over a passive heater, smouldering, and neither heats.
-    pub fn met_without_burner(self) -> bool {
-        self == Heat::None
+    /// The requirement as `create_blaze::heat_met` takes it.
+    pub fn requirement(self) -> u8 {
+        match self {
+            Heat::None => 0,
+            Heat::Heated => 1,
+            Heat::Superheated => 2,
+        }
     }
 }
 
@@ -592,9 +595,7 @@ impl BasinRecipe {
     /// What the basin can do without blaze burners: items and the fluids
     /// Horizon has.
     pub fn supported(&self) -> bool {
-        !self.unsupported
-            && self.heat.met_without_burner()
-            && (!self.ingredients.is_empty() || !self.fluid_ingredients.is_empty())
+        !self.unsupported && (!self.ingredients.is_empty() || !self.fluid_ingredients.is_empty())
     }
 
     /// As a single-output recipe, for `roll_results`.
@@ -967,7 +968,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(brass.heat, Heat::Heated);
-        assert!(!brass.supported());
+        assert!(brass.supported());
         let dough = parse_basin_recipe(
             "d",
             &json!({"ingredients": [{"tag": "c:flours/wheat"},
@@ -1005,7 +1006,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(lava.fluid_results, vec![FluidStack::new(LAVA, 50)]);
-        assert!(!lava.supported());
+        assert!(lava.supported());
+        assert_eq!(lava.heat, Heat::Superheated);
         let mud = parse_basin_recipe(
             "m",
             &json!({"ingredients": [{"type": "neoforge:block_tag", "tag": "minecraft:convertable_to_mud"},

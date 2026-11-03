@@ -46,6 +46,12 @@ name = "create_gauge"
 source = "gauge.rs"
 
 [[module]]
+id = "blaze"
+file = "crates/horizon-client/src/game.rs"
+name = "create_blaze"
+source = "blaze.rs"
+
+[[module]]
 id = "placement"
 file = "crates/horizon-client/src/game.rs"
 name = "create_placement"

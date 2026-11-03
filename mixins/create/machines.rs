@@ -32,6 +32,7 @@ pub(super) const DEPOTS: &str = "create:depots";
 pub(super) const DEPOT: &str = "create:depot";
 const MILLSTONE: &str = "create:millstone";
 pub(super) const BASIN: &str = "create:basin";
+pub(super) const BLAZE: &str = "create:blaze_burner";
 /// DepotBehaviour: the held item, then `processingOutputBuffer`.
 const DEPOT_SLOTS: usize = 9;
 /// MillstoneBlockEntity: `inputInv`, then `outputInv`.
@@ -142,7 +143,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || is_saw(block)) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || is_saw(block)) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -152,7 +153,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || is_saw(block) || super::create_logistics::is_chute_block(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || is_saw(block) || super::create_logistics::is_chute_block(block) {
         *ticks = true;
     }
 }
@@ -352,12 +353,214 @@ pub(super) fn note_view(game: &Game<'_>, pos: Pos, view: Vec<(String, u32)>) {
     }
 }
 
+/// `BlazeBurnerBlock.getHeatLevelOf`: the heat of the burner at `pos` (none
+/// when there is none).
+fn burner_heat(game: &Game<'_>, pos: Pos) -> super::create_blaze::HeatLevel {
+    use super::create_blaze::HeatLevel;
+    game.pack
+        .assets
+        .registry
+        .state(game.world.block(pos[0], pos[1], pos[2]))
+        .filter(|s| s.name == BLAZE)
+        .and_then(|s| s.properties.get("heat_level").and_then(|h| HeatLevel::parse(h)))
+        .unwrap_or(HeatLevel::None)
+}
+
+/// A burner's fuel as its block entity keeps it (`fuelLevel`, `burnTimeRemaining`
+/// and `isCreative`).
+fn read_burner(nbt: &Compound) -> super::create_blaze::Burner {
+    use super::create_blaze::{Burner, Fuel};
+    Burner {
+        fuel: match get_int(nbt, "fuelLevel") {
+            1 => Fuel::Normal,
+            2 => Fuel::Special,
+            _ => Fuel::None,
+        },
+        remaining: get_int(nbt, "burnTimeRemaining"),
+        creative: get_bool(nbt, "isCreative"),
+    }
+}
+
+fn write_burner(nbt: &mut Compound, b: &super::create_blaze::Burner) {
+    use super::create_blaze::Fuel;
+    put_int(nbt, "fuelLevel", match b.fuel {
+        Fuel::None => 0,
+        Fuel::Normal => 1,
+        Fuel::Special => 2,
+    });
+    put_int(nbt, "burnTimeRemaining", b.remaining);
+    put_bool(nbt, "isCreative", b.creative);
+}
+
+/// `setBlockHeat`: the block takes `heat` as its `heat_level`.
+fn set_burner_heat(game: &mut Game<'_>, pos: Pos, heat: super::create_blaze::HeatLevel) {
+    if burner_heat(game, pos) == heat {
+        return;
+    }
+    let Some(base) = game.pack.assets.registry.default_state(BLAZE) else {
+        return;
+    };
+    if let Some(id) = game.with_props(base, &[("heat_level", heat.name())]) {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+    }
+}
+
+/// `BlazeBurnerRenderer.renderShared` through `native_block_entity_submit`:
+/// the cage, the blaze's head (turned to the nearest player, or the way it
+/// faces over a basin or tank) bobbing as it does, and the rods. Not yet: the
+/// flame's scrolling texture, goggles and hats.
+pub(super) fn submit_blaze(
+    game: &Game<'_>,
+    pos: Pos,
+    entity: &ModBlockEntity,
+    draw: &mut super::native_block_entity_draw::BlockEntityDraw,
+) {
+    use super::create_blaze::HeatLevel;
+    if entity.id != BLAZE {
+        return;
+    }
+    game.native_draw_block(draw, "create:hz_part_blaze_cage", &[]);
+    let heat = burner_heat(game, pos);
+    if heat == HeatLevel::None {
+        return;
+    }
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    let above_name = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(above[0], above[1], above[2]))
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
+    let valid_above = above_name == BASIN || super::create_fluid_glue::is_tank_block(&above_name);
+    let active = heat.is_at_least(HeatLevel::Fading) && valid_above;
+    let animation = if active { 0.175f32 } else { 0.0 };
+    // The head turns to the nearest player; over a basin it faces south.
+    let angle = if active {
+        180.0
+    } else {
+        game.player.as_ref().map_or(180.0, |p| {
+            let (dx, dz) = (p.position.x - (f64::from(pos[0]) + 0.5), p.position.z - (f64::from(pos[2]) + 0.5));
+            (-dz.atan2(dx)).to_degrees() as f32 - 90.0
+        })
+    };
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let time = START.get_or_init(std::time::Instant::now).elapsed().as_secs_f32() * 20.0;
+    let tick = time + ((pos[0].wrapping_mul(31) ^ pos[2].wrapping_mul(17) ^ pos[1]).rem_euclid(13)) as f32 * 16.0;
+    let mult = if heat.is_at_least(HeatLevel::Fading) { 64.0 } else { 16.0 };
+    let pi = std::f32::consts::PI;
+    let wave = |shift: f32| ((tick / 16.0 + shift) % (2.0 * pi)).sin() / mult;
+    let (offset, offset1, offset2) = (wave(0.0), wave(pi), wave(pi / 2.0));
+    let head_y = offset - animation * 0.75;
+    let model = format!("create:hz_part_blaze_{}", super::create_blaze::head_model(heat, valid_above));
+    draw.push();
+    draw.translate([0.0, head_y, 0.0]);
+    draw.rotate_about([0.0, 1.0, 0.0], angle, [0.5; 3]);
+    game.native_draw_block(draw, &model, &[]);
+    draw.pop();
+    if heat.is_at_least(HeatLevel::Fading) {
+        let (rods, rods2) = if heat == HeatLevel::Seething {
+            ("create:hz_part_blaze_super_rods", "create:hz_part_blaze_super_rods_2")
+        } else {
+            ("create:hz_part_blaze_rods", "create:hz_part_blaze_rods_2")
+        };
+        draw.push();
+        draw.translate([0.0, offset1 + animation + 0.125, 0.0]);
+        game.native_draw_block(draw, rods, &[]);
+        draw.pop();
+        draw.push();
+        draw.translate([0.0, offset2 + animation - 3.0 / 16.0, 0.0]);
+        game.native_draw_block(draw, rods2, &[]);
+        draw.pop();
+    }
+}
+
+/// `BlazeBurnerBlockEntity.tick` on the server.
+fn blaze_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
+    let mut burner = read_burner(&entity.nbt);
+    if burner.tick() {
+        write_burner(&mut entity.nbt, &burner);
+        set_burner_heat(game, pos, burner.heat_level());
+    } else if !burner.creative {
+        write_burner(&mut entity.nbt, &burner);
+    }
+}
+
+/// `BlazeBurnerBlock.useItemOn` / `tryInsert`: fuel in the hand feeds the
+/// burner. True when it took the click.
+fn blaze_click(game: &mut Game<'_>, pos: Pos) -> bool {
+    use super::create_blaze::Fuel;
+    let Some(held) = game.held().cloned() else {
+        return false;
+    };
+    if game.native_acting_player().is_some_and(|p| p.game_mode == 3) {
+        return false;
+    }
+    let item = held.item.to_string();
+    // Special fuel (the superheated data map: the blaze cake), the creative
+    // blaze cake, else what burns in a furnace.
+    let creative = item == "create:creative_blaze_cake";
+    let (kind, burn_time) = if item == "create:blaze_cake" {
+        (Fuel::Special, 3200)
+    } else {
+        let time = game.res.providers().burn_time(game.items(), &held, false);
+        if time > 0 { (Fuel::Normal, time) } else { (Fuel::None, 0) }
+    };
+    if !creative && kind == Fuel::None {
+        return false;
+    }
+    let creative_player = game.native_acting_player().is_some_and(|p| p.game_mode == 1);
+    let mut burner = game.native_with_mod_block_entity(pos, |be| read_burner(&be.nbt)).unwrap_or_default();
+    let before = burner_heat(game, pos);
+    let taken = if creative {
+        // applyCreativeFuel: the burner stays lit at the next level up.
+        let mut next = before.next_active_level();
+        if next == super::create_blaze::HeatLevel::Fading {
+            next = next.next_active_level();
+        }
+        burner = super::create_blaze::Burner { fuel: Fuel::None, remaining: 0, creative: true };
+        set_burner_heat(game, pos, next);
+        true
+    } else {
+        let taken = burner.try_update_fuel(kind, burn_time, false, false);
+        if taken {
+            set_burner_heat(game, pos, burner.heat_level());
+        }
+        taken
+    };
+    if !taken {
+        return false;
+    }
+    game.native_with_mod_block_entity(pos, |be| write_burner(&mut be.nbt, &burner));
+    if !creative_player {
+        let hand = game.held_mut();
+        if let Some(h) = hand.as_mut() {
+            h.count -= 1;
+            if h.count == 0 {
+                *hand = None;
+            }
+        }
+    }
+    // playSound, and the blaze's ambient when the level changed.
+    let at = pos.map(|v| f64::from(v) + 0.5);
+    let changed = burner_heat(game, pos) != before;
+    game.with_level(|_, level, _| {
+        level.native_play_sound("minecraft:entity.blaze.shoot", at, super::create_sounds::BLOCKS, 0.2, 0.65);
+        if changed {
+            level.native_play_sound("minecraft:entity.blaze.ambient", at, super::create_sounds::BLOCKS, 0.2, 1.05);
+        }
+    });
+    true
+}
+
 /// `native_block_entity_tick`.
 pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     match entity.id.as_str() {
         DEPOT => depot_tick(game, pos, entity),
         MILLSTONE => millstone_tick(game, pos, entity),
         b if is_saw(b) => saw_tick(game, pos, entity),
+        BLAZE => blaze_tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {
@@ -1122,6 +1325,7 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
             true
         }
         Some(n) if is_saw(n) => saw_filter_click(game, pos, face),
+        Some(BLAZE) => blaze_click(game, pos),
         Some(MILLSTONE) => {
             // MillstoneBlock.useItemOn: an empty hand takes the outputs.
             if game.held().is_none() {
@@ -1608,7 +1812,12 @@ pub(super) fn mixer_world_step(game: &mut Game<'_>, pos: Pos, step: MixStep) {
                 return;
             }
             let recipes = basin_recipes(game);
-            let Some((r, _)) = recipes.iter().find(|r| basin_apply(game, &mut items, &mut tanks, r, true)) else {
+            // HeatCondition.testBlazeBurner: the blaze burner under the basin.
+            let heat = burner_heat(game, [pos[0], pos[1] - 3, pos[2]]);
+            let Some((r, _)) = recipes
+                .iter()
+                .find(|r| super::create_blaze::heat_met(r.0.heat.requirement(), heat) && basin_apply(game, &mut items, &mut tanks, r, true))
+            else {
                 return;
             };
             let duration = r.processing_time;
@@ -1633,6 +1842,9 @@ pub(super) fn mixer_world_step(game: &mut Game<'_>, pos: Pos, step: MixStep) {
             let Some(recipe) = recipes.iter().find(|(r, _)| r.id == id) else {
                 return;
             };
+            if !super::create_blaze::heat_met(recipe.0.heat.requirement(), burner_heat(game, [pos[0], pos[1] - 3, pos[2]])) {
+                return;
+            }
             let Some((at, mut items, mut tanks)) = basin_below(game, pos) else {
                 return;
             };

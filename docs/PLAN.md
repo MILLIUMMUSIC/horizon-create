@@ -422,7 +422,15 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    sets, Create's compatibility with other mods (**blocked on the engine**: no shared capabilities, #1040 for item
    storage only, nothing for fluids or energy). The rest of this milestone is ported item by item below; what is
    done is in the README's estimate.
-   Done from this milestone: the clutch and gearshift (`Kind::SplitShaft`: `SplitShaftBlockEntity.getRotationSpeedModifier`,
+   Done from this milestone: the blaze burner (`blaze.rs`: `HeatLevel`, `BlazeBurnerBlockEntity`'s fuel, burn time and
+   heat, `HeatCondition.testBlazeBurner`; `heat_level` is its own state property on a stone template, its block entity
+   holds the fuel; fuel in the hand (anything a furnace burns, the blaze cake, the creative blaze cake) feeds it with
+   Create's sounds; the cage, head and rods are drawn through `native_block_entity_submit` as `BlazeBurnerRenderer`
+   does; a mixer's basin over a burner meets `heated` and `superheated` mixing recipes). Not yet: the flame's
+   scrolling texture, goggles and hats on the head, the head's easing and the particles, capturing a blaze with the
+   empty burner (using an item on an entity), the lit blaze burner (soul fire) variant, the stock keeper's heat,
+   compacting recipes' heat with a press, blaze burners on contraptions, `FULL_BRIGHT` light on the head and rods.
+   The clutch and gearshift (`Kind::SplitShaft`: `SplitShaftBlockEntity.getRotationSpeedModifier`,
    a powered gearshift reverses what is beyond it and a powered clutch cuts it; `powered` is their own state property,
    set from the redstone signal beside them, detached and attached again as `neighborChanged` does; their shaft
    halves drawn by `SplitShaftRenderer`'s rule), the speedometer and stressometer (`gauge.rs`: `SpeedGaugeBlockEntity.getDialTarget`,

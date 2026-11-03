@@ -222,6 +222,16 @@ PARTIALS = {
     # and tunnels' block entities.
     "funnel_flap": "create:block/funnel/flap",
     "belt_funnel_flap": "create:block/belt_funnel/flap",
+    "blaze_cage": "create:block/blaze_burner/block",
+    "blaze_inert": "create:block/blaze_burner/blaze/inert",
+    "blaze_idle": "create:block/blaze_burner/blaze/idle",
+    "blaze_active": "create:block/blaze_burner/blaze/active",
+    "blaze_super": "create:block/blaze_burner/blaze/super",
+    "blaze_super_active": "create:block/blaze_burner/blaze/super_active",
+    "blaze_rods": "create:block/blaze_burner/rods_small",
+    "blaze_rods_2": "create:block/blaze_burner/rods_large",
+    "blaze_super_rods": "create:block/blaze_burner/superheated_rods_small",
+    "blaze_super_rods_2": "create:block/blaze_burner/superheated_rods_large",
     "gauge_dial": "create:block/gauge/dial",
     "gauge_head_speed": "create:block/gauge/speedometer/head",
     "gauge_head_stress": "create:block/gauge/stressometer/head",
@@ -685,6 +695,7 @@ def fit_logistics(content, names):
     fit_saws(content, names)
     fit_gauges(content, names)
     fit_split_shafts(content, names)
+    fit_blaze_burner(content, names)
     fit_psi(content)
     fit_contacts(content, names)
     fit_large_wheel(content, names)
@@ -1286,6 +1297,27 @@ def fit_split_shafts(content, names):
                 props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
                 states_out[f"axis={props['axis']},powered={props.get('powered', 'false')}"] = model
             write_json(states / f"{name}.json", {"variants": states_out})
+
+
+# The blaze burner: a stone template with `heat_level` as its own state
+# property, its block entity (fuel and burn time) from the native mod. Blank:
+# the native mod draws the cage, the head and the rods (BlazeBurnerRenderer).
+HEAT_LEVELS = ["none", "smouldering", "fading", "kindled", "seething"]
+
+
+def fit_blaze_burner(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    models = content / "assets" / "create" / "models" / "block"
+    decl = read_json(blocks / "blaze_burner.json") if (blocks / "blaze_burner.json").exists() else {}
+    decl["template"] = "minecraft:stone"
+    decl["state_properties"] = {"heat_level": {"type": "enum", "values": HEAT_LEVELS}}
+    decl["default_state"] = {"heat_level": "smouldering"}
+    decl["shapes"] = {"property": "heat_level", "values": {h: [box(1, 0, 1, 15, 14, 15)] for h in HEAT_LEVELS}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "blaze_burner.json", decl)
+    write_json(models / "hz_blank_blaze_burner.json", {"textures": {"particle": "create:block/dark_metal_block"}})
+    write_json(states / "blaze_burner.json", {"variants": {"": {"model": "create:block/hz_blank_blaze_burner"}}})
 
 
 # The portable storage interface: a lightning rod's template (six facings);
