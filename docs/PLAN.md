@@ -495,6 +495,14 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    it are pulled along and hurt (4, through `/damage`); `entityInside`'s push on a wheel's top never
    runs in Create either (its full collision keeps entities below the 1.25 it asks for). Not yet: the ambient sound and crit particles, item particles (they don't go over the network), the
    wheels' advancements.
+   Encased shafts and cogwheels (`Kind::EncasedShaft`, `Kind::EncasedCog`: `EncasedShaftBlock`, `EncasedCogwheelBlock`,
+   `EncasableBlock.tryEncase`): a casing used on a bare shaft or cogwheel encases it (the casing is kept); a cog takes
+   a shaft on each side where a neighbour reaches it, the wrench on its axis switches one on or off and elsewhere turns
+   it (its shafts swapping as `getRotatedBlockState` does), a sneaking wrench gives back the bare block. Encased cogs
+   mesh as cogs and have shafts only where set; the casing's model stays in the chunk, the cog and shaft halves turn
+   inside. Not yet: the casing's connected textures (`EncasedCogCTBehaviour`), `canSurvive` beside large cogs, the
+   encase's particles. Generators start again
+   after a change of state (`switchToBlockState`'s `reActivateSource`: a wrenched motor no longer stops for good).
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that
    pipes drain from every side but the top and can't fill. Items come in from belts and chutes

@@ -226,6 +226,18 @@ impl Kind {
             // RotatedPillarKineticBlock.AXIS
             Kind::Shaft(a) => Kind::Shaft(turn_axis(a)),
             Kind::CrushingWheel(a) => Kind::CrushingWheel(turn_axis(a)),
+            Kind::EncasedShaft(b, a) => Kind::EncasedShaft(b, turn_axis(a)),
+            // EncasedCogwheelBlock.getRotatedBlockState: its shafts swap when
+            // the quarter turn takes its axis the other way. On its own axis
+            // the wrench switches a shaft instead, in the native mod.
+            Kind::EncasedCog(b, l, a, top, bottom) => {
+                let swap = matches!(
+                    (face.axis(), a),
+                    (Axis::X, Axis::Y) | (Axis::Y, Axis::Z) | (Axis::Z, Axis::X)
+                );
+                let (top, bottom) = if swap { (bottom, top) } else { (top, bottom) };
+                Kind::EncasedCog(b, l, turn_axis(a), top, bottom)
+            }
             Kind::Cogwheel(a) => Kind::Cogwheel(turn_axis(a)),
             Kind::LargeCogwheel(a) => Kind::LargeCogwheel(turn_axis(a)),
             Kind::Gearbox(a) => Kind::Gearbox(turn_axis(a)),
@@ -261,11 +273,13 @@ impl Kind {
         match self {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
+            | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::Gearbox(a)
             | Kind::SplitShaft(_, a, _)
             | Kind::RopePulley(a) => Some(("axis", a.name())),
+            Kind::EncasedCog(_, _, a, ..) => Some(("axis", a.name())),
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
             | Kind::MechanicalPress(f)
@@ -456,6 +470,11 @@ pub enum Kind {
     MechanicalCrafter(Dir),
     /// `CrushingWheelBlock`: a shaft along its axis (crusher.rs).
     CrushingWheel(Axis),
+    /// `EncasedShaftBlock`: brass (or andesite) casing, its axis.
+    EncasedShaft(bool, Axis),
+    /// `EncasedCogwheelBlock`: brass, large, its axis, `TOP_SHAFT` (its
+    /// positive side) and `BOTTOM_SHAFT`.
+    EncasedCog(bool, bool, Axis, bool, bool),
 }
 
 impl Kind {
@@ -469,6 +488,20 @@ impl Kind {
         match name {
             "create:shaft" => axis().map(Kind::Shaft),
             "create:crushing_wheel" => axis().map(Kind::CrushingWheel),
+            "create:andesite_encased_shaft" => axis().map(|a| Kind::EncasedShaft(false, a)),
+            "create:brass_encased_shaft" => axis().map(|a| Kind::EncasedShaft(true, a)),
+            "create:andesite_encased_cogwheel"
+            | "create:brass_encased_cogwheel"
+            | "create:andesite_encased_large_cogwheel"
+            | "create:brass_encased_large_cogwheel" => axis().map(|a| {
+                Kind::EncasedCog(
+                    name.contains("brass"),
+                    name.contains("large"),
+                    a,
+                    prop("top_shaft") == Some("true"),
+                    prop("bottom_shaft") == Some("true"),
+                )
+            }),
             "create:cogwheel" => axis().map(Kind::Cogwheel),
             "create:large_cogwheel" => axis().map(Kind::LargeCogwheel),
             "create:gearbox" => axis().map(Kind::Gearbox),
@@ -517,6 +550,12 @@ impl Kind {
         match self {
             Kind::Shaft(_) => "create:shaft",
             Kind::CrushingWheel(_) => "create:crushing_wheel",
+            Kind::EncasedShaft(false, _) => "create:andesite_encased_shaft",
+            Kind::EncasedShaft(true, _) => "create:brass_encased_shaft",
+            Kind::EncasedCog(false, false, ..) => "create:andesite_encased_cogwheel",
+            Kind::EncasedCog(true, false, ..) => "create:brass_encased_cogwheel",
+            Kind::EncasedCog(false, true, ..) => "create:andesite_encased_large_cogwheel",
+            Kind::EncasedCog(true, true, ..) => "create:brass_encased_large_cogwheel",
             Kind::Cogwheel(_) => "create:cogwheel",
             Kind::LargeCogwheel(_) => "create:large_cogwheel",
             Kind::Gearbox(_) => "create:gearbox",
@@ -567,6 +606,7 @@ impl Kind {
         match self {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
+            | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::Gearbox(a)
@@ -582,6 +622,7 @@ impl Kind {
             | Kind::MechanicalBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => f.axis(),
+            Kind::EncasedCog(_, _, a, ..) => a,
             Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
             Kind::Deployer(f, along)
@@ -599,6 +640,7 @@ impl Kind {
         match self {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
+            | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::SplitShaft(_, a, _)
@@ -607,6 +649,9 @@ impl Kind {
             Kind::CreativeMotor(f) => face == f,
             Kind::HandCrank(f) => face == f.opposite(),
             Kind::MechanicalPress(f) | Kind::WaterWheel(f) => face.axis() == f.axis(),
+            Kind::EncasedCog(_, _, a, top, bottom) => {
+                face.axis() == a && if face.positive() { top } else { bottom }
+            }
             Kind::Millstone => face == Dir::Down,
             Kind::EncasedFan(f)
             | Kind::MechanicalBearing(f)
@@ -636,11 +681,12 @@ impl Kind {
                 | Kind::MechanicalPump(_)
                 | Kind::MechanicalCrafter(_)
                 | Kind::MechanicalArm
+                | Kind::EncasedCog(_, false, ..)
         )
     }
     /// `ICogWheel.isLargeCog`.
     pub fn is_large_cog(self) -> bool {
-        matches!(self, Kind::LargeCogwheel(_))
+        matches!(self, Kind::LargeCogwheel(_) | Kind::EncasedCog(_, true, ..))
     }
     /// `BlockStressValues.getImpact` with CStress's defaults.
     pub fn stress_impact(self) -> f32 {
@@ -691,6 +737,12 @@ impl Kind {
         // (`GearshiftBlock.neighborChanged`).
         if let (Kind::SplitShaft(_, _, a), Kind::SplitShaft(_, _, b)) = (self, other)
             && a != b
+        {
+            return false;
+        }
+        // areStatesKineticallyEquivalent: its shafts change what it reaches.
+        if let (Kind::EncasedCog(_, _, _, a, b), Kind::EncasedCog(_, _, _, c, d)) = (self, other)
+            && (a, b) != (c, d)
         {
             return false;
         }
@@ -1681,6 +1733,9 @@ impl Kinetics {
             (Some(old), Some(new)) if old == new => {}
             (Some(old), Some(new)) if old.equivalent(new) => {
                 self.em(pos).kind = new;
+                if new.is_generator() {
+                    self.em(pos).reactivate_source = true;
+                }
                 self.send(pos);
             }
             (Some(_), Some(new)) => {
@@ -1693,6 +1748,10 @@ impl Kinetics {
                 self.remove_source(level, pos);
                 self.em(pos).kind = new;
                 self.em(pos).update_speed = true;
+                // switchToBlockState: a generator starts again.
+                if new.is_generator() {
+                    self.em(pos).reactivate_source = true;
+                }
                 self.send(pos);
             }
         }
@@ -2036,6 +2095,7 @@ fn kind_key(k: Kind) -> String {
     let state = match k {
         Kind::Shaft(a)
         | Kind::CrushingWheel(a)
+        | Kind::EncasedShaft(_, a)
         | Kind::Cogwheel(a)
         | Kind::LargeCogwheel(a)
         | Kind::Gearbox(a)
@@ -2052,6 +2112,7 @@ fn kind_key(k: Kind) -> String {
         | Kind::MechanicalBearing(f)
         | Kind::WindmillBearing(f)
         | Kind::Drill(f) => f.name(),
+        Kind::EncasedCog(_, _, a, ..) => a.name(),
         Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => "",
         Kind::Deployer(f, _)
         | Kind::MechanicalPiston(f, ..)
@@ -2067,6 +2128,15 @@ fn kind_key(k: Kind) -> String {
     if let Kind::SplitShaft(_, _, powered) = k {
         return format!("{}[{state};{powered}]", k.block());
     }
+    if let Kind::EncasedCog(_, _, a, top, bottom) = k {
+        return format!(
+            "{}[{};{}{}]",
+            k.block(),
+            a.name(),
+            u8::from(top),
+            u8::from(bottom)
+        );
+    }
     format!("{}[{}]", k.block(), state)
 }
 
@@ -2077,6 +2147,16 @@ fn parse_kind_key(s: &str) -> Option<Kind> {
     Kind::from_block(block, |key| match key {
         "axis" | "facing" => Some(first),
         "face" | "powered" => Some(second),
+        "top_shaft" => Some(if second.starts_with('1') {
+            "true"
+        } else {
+            "false"
+        }),
+        "bottom_shaft" => Some(if second.ends_with('1') {
+            "true"
+        } else {
+            "false"
+        }),
         _ => None,
     })
 }
@@ -2176,6 +2256,11 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::MechanicalPump(d) => (12, dir(d)),
         Kind::MechanicalCrafter(d) => (27, dir(d)),
         Kind::CrushingWheel(a) => (28, axis(a)),
+        Kind::EncasedShaft(b, a) => (29, axis(a) | u8::from(b) << 2),
+        Kind::EncasedCog(b, l, a, t, u) => (
+            30,
+            axis(a) | u8::from(b) << 2 | u8::from(l) << 3 | u8::from(t) << 4 | u8::from(u) << 5,
+        ),
         Kind::MechanicalMixer => (10, 0),
         Kind::Belt(b) => {
             let slope = Slope::ALL.iter().position(|s| *s == b.slope).unwrap_or(0) as u8;
@@ -2220,6 +2305,17 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         12 => Kind::MechanicalPump(dir?),
         27 => Kind::MechanicalCrafter(dir?),
         28 => Kind::CrushingWheel(axis?),
+        29 => Kind::EncasedShaft(
+            state & 4 != 0,
+            Axis::ALL.get(usize::from(state & 3)).copied()?,
+        ),
+        30 => Kind::EncasedCog(
+            state & 4 != 0,
+            state & 8 != 0,
+            Axis::ALL.get(usize::from(state & 3)).copied()?,
+            state & 16 != 0,
+            state & 32 != 0,
+        ),
         10 => Kind::MechanicalMixer,
         11 => Kind::Belt(BeltState {
             facing: Dir::ALL.get(usize::from(state & 7)).copied()?,
@@ -2606,6 +2702,41 @@ mod tests {
         assert_eq!(r.speed([2, 64, 0]), -16.0);
         assert_eq!(r.speed([1, 64, 1]), 16.0);
         assert_eq!(r.speed([1, 64, -1]), -16.0);
+    }
+
+    #[test]
+    fn a_motor_turned_with_the_wrench_keeps_running() {
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.place([1, 64, 0], Kind::Shaft(Axis::X));
+        r.ticks(2);
+        assert_eq!(r.speed([1, 64, 0]), 16.0);
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::Up));
+        r.ticks(4);
+        assert_eq!(r.speed([0, 64, 0]), 16.0);
+        assert_eq!(r.speed([1, 64, 0]), 0.0);
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::East));
+        r.ticks(4);
+        assert_eq!(r.speed([1, 64, 0]), 16.0);
+    }
+
+    #[test]
+    fn encased_cogs_reach_through_their_shafts_only_and_mesh_as_cogs() {
+        let c = Kind::EncasedCog(false, false, Axis::Z, true, false);
+        assert!(c.has_shaft_towards(Dir::South));
+        assert!(!c.has_shaft_towards(Dir::North));
+        assert!(c.is_small_cog() && !c.is_large_cog());
+        assert!(Kind::EncasedCog(true, true, Axis::Y, false, false).is_large_cog());
+        assert!(!c.equivalent(Kind::EncasedCog(false, false, Axis::Z, false, false)));
+        assert_eq!(parse_kind_key(&kind_key(c)), Some(c));
+        let s = Kind::EncasedShaft(true, Axis::X);
+        assert!(s.has_shaft_towards(Dir::East) && !s.has_shaft_towards(Dir::Up));
+        assert_eq!(parse_kind_key(&kind_key(s)), Some(s));
+        // A quarter turn about Y takes a cog along Z to X, swapping its shafts.
+        assert_eq!(
+            Kind::EncasedCog(false, false, Axis::Z, true, false).wrenched(Dir::Up),
+            Kind::EncasedCog(false, false, Axis::X, false, true)
+        );
     }
 
     #[test]

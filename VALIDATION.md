@@ -1023,3 +1023,12 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A zombie summoned into the working controller lost health in steps of 4 and died within about 2 seconds, dropping its
   loot. A pig in the cell of a turning standing drill (16 rpm, 1 + 0.5 damage a hit from `getDamage`) died within about
   1.5 seconds. Moving drills, saws and ploughs (`damageEntities`, throwing) are unit-tested only, not tried in the game.
+
+## Encased shafts and cogwheels (macOS, offscreen)
+
+- A motor, shaft, cogwheel, second cogwheel, shaft and speedometer in line: andesite casing clicked on the shaft made an
+  `andesite_encased_shaft`, brass casing clicked on the cogwheel a `brass_encased_cogwheel` with `bottom_shaft=true` (the
+  neighbour that reaches it), and the speedometer still read 16 RPM through both. The wrench on its south face switched
+  `top_shaft` on and off. A sneaking wrench on the encased shaft gave back a bare shaft. A motor wrenched away and set
+  back drove the speedometer at 16 RPM again (`reActivateSource`; it stayed at 0 before the fix).
+  Not tried: large encased cogs, turning an encased cog with the wrench, saving and reloading.

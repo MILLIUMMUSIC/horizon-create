@@ -948,6 +948,10 @@ fn right_click_hand(
         *canceled = true;
         return;
     }
+    if try_encase(game, pos) {
+        *canceled = true;
+        return;
+    }
     let holding_wrench = game.held().is_some_and(|s| &*s.item == WRENCH);
     if holding_wrench {
         let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
@@ -1167,6 +1171,59 @@ fn large_wheel_blocked(game: &mut Game<'_>, stack: &horizon_client::items::ItemS
 /// `WrenchItem.useOn` on an `IWrenchable` of ours: `onWrenched` turns it
 /// (`getRotatedBlockState`), `onSneakWrenched` takes it into the player's
 /// inventory. False when the block isn't one (or the player may not build).
+/// `EncasableBlock.tryEncase` (`ShaftBlock`, `CogWheelBlock`): a casing used on
+/// a bare shaft or cogwheel, not sneaking, encases it. The casing is kept, as
+/// in Create. A cog takes a shaft on each side where a neighbour reaches it
+/// (`EncasedCogwheelBlock.handleEncasing`).
+fn try_encase(game: &mut Game<'_>, pos: Pos) -> bool {
+    let brass = match game.held().map(|s| s.item.to_string()).as_deref() {
+        Some("create:andesite_casing") => false,
+        Some("create:brass_casing") => true,
+        _ => return false,
+    };
+    if game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+        return false;
+    }
+    let next = match kind_at(game, pos) {
+        Some(Kind::Shaft(a)) => Kind::EncasedShaft(brass, a),
+        Some(k @ (Kind::Cogwheel(a) | Kind::LargeCogwheel(a))) => {
+            let reaches = |game: &Game<'_>, d: Dir| {
+                let n = d.normal();
+                kind_at(game, [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]])
+                    .is_some_and(|o| o.has_shaft_towards(d.opposite()))
+            };
+            let top = reaches(game, Dir::positive_of(a));
+            let bottom = reaches(game, Dir::positive_of(a).opposite());
+            Kind::EncasedCog(brass, k.is_large_cog(), a, top, bottom)
+        }
+        _ => return false,
+    };
+    set_kind(game, pos, next);
+    let at = pos.map(|v| f64::from(v) + 0.5);
+    game.with_level(|_, level, _| {
+        level.native_play_sound("minecraft:block.wood.place", at, super::create_sounds::BLOCKS, 1.0, 0.8);
+    });
+    true
+}
+
+/// `KineticBlockEntity.switchToBlockState` to `kind`'s block.
+fn set_kind(game: &mut Game<'_>, pos: Pos, kind: Kind) {
+    let Some(base) = game.pack.assets.registry.default_state(kind.block()) else {
+        return;
+    };
+    let on = |v: bool| if v { "true" } else { "false" };
+    let id = match kind {
+        Kind::EncasedCog(_, _, a, top, bottom) => {
+            game.with_props(base, &[("axis", a.name()), ("top_shaft", on(top)), ("bottom_shaft", on(bottom))])
+        }
+        k => game.with_props(base, &[("axis", k.rotation_axis().name())]),
+    };
+    if let Some(id) = id {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+    }
+}
+
 fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool {
     // Player.mayBuild: not in adventure or spectator mode.
     let mode = game.native_acting_player().map_or(0, |p| p.game_mode);
@@ -1175,6 +1232,31 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     }
     let name = block_name(game, pos);
     let kind = kind_at(game, pos);
+    // EncasedShaftBlock / EncasedCogwheelBlock.onSneakWrenched: back to the
+    // bare block, the casing gone with no drop.
+    if sneaking {
+        let bare = match kind {
+            Some(Kind::EncasedShaft(_, a)) => Some(Kind::Shaft(a)),
+            Some(Kind::EncasedCog(_, false, a, ..)) => Some(Kind::Cogwheel(a)),
+            Some(Kind::EncasedCog(_, true, a, ..)) => Some(Kind::LargeCogwheel(a)),
+            _ => None,
+        };
+        if let Some(bare) = bare {
+            set_kind(game, pos, bare);
+            return true;
+        }
+    }
+    // EncasedCogwheelBlock.onWrenched: on its axis, a shaft on or off.
+    if let Some(Kind::EncasedCog(b, l, a, top, bottom)) = kind {
+        let d = Dir::nearest(face);
+        if d.axis() == a {
+            let next = if d.positive() { (!top, bottom) } else { (top, !bottom) };
+            set_kind(game, pos, Kind::EncasedCog(b, l, a, next.0, next.1));
+            let pitch = horizon_core::random::RandomSource::next_float(&mut game.world.random) + 0.5;
+            play_create_sound(game, "wrench_rotate", pos.map(|v| f64::from(v) + 0.5), 1.0, pitch);
+            return true;
+        }
+    }
     if matches!(kind, Some(Kind::Belt(_))) {
         return true;
     }
@@ -1230,7 +1312,11 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
         {
             // KineticBlockEntity.switchToBlockState: the kinetics see the
             // change at the tick's end.
-            game.native_set_block_property(pos, key, value);
+            if matches!(turned, Kind::EncasedCog(..)) {
+                set_kind(game, pos, turned);
+            } else {
+                game.native_set_block_property(pos, key, value);
+            }
             // IWrenchable.playRotateSound.
             let pitch = horizon_core::random::RandomSource::next_float(&mut game.world.random) + 0.5;
             play_create_sound(game, "wrench_rotate", pos.map(|v| f64::from(v) + 0.5), 1.0, pitch);
@@ -1644,6 +1730,21 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
         Kind::Shaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
         Kind::CrushingWheel(a) => {
             want.push(("create:hz_crushing_wheel", Some(("axis", a.name())), id, a, standard, 0.0))
+        }
+        // The casing stays in the chunk mesh; KineticBlockEntityRenderer's
+        // shaft turns inside it.
+        Kind::EncasedShaft(_, a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
+        // EncasedCogRenderer: the shaftless cog, and a shaft half each way it
+        // has a shaft (a large cog's at the shaft's own offset).
+        Kind::EncasedCog(_, large, a, ..) => {
+            let cog = if large { "create:hz_part_large_cogwheel_shaftless" } else { "create:hz_part_cogwheel_shaftless" };
+            want.push((cog, None, rotate_to_face_vertical(Dir::positive_of(a)), a, standard, 0.0));
+            let shaft = if large { render_angle(Kind::Shaft(a), pos, view.speed, time) } else { standard };
+            for d in [Dir::positive_of(a), Dir::positive_of(a).opposite()] {
+                if view.kind.has_shaft_towards(d) {
+                    want.push(("create:hz_part_shaft_half", None, rotate_to_face(d), a, shaft, 0.0));
+                }
+            }
         }
         Kind::Cogwheel(a) => {
             want.push(("create:hz_cogwheel", Some(("axis", a.name())), id, a, standard, 0.0))

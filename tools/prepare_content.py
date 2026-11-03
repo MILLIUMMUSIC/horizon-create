@@ -226,6 +226,7 @@ PARTIALS = {
     "millstone_inner": "create:block/millstone/inner",
     "encased_fan_inner": "create:block/encased_fan/propeller",
     "cogwheel_shaftless": "create:block/cogwheel_shaftless",
+    "large_cogwheel_shaftless": "create:block/large_cogwheel_shaftless",
     "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
     "mechanical_mixer_head": "create:block/mechanical_mixer/head",
     # FunnelRenderer's and BeltTunnelRenderer's flaps, drawn by the funnels'
@@ -716,6 +717,7 @@ def fit_logistics(content, names):
     fit_redstone_link(content, names)
     fit_mechanical_crafter(content)
     fit_crushing_wheel_controller(content)
+    fit_encased_cogwheels(content)
     fit_psi(content)
     fit_contacts(content, names)
     fit_large_wheel(content, names)
@@ -1362,6 +1364,22 @@ def fit_redstone_link(content, names):
             props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
             out[f"facing={props['facing']},powered={props['powered']},receiver={props['receiver']}"] = model
         write_json(states / "redstone_link.json", {"variants": out})
+
+
+# Encased cogwheels (EncasedCogwheelBlock): a log's `axis` as the encased shafts
+# have, with their own `top_shaft` and `bottom_shaft`; Create's blockstates pick
+# the casing's model, the native mod draws the cog and shafts turning. Made by
+# using a casing on a cogwheel: no item.
+def fit_encased_cogwheels(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    for name in ["andesite_encased_cogwheel", "brass_encased_cogwheel",
+                 "andesite_encased_large_cogwheel", "brass_encased_large_cogwheel"]:
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:oak_log"
+        decl["item"] = False
+        decl["state_properties"] = {"top_shaft": {"type": "boolean"}, "bottom_shaft": {"type": "boolean"}}
+        decl["default_state"] = {"top_shaft": "false", "bottom_shaft": "false"}
+        write_json(blocks / f"{name}.json", decl)
 
 
 # The controller between two crushing wheels: a lightning rod's six facings
