@@ -1003,3 +1003,5 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A collecting funnel set on an item drain against a chest beside it took the `pulling` shape; a water bucket put
   on the drain (its data) travelling toward the funnel was drained and the empty bucket went through the funnel into
   the chest.
+- A comparator reading an item drain: powered with 1000 mB in it, off when its data was set to empty, on again at
+  1500 mB (the spout answers the same way; not tried).

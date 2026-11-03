@@ -455,7 +455,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    result held as `convertToAndLeaveHeld`; the tank's fluid, the stream and the nozzle's three bits squeezing as
    `SpoutRenderer` draws them. Not yet: `BlockSpoutingBehaviour` (filling blocks below: other mods' only),
    sequenced assembly's filling steps, potion and tea fluids (no fluid in Horizon), the splash and processing
-   particles, the comparator (`levelOfSmartFluidTank`), the food advancements, spouts on contraptions.
+   particles, the food advancements, spouts on contraptions. Comparators read its fill (`levelOfSmartFluidTank`).
    The mechanical crafter (`crafter.rs`, `crafter_glue.rs`: `MechanicalCrafterBlock`, `MechanicalCrafterBlockEntity`,
    `RecipeGridHandler`, `MechanicalCraftingInput`, `MechanicalCraftingRecipe`): `Kind::MechanicalCrafter`, a small cog
    about its facing's axis (2 su per rpm), on a stone template with its own `facing` and `pointing` and a block entity;
@@ -488,7 +488,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    fluid and the item lying on it are drawn. A belt funnel on it (pulling, as on a depot or a saw facing up:
    `canSupportBeltFunnels`) takes the item at its edge first (`tryExportingToBeltFunnel`). Not yet: the
    item's roll and the stream over it while emptying, potion and other fluids Horizon has no block for (honey, tea,
-   milk), the comparator, advancements.
+   milk), advancements. Comparators read its fill (`levelOfSmartFluidTank`).
 
 ## Rework onto Horizon's hooks (pin 674948d)
 

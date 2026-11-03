@@ -668,6 +668,10 @@ pub(super) fn note_spout(dimension: &str, pos: Pos, fluid: &FluidStack, ticks: i
     let mut guard = state();
     let s = guard.get_or_insert_with(State::default);
     let spouts = s.spouts.entry(dimension.to_owned()).or_default();
+    // onFluidStackChanged: comparators beside it read it again.
+    if spouts.get(&pos).map_or(0, |(f, _)| f.amount.max(0) * i32::from(!f.is_empty())) != fluid.amount.max(0) * i32::from(!fluid.is_empty()) {
+        COMPARATORS.lock().unwrap_or_else(|e| e.into_inner()).push(pos);
+    }
     if fluid.is_empty() && ticks < 0 {
         spouts.remove(&pos);
     } else {
@@ -680,6 +684,9 @@ pub(super) fn note_drain(dimension: &str, pos: Pos, fluid: &FluidStack) {
     let mut guard = state();
     let s = guard.get_or_insert_with(State::default);
     let drains = s.drains.entry(dimension.to_owned()).or_default();
+    if drains.get(&pos).map_or(0, |f| f.amount) != if fluid.is_empty() { 0 } else { fluid.amount } {
+        COMPARATORS.lock().unwrap_or_else(|e| e.into_inner()).push(pos);
+    }
     if fluid.is_empty() {
         drains.remove(&pos);
     } else {

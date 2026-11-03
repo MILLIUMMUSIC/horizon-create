@@ -131,6 +131,15 @@ pub fn when_item_held(
     Spouting::Fill(required)
 }
 
+/// `ComparatorUtil.fractionToRedstoneLevel` of a tank's fill.
+pub fn redstone_level(amount: i32, capacity: i32) -> i32 {
+    if capacity <= 0 {
+        return 0;
+    }
+    let f = amount.max(0) as f32 / capacity as f32;
+    ((f * 14.0).floor() as i32 + i32::from(f > 0.0)).clamp(0, 15)
+}
+
 /// `SpoutBlockEntity.tick`'s countdown (both sides): -1 when idle.
 pub fn tick(processing_ticks: i32) -> i32 {
     if processing_ticks >= 0 {
@@ -389,6 +398,10 @@ mod tests {
         let b = tank_box(0.5).unwrap();
         assert!((b[4] - (2.5 / 16.0 + 5.5 / 16.0)).abs() < 1e-6);
         assert!(tank_box(0.0).is_none());
+        assert_eq!(redstone_level(0, 1000), 0);
+        assert_eq!(redstone_level(1, 1000), 1);
+        assert_eq!(redstone_level(1000, 1000), 15);
+        assert_eq!(redstone_level(750, 1500), 8);
     }
 
     #[test]

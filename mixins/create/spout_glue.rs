@@ -58,6 +58,16 @@ fn filling_recipes(game: &Game<'_>) -> Arc<FillingRecipes> {
     list
 }
 
+/// `ComparatorUtil.levelOfSmartFluidTank` of a spout or drain
+/// (`fractionToRedstoneLevel` of its one tank).
+pub(super) fn tank_analog(level: &super::GameLevel<'_>, pos: Pos, name: &str) -> i32 {
+    let Some(BlockEntity::Mod(be)) = level.world.block_entities.get(&(pos[0], pos[1], pos[2])) else {
+        return 0;
+    };
+    let tank = if name == DRAIN { drain_tank(be) } else { spout_tank(be) };
+    super::create_spout::redstone_level(tank.amount(), tank.capacity)
+}
+
 pub(super) fn is_spout(game: &Game<'_>, pos: Pos) -> bool {
     game.pack
         .assets

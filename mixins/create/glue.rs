@@ -821,6 +821,8 @@ pub(super) fn has_analog_output(level: &super::GameLevel<'_>, state: BlockStateI
         || name == super::create_arms::VAULT
         || name == super::create_machines::DEPOT
         || name == super::create_machines::BASIN
+        || name == super::create_spout_glue::SPOUT
+        || name == super::create_spout_glue::DRAIN
     {
         *output = true;
     }
@@ -847,6 +849,8 @@ pub(super) fn analog_output(
         *output = super::create_arms::vault_analog(level, pos, &max_stack);
     } else if name == super::create_machines::DEPOT || name == super::create_machines::BASIN {
         *output = super::create_machines::container_analog(level, pos, name, &max_stack);
+    } else if name == super::create_spout_glue::SPOUT || name == super::create_spout_glue::DRAIN {
+        *output = super::create_spout_glue::tank_analog(level, pos, name);
     }
 }
 
