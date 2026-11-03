@@ -859,3 +859,9 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - Super glue held: the first corner and the second corner each played `create:slime_added` and the item frame's click
   (heard in `status`); taking glue off plays the low slime sound (not checked in the game).
 
+## Chassis range display (macOS, offscreen)
+
+- A linear chassis with a sticky top and a stone column above it, the wrench held and pointed at the chassis: the
+  column is outlined in white thin lines (screenshot). The group display with Ctrl, the fade-out after the wrench is put
+  away and the checkered face texture are not checked in the game (the texture is not drawn).
+

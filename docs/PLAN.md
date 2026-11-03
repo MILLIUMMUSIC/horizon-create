@@ -303,7 +303,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       server can't move a remote player), sounds and the assembly error on goggles.
    2. Super glue and linear and radial chassis (what a structure takes in), the mechanical bearing and windmill
       bearing (rotating contraptions: drawn turned; collision of turned structures stays a gap).
-      Part 2a, chassis and super glue (**done, checked in the game in part**): `contraption.rs` has
+      Part 2a, chassis and super glue (**done, checked in the game in part**; the wrench pointing at a chassis outlines what it takes in, Ctrl its group, as `ChassisRangeDisplay` does, in white lines without Create's checkered face texture: `Outliner.showCluster` is `outline.rs`' `cluster_boxes`): `contraption.rs` has
       `moveChassis` (`addAttachedChasses`, `getIncludedBlockPositions` linear and radial), the chassis' glueable
       sides (`getGlueableSide`, slime on a side and on a sticky side, `glueAllowedOnSide`, `updateShape`),
       `SuperGlueEntity.isGlued` in `moveBlock` and `searchGlueGroup` (`isValidFace`, `isSideSticky`).
@@ -315,8 +315,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       of sticky sides is a hidden `create:hz_<chassis>_<sides>` dropping the plain one; linear chassis take the
       axis of a chassis beside them or the player's look. Not yet: the selection's preview before the second
       click (`SuperGlueSelectionHandler`'s client outlines and messages), glue in the off hand gluing a placed
-      block (`SuperGlueHandler`), glue particles, the sticker, chassis' connected textures and range
-      display (`ChassisRangeDisplay`), Create 6's value board for the range (the wheel steps it here).
+      block (`SuperGlueHandler`), glue particles, the sticker, chassis' connected textures, Create 6's value board for the range (the wheel steps it here).
       Part 2b, mechanical and windmill bearings (**done, checked in the game in part**): `contraption.rs` has
       `BearingContraption` (the shared `searchMovedStructure` from the block in front, the bearing anchoring, the
       sail count and `notEnoughSails`), `MechanicalBearingBlockEntity`'s motion in `ROTATE_PLACE` (assembly on a
