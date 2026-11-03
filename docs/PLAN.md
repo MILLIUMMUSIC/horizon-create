@@ -471,8 +471,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    joins their groups or splits one where they meet; an item put into any crafter of a group goes one at a time into
    its crafters in Create's order (top rows first). A broken crafter (`onRemove`, seen at the level's tick end) drops
    its cover, ejects its chain's grid and splits its group where it stood. Arms take from and deposit into crafters
-   (`CrafterPoint`: half a block out of the front, its group's slots). Not yet: hoppers putting items in, items' components through the grid (only id and
-   count are kept), the items moving and spinning while they pass and craft, the belt's scrolling texture, the
+   (`CrafterPoint`: half a block out of the front, its group's slots). Hoppers putting items in are **blocked on the engine** (no issue):
+   a mod block entity's container has no slot limit or `isItemValid` hook, so a hopper would fill the slot past one
+   item and while the crafter works; the crafter keeps its slot shut to them. The grid is saved with each item's
+   components (`GroupedItems.write`). Not yet: the items moving and spinning while they pass and craft, the belt's scrolling texture, the
    connected casing (`CrafterCTBehaviour`), the firework recipe's ingredient limit, the particles, advancements.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that

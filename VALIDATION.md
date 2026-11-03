@@ -998,3 +998,5 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A mechanical arm taking from a depot and depositing into a blaze burner: of 2 coal on the depot one went into the
   burner (`fuelLevel: 1`), the other stayed while the burner was full (as `tryUpdateFuel` refuses). Saws as arm points
   were not tried. A lava bucket clicked on a burner now gives the empty bucket back (`tryInsert`'s container).
+- A crafter's data while it crafted showed its grid as item compounds (`Grid: [{item: {count: 4, id:
+  "minecraft:oak_planks"}, x: 0, y: 0}]`), as `GroupedItems.write` keeps them.

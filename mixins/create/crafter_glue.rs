@@ -83,20 +83,22 @@ fn int(be: &ModBlockEntity, key: &str) -> i32 {
     }
 }
 
-/// `read`: the phase, countdown, cover and grid (each cell's place, count
-/// and item; other components aren't kept).
+/// `read`: the phase, countdown, cover, grid (`GroupedItems.read`: each
+/// cell's place and item, components and all) and connected input.
 fn load(be: &ModBlockEntity) -> Crafter {
     let mut grid = Grouped::default();
-    for cell in text(be, "Grid").split(';').filter(|c| !c.is_empty()) {
-        let mut parts = cell.splitn(4, ' ');
-        let (Some(x), Some(y), Some(n), id) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        let (Ok(x), Ok(y), Ok(n)) = (x.parse(), y.parse(), n.parse::<u32>()) else {
-            continue;
-        };
-        let stack = id.filter(|i| !i.is_empty() && n > 0).map(|i| ItemStack::new(i, n));
-        grid.grid.insert((x, y), stack);
+    if let Some(Tag::List(cells)) = be.nbt.get(&JavaString::from("Grid")) {
+        for cell in cells {
+            let coord = |k: &str| match cell.get(k) {
+                Some(Tag::Int(n)) => Some(*n),
+                _ => None,
+            };
+            let (Some(x), Some(y)) = (coord("x"), coord("y")) else {
+                continue;
+            };
+            let stack = cell.get("item").and_then(horizon_items::item_nbt::item_from_nbt);
+            grid.grid.insert((x, y), stack);
+        }
     }
     Crafter {
         phase: Phase::parse(&text(be, "Phase")),
@@ -109,19 +111,22 @@ fn load(be: &ModBlockEntity) -> Crafter {
 }
 
 fn save(be: &mut ModBlockEntity, c: &Crafter) {
-    let grid: String = c
+    let grid: Vec<Tag> = c
         .grid
         .grid
         .iter()
-        .map(|((x, y), s)| match s {
-            Some(s) => format!("{x} {y} {} {};", s.count, s.item),
-            None => format!("{x} {y} 0 ;"),
+        .map(|((x, y), s)| {
+            let mut entries = vec![("x", Tag::Int(*x)), ("y", Tag::Int(*y))];
+            if let Some(s) = s {
+                entries.push(("item", horizon_items::item_nbt::item_to_nbt(s)));
+            }
+            Tag::compound(entries)
         })
         .collect();
     be.nbt.insert(JavaString::from("Phase"), Tag::String(JavaString::from(c.phase.name())));
     be.nbt.insert(JavaString::from("CountDown"), Tag::Int(c.count_down));
     be.nbt.insert(JavaString::from("Cover"), Tag::Byte(i8::from(c.covered)));
-    be.nbt.insert(JavaString::from("Grid"), Tag::String(JavaString::from(grid.as_str())));
+    be.nbt.insert(JavaString::from("Grid"), Tag::List(grid));
     be.nbt.insert(JavaString::from("Input"), Tag::String(JavaString::from(c.input.save().as_str())));
 }
 
