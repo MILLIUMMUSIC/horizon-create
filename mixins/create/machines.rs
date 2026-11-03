@@ -130,6 +130,7 @@ impl Machines {
 /// A world opened or closed: recipes and depot views start fresh.
 pub(super) fn reset() {
     *machines() = None;
+    super::create_spout_glue::reset();
     *CLIENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
@@ -144,7 +145,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || is_saw(block)) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || is_saw(block)) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -154,7 +155,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || is_saw(block) || super::create_logistics::is_chute_block(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || is_saw(block) || super::create_logistics::is_chute_block(block) {
         *ticks = true;
     }
 }
@@ -314,6 +315,21 @@ pub(super) fn with_remainder(game: &Game<'_>, input: &str, mut results: Vec<Item
         results.push(ItemStack::new(&rem, 1));
     }
     results
+}
+
+/// `ingredient` for other modules (the spout's filling recipes).
+pub(super) fn read_ingredient(game: &Game<'_>, json: &serde_json::Value) -> Option<Ingredient> {
+    ingredient(game, json)
+}
+
+/// `roll` for other modules.
+pub(super) fn roll_recipe(r: &Recipe) -> Vec<ItemStack> {
+    roll(r)
+}
+
+/// The machines' random float, 0 to 1 (`level.random`'s place).
+pub(super) fn random_float() -> f32 {
+    machines().get_or_insert_with(Machines::default).next_float()
 }
 
 fn roll(r: &Recipe) -> Vec<ItemStack> {
@@ -759,6 +775,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         b if is_saw(b) => saw_tick(game, pos, entity),
         BLAZE => blaze_tick(game, pos, entity),
         LINK => link_tick(game, pos, entity),
+        super::create_spout_glue::SPOUT => super::create_spout_glue::spout_tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {
@@ -902,9 +919,11 @@ fn process_on_depot(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) 
     let hold = if !locked {
         press_received(game, press_pos, &held)
             .or_else(|| super::create_arms::deployer_received(game, press_pos, &held))
+            .or_else(|| super::create_spout_glue::spout_received(game, press_pos, &held))
     } else {
         let worked = press_held(game, press_pos, &held)
-            .or_else(|| super::create_arms::deployer_held(game, press_pos, &held));
+            .or_else(|| super::create_arms::deployer_held(game, press_pos, &held))
+            .or_else(|| super::create_spout_glue::spout_held(game, press_pos, &held));
         worked.map(|(hold, pressed)| {
             if let Some((results, left)) = pressed {
                 let mut rest = results.into_iter();

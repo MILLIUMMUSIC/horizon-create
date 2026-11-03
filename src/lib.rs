@@ -40,6 +40,8 @@ pub mod create_processing;
 pub mod create_saw;
 #[path = "../mixins/create/sounds.rs"]
 pub mod create_sounds;
+#[path = "../mixins/create/spout.rs"]
+pub mod create_spout;
 #[path = "../mixins/create/tank.rs"]
 pub mod create_tank;
 #[path = "../mixins/create/tunnel.rs"]

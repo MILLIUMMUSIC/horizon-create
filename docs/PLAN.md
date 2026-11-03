@@ -183,7 +183,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      burner), each fluid ingredient from one tank as `BasinRecipe.apply` does; the fluids drawn side by side as
      `BasinRenderer` does.
    - Not yet: fluids without a block in Horizon (Create's honey, chocolate, tea, builder's tea, milk, potions) and
-     their pipe effects (`OpenPipeEffectHandler`), encased, glass and smart pipes, valves, brackets, particles and sounds, the item drain, the spout, the
+     their pipe effects (`OpenPipeEffectHandler`), encased, glass and smart pipes, valves, brackets, particles and sounds, the item drain, the
      hose pulley, portable fluid interfaces. The goggles show a tank's and a basin's fluids and amounts
      (`containedFluidTooltip`).
    Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
@@ -447,6 +447,15 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    through `native_state_for_placement`; their shaft, heads and dials drawn by the native mod as `GaugeRenderer`
    does; goggle tooltips). Not yet: the gauges' particles (`animateTick`), their plate-shaped collision (a 12/16
    casing stands in), the stressometer's advancements and its `GaugeObservedPacket` (nothing reads it).
+   The spout (`spout.rs`, `spout_glue.rs`: `SpoutBlockEntity`, `FillingBySpout`, `GenericItemFilling`): a mod block
+   entity on the enchanting table's template with `AllShapes.SPOUT`, its 1000 mB tank in its data and reached by
+   pipes on every side but the bottom; over a depot or a belt it holds an item it can fill, starts a 20-tick
+   process with the spouting sound and at its fifth tick fills one item (`create:filling` recipes whose fluid
+   Horizon has, a glass bottle with water into a water bottle, an empty bucket into a water or lava bucket), the
+   result held as `convertToAndLeaveHeld`; the tank's fluid, the stream and the nozzle's three bits squeezing as
+   `SpoutRenderer` draws them. Not yet: `BlockSpoutingBehaviour` (filling blocks below: other mods' only),
+   sequenced assembly's filling steps, potion and tea fluids (no fluid in Horizon), the splash and processing
+   particles, the comparator (`levelOfSmartFluidTank`), the food advancements, spouts on contraptions.
 
 ## Rework onto Horizon's hooks (pin 674948d)
 

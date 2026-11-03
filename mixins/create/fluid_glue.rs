@@ -45,6 +45,8 @@ struct State {
     /// Basins' tanks as their last tick saw them (input tanks, then output
     /// tanks: `BasinRenderer`'s order), by dimension.
     basins: HashMap<String, HashMap<Pos, Vec<FluidStack>>>,
+    /// Spouts' tanks and processing ticks as their last tick saw them.
+    spouts: HashMap<String, HashMap<Pos, (FluidStack, i32)>>,
     /// What clients were last told, by dimension.
     shown: HashMap<String, HashMap<Pos, Shown>>,
     ticks: u64,
@@ -55,6 +57,8 @@ struct State {
 enum Shown {
     Tank(ShownTank),
     Basin(Vec<FluidStack>),
+    /// A spout's fluid and `processingTicks`.
+    Spout(FluidStack, i32),
 }
 
 /// A tank block as clients see it: its controller and, at the controller,
@@ -375,6 +379,16 @@ impl Access<'_, '_> {
             }
             return Some(r);
         }
+        if super::create_spout_glue::is_spout(self.game, pos) {
+            return self.game.native_with_mod_block_entity(pos, |be| {
+                let mut t = super::create_spout_glue::spout_tank(be);
+                let r = op(&mut t);
+                if !simulate {
+                    super::create_spout_glue::set_spout_tank(be, &t);
+                }
+                r
+            });
+        }
         if !is_basin(self.game, pos) {
             return None;
         }
@@ -390,12 +404,20 @@ impl Access<'_, '_> {
 }
 
 impl FluidAccess for Access<'_, '_> {
-    fn has_handler(&self, pos: Pos, _: Dir) -> bool {
+    fn has_handler(&self, pos: Pos, side: Dir) -> bool {
         // FluidTankBlockEntity's and BasinBlockEntity's capabilities, on
-        // every side.
-        is_tank(self.game, pos) || is_basin(self.game, pos)
+        // every side; SpoutBlockEntity's on all but its bottom.
+        is_tank(self.game, pos)
+            || is_basin(self.game, pos)
+            || (side != Dir::Down && super::create_spout_glue::is_spout(self.game, pos))
     }
-    fn handler_tanks(&self, pos: Pos, _: Dir) -> Vec<FluidStack> {
+    fn handler_tanks(&self, pos: Pos, side: Dir) -> Vec<FluidStack> {
+        if side != Dir::Down && super::create_spout_glue::is_spout(self.game, pos) {
+            return match self.game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+                Some(BlockEntity::Mod(m)) => vec![super::create_spout_glue::spout_tank(m).fluid],
+                _ => Vec::new(),
+            };
+        }
         if is_tank(self.game, pos) {
             let fluid = self.tanks.controller_part(pos).map(|p| {
                 if p.tank.fluid.is_empty() {
@@ -547,7 +569,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
         s.ticks += 1;
         let ticks = s.ticks;
         let State {
-            dims, tanks, shown, basins, ..
+            dims, tanks, shown, basins, spouts, ..
         } = s;
         let fluids = dims.entry(dimension.to_owned()).or_default();
         let tanks = tanks.entry(dimension.to_owned()).or_default();
@@ -580,8 +602,9 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
             Ordering::Relaxed,
         );
         let basins = basins.entry(dimension.to_owned()).or_default();
+        let spouts = spouts.entry(dimension.to_owned()).or_default();
         let shown = shown.entry(dimension.to_owned()).or_default();
-        message = updates(game, dimension, tanks, basins, shown, ticks);
+        message = updates(game, dimension, tanks, basins, spouts, shown, ticks);
         if ticks % SAVE_EVERY == 0 {
             save(s);
         }
@@ -617,6 +640,19 @@ pub(super) fn note_basin(dimension: &str, pos: Pos, tanks: &BasinTanks) {
     }
 }
 
+/// A spout's block entity tick: its tank and processing ticks, for clients
+/// (`SpoutBlockEntity.notifyUpdate`).
+pub(super) fn note_spout(dimension: &str, pos: Pos, fluid: &FluidStack, ticks: i32) {
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let spouts = s.spouts.entry(dimension.to_owned()).or_default();
+    if fluid.is_empty() && ticks < 0 {
+        spouts.remove(&pos);
+    } else {
+        spouts.insert(pos, (fluid.clone(), ticks));
+    }
+}
+
 /// The tanks and basins whose contents changed since clients were told
 /// (all of them every `SNAPSHOT_EVERY` ticks), as one F1 message.
 fn updates(
@@ -624,6 +660,7 @@ fn updates(
     dimension: &str,
     tanks: &mut Tanks,
     basins: &mut HashMap<Pos, Vec<FluidStack>>,
+    spouts: &mut HashMap<Pos, (FluidStack, i32)>,
     shown: &mut HashMap<Pos, Shown>,
     ticks: u64,
 ) -> Option<Vec<u8>> {
@@ -645,11 +682,13 @@ fn updates(
         .unwrap_or_else(|e| e.into_inner())
         .extend(tanks.changed.drain().filter(|p| in_world(game, *p)));
     basins.retain(|p, _| !in_world(game, *p) || is_basin(game, *p));
+    spouts.retain(|p, _| !in_world(game, *p) || super::create_spout_glue::is_spout(game, *p));
     let now: HashMap<Pos, Shown> = tanks
         .parts
         .iter()
         .map(|(p, t)| (*p, Shown::Tank(ShownTank::of(*p, t))))
         .chain(basins.iter().map(|(p, b)| (*p, Shown::Basin(b.clone()))))
+        .chain(spouts.iter().map(|(p, (f, t))| (*p, Shown::Spout(f.clone(), *t))))
         .collect();
     let full = ticks % SNAPSHOT_EVERY == 0;
     let mut entries: Vec<(Pos, Option<Shown>)> = now
@@ -682,8 +721,12 @@ fn encode(dim: u8, full: bool, entries: &[(Pos, Option<Shown>)]) -> Vec<u8> {
             None => (0, &[]),
             Some(Shown::Tank(t)) => (1, std::slice::from_ref(&t.fluid)),
             Some(Shown::Basin(b)) => (2, b),
+            Some(Shown::Spout(f, _)) => (3, std::slice::from_ref(f)),
         };
         out.push(kind);
+        if let Some(Shown::Spout(_, ticks)) = shown {
+            out.extend_from_slice(&ticks.to_le_bytes());
+        }
         if let Some(Shown::Tank(t)) = shown {
             for v in t.controller {
                 out.extend_from_slice(&v.to_le_bytes());
@@ -731,6 +774,11 @@ fn decode(data: &[u8]) -> Option<Decoded> {
             });
             rest = &rest[15..];
         }
+        let mut ticks = -1;
+        if kind == 3 {
+            ticks = int(rest.get(..4)?);
+            rest = &rest[4..];
+        }
         let (&n, after) = rest.split_first()?;
         let n = usize::from(n);
         rest = after;
@@ -753,6 +801,7 @@ fn decode(data: &[u8]) -> Option<Decoded> {
                 Some(Shown::Tank(t))
             }
             2 => Some(Shown::Basin(fluids)),
+            3 => Some(Shown::Spout(fluids.into_iter().next().unwrap_or_default(), ticks)),
             _ => None,
         };
         entries.push((pos, shown));
@@ -923,7 +972,22 @@ pub(super) fn client_fluids(dimension: u8, pos: Pos) -> Option<(Vec<(FluidStack,
         }
         // Two input and two output tanks.
         Shown::Basin(fs) => (fs.iter().map(|f| (f.clone(), super::create_fluids::BASIN_TANK)).collect(), 4),
+        Shown::Spout(f, _) => (vec![(f.clone(), super::create_spout::SPOUT_CAPACITY)], 1),
     })
+}
+
+/// What this client was last told the spout at `pos` holds, and its
+/// processing ticks.
+pub(super) fn client_spout(game: &Game<'_>, pos: Pos) -> Option<(FluidStack, i32)> {
+    let guard = CLIENT.lock().unwrap_or_else(|e| e.into_inner());
+    let (dim, shown) = guard.as_ref()?;
+    if *dim != dim_code(game.dim.id()) {
+        return None;
+    }
+    match shown.get(&pos)? {
+        Shown::Spout(f, t) => Some((f.clone(), *t)),
+        _ => None,
+    }
 }
 
 pub(super) fn from_server(data: &[u8]) {
@@ -972,7 +1036,7 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
         .iter()
         .filter_map(|(p, v)| match v {
             Shown::Tank(t) => Some((*p, t.clone())),
-            Shown::Basin(_) => None,
+            Shown::Basin(_) | Shown::Spout(..) => None,
         })
         .collect();
     for (pos, shown) in holders {
@@ -997,6 +1061,13 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
                 continue;
             }
             Shown::Basin(stacks) => basin_fluid_boxes(&stacks),
+            // SpoutRenderer: the tank, then the stream below while it spouts.
+            Shown::Spout(fluid, ticks) => {
+                let level = fluid.amount as f32 / super::create_spout::SPOUT_CAPACITY as f32;
+                let tank = if fluid.is_empty() { None } else { super::create_spout::tank_box(level) };
+                let stream = super::create_spout_glue::client_stream(pos, ticks, !fluid.is_empty());
+                tank.into_iter().chain(stream).map(|b| (fluid.clone(), b)).collect()
+            }
         };
         for (fluid, b) in boxes {
             draw_fluid_box(game, &fluid.fluid, b, origin, packed, out, [true; 6]);

@@ -126,6 +126,10 @@ CONTAINERS = {
     # BasinBlock's `facing` (where it pours out) needs a template property:
     # it always faces down, into its own output inventory.
     "basin": {"template": "minecraft:enchanting_table", "model": "create:block/basin/block"},
+    # SpoutBlock: AllShapes.SPOUT; the nozzle's three bits are partials its
+    # block entity draws (SpoutRenderer).
+    "spout": {"template": "minecraft:enchanting_table", "model": "create:block/spout/block",
+              "shapes": {"default": [box(1, 2, 1, 15, 14, 15), box(2, 0, 2, 14, 16, 14)]}},
     # ArmBlock's `ceiling` needs a template property: arms stand on the floor.
     # The block keeps its base model; the native mod draws the cog and body.
     # ArmBlock's `ceiling` as its own state property (its blockstate is
@@ -232,6 +236,9 @@ PARTIALS = {
     "blaze_rods_2": "create:block/blaze_burner/rods_large",
     "blaze_super_rods": "create:block/blaze_burner/superheated_rods_small",
     "blaze_super_rods_2": "create:block/blaze_burner/superheated_rods_large",
+    "spout_top": "create:block/spout/top",
+    "spout_middle": "create:block/spout/middle",
+    "spout_bottom": "create:block/spout/bottom",
     "gauge_dial": "create:block/gauge/dial",
     "gauge_head_speed": "create:block/gauge/speedometer/head",
     "gauge_head_stress": "create:block/gauge/stressometer/head",

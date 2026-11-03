@@ -961,3 +961,10 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   and one facing north drew redstone dust on the upper (far) slot and coal on the lower one, lit like the stone
   around them (filter items now take the brightest light of their block and its neighbours).
 
+## Spout (macOS, offscreen)
+
+- A spout two blocks over a depot, given `{Fluid:"minecraft:water",Amount:1000}` in its data: two glass bottles
+  dropped on the depot were filled one after the other (the spout's `Amount` went to 500, the depot held two
+  `minecraft:potion`s), the second result held on the depot as Create leaves it. Screenshots during a third fill
+  showed the nozzle squeezing down, the thin stream below it and the tank's water level in its window.
+  Not tried: belts below the spout, filling through pipes, buckets, `create:filling` recipes (grass, blaze cake).

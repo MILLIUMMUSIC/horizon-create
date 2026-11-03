@@ -160,6 +160,18 @@ name = "create_fluids"
 source = "fluids.rs"
 
 [[module]]
+id = "spout"
+file = "crates/horizon-client/src/game.rs"
+name = "create_spout"
+source = "spout.rs"
+
+[[module]]
+id = "spout_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_spout_glue"
+source = "spout_glue.rs"
+
+[[module]]
 id = "fluid_glue"
 file = "crates/horizon-client/src/game.rs"
 name = "create_fluid_glue"

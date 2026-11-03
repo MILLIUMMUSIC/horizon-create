@@ -558,7 +558,8 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
     ) -> Option<(ProcessingResult, Option<Conversion<ItemStack>>)> {
         let press = [pos[0], pos[1] + 2, pos[2]];
         let hold = super::create_machines::press_received(self.game, press, &item.stack)
-            .or_else(|| super::create_arms::deployer_received(self.game, press, &item.stack))?;
+            .or_else(|| super::create_arms::deployer_received(self.game, press, &item.stack))
+            .or_else(|| super::create_spout_glue::spout_received(self.game, press, &item.stack))?;
         Some((if hold { ProcessingResult::Hold } else { ProcessingResult::Pass }, None))
     }
     fn held(
@@ -572,7 +573,9 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
         let (hold, pressed, locked) = match super::create_machines::press_held(self.game, press, &item.stack) {
             Some((hold, pressed)) => (hold, pressed, true),
             None => {
-                let (hold, pressed) = super::create_arms::deployer_held(self.game, press, &item.stack)?;
+                // SpoutBlockEntity's results aren't locked either.
+                let (hold, pressed) = super::create_arms::deployer_held(self.game, press, &item.stack)
+                    .or_else(|| super::create_spout_glue::spout_held(self.game, press, &item.stack))?;
                 (hold, pressed, false)
             }
         };
