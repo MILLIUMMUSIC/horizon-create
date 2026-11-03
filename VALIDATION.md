@@ -950,3 +950,11 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   zinc ingot in the basin it made two brass ingots while the burner was `kindled`, and did nothing while it was
   `smouldering` after the coal had burned out (the same basin made andesite alloy, which needs no heat, either way).
   Not checked: the blaze cake, and the head's pose over a basin.
+
+## Redstone link (macOS, offscreen)
+
+- A transmitter link beside a redstone block and a receiver link (both on stone, no frequency set) 4 blocks apart: the
+  receiver turned `powered=true` and the redstone lamp beside the stone it is mounted on lit. Clicking the receiver
+  with coal set its lower frequency slot (`FrequencyLast: "minecraft:coal"` in its block data) and the lamp went out.
+  The upper slot, the two links' mode flip, sneaking and the wrench were not tried; the frequency items aren't drawn.
+

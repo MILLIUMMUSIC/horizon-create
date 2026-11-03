@@ -1497,7 +1497,7 @@ fn set_belt_casing(game: &Game<'_>, pos: Pos, casing: u8) -> bool {
 
 /// Where the click hit the block at `pos`, from its centre: the client's
 /// hit, else where the acting player's look meets face `face`.
-fn click_point(game: &Game<'_>, pos: Pos, face: Dir) -> [f64; 3] {
+pub(super) fn click_point(game: &Game<'_>, pos: Pos, face: Dir) -> [f64; 3] {
     let centre = pos.map(|v| f64::from(v) + 0.5);
     // The hit the client sent with the click, when there is one.
     if let Some(hit) = game.pick().filter(|h| h.pos == pos) {

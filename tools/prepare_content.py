@@ -696,6 +696,7 @@ def fit_logistics(content, names):
     fit_gauges(content, names)
     fit_split_shafts(content, names)
     fit_blaze_burner(content, names)
+    fit_redstone_link(content, names)
     fit_psi(content)
     fit_contacts(content, names)
     fit_large_wheel(content, names)
@@ -1318,6 +1319,30 @@ def fit_blaze_burner(content, names):
     write_json(blocks / "blaze_burner.json", decl)
     write_json(models / "hz_blank_blaze_burner.json", {"textures": {"particle": "create:block/dark_metal_block"}})
     write_json(states / "blaze_burner.json", {"variants": {"": {"model": "create:block/hz_blank_blaze_burner"}}})
+
+
+# The redstone link: a stone template with its own `facing`, `powered` and
+# `receiver` (RedstoneLinkBlock); its block entity holds the two frequency
+# items, the signals come from the native mod (`native_block_signal`).
+def fit_redstone_link(content, names):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    original = read_json(states / "redstone_link.json") if (states / "redstone_link.json").exists() else None
+    decl = read_json(blocks / "redstone_link.json") if (blocks / "redstone_link.json").exists() else {}
+    decl["template"] = "minecraft:stone"
+    decl["state_properties"] = {"facing": {"type": "enum", "values": FACINGS},
+                                "powered": {"type": "boolean"}, "receiver": {"type": "boolean"}}
+    decl["default_state"] = {"facing": "north", "powered": "false", "receiver": "false"}
+    decl["shapes"] = {"property": "facing", "values": {f: [facing_box(f, box(3, 0, 3, 13, 2, 13))] for f in FACINGS}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "redstone_link.json", decl)
+    if original is not None:
+        variants = {k: v for k, v in original.get("variants", {}).items() if "waterlogged=true" not in k}
+        out = {}
+        for key, model in variants.items():
+            props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            out[f"facing={props['facing']},powered={props['powered']},receiver={props['receiver']}"] = model
+        write_json(states / "redstone_link.json", {"variants": out})
 
 
 # The portable storage interface: a lightning rod's template (six facings);

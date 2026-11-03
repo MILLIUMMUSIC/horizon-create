@@ -422,7 +422,15 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    sets, Create's compatibility with other mods (**blocked on the engine**: no shared capabilities, #1040 for item
    storage only, nothing for fluids or energy). The rest of this milestone is ported item by item below; what is
    done is in the README's estimate.
-   Done from this milestone: the blaze burner (`blaze.rs`: `HeatLevel`, `BlazeBurnerBlockEntity`'s fuel, burn time and
+   Done from this milestone: the redstone link (`facing`, `powered` and `receiver` are its own state properties; a
+   transmitter sends the strongest signal beside it, a receiver takes the strongest transmitter of its two-item
+   frequency within 256 blocks and powers the block it is mounted on through `native_block_signal` and
+   `native_is_signal_source`; an item clicked on its upper or lower slot sets that frequency, sneaking with an empty
+   hand or the wrench flips the mode). Not yet: the frequency items drawn on the link (`RedstoneLinkFrequencySlot`),
+   dyed items as different frequencies, the link's `canSurvive`, redstone controllers and factory panels, the
+   network's save across reloads (the transmitters re-announce at their first tick), `blockUpdated` on the attached
+   block, and the link's range display.
+   The blaze burner (`blaze.rs`: `HeatLevel`, `BlazeBurnerBlockEntity`'s fuel, burn time and
    heat, `HeatCondition.testBlazeBurner`; `heat_level` is its own state property on a stone template, its block entity
    holds the fuel; fuel in the hand (anything a furnace burns, the blaze cake, the creative blaze cake) feeds it with
    Create's sounds; the cage, head and rods are drawn through `native_block_entity_submit` as `BlazeBurnerRenderer`

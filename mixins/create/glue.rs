@@ -633,6 +633,8 @@ pub(super) fn state_for_placement(
         return;
     }
     let chosen = match s.name.as_str() {
+        // RedstoneLinkBlock: mounted on the face clicked.
+        super::create_machines::LINK => set(&[("facing", face.name())]),
         // RedstoneContactBlock: facing away from the placer, or onto the
         // clicked block when sneaking.
         "create:redstone_contact" => {
@@ -759,6 +761,43 @@ pub(super) fn update_shape(
     let d = Dir::nearest(direction.normal());
     if let Some(next) = super::create_fluid_glue::pipe_update_shape(level, state, pos, d) {
         *new = Some(next);
+    }
+}
+
+/// `RedstoneLinkBlock.getSignal` and `getDirectSignal`: a powered receiver
+/// gives its received strength to the block it is mounted on (the side the
+/// link faces away from).
+pub(super) fn block_signal(
+    level: &super::GameLevel<'_>,
+    dimension: horizon_world::level::Dimension,
+    pos: Pos,
+    state: BlockStateId,
+    face: horizon_core::geometry::Direction,
+    _direct: bool,
+    signal: &mut i32,
+) {
+    let Some(s) = level.registry.state(state) else {
+        return;
+    };
+    if s.name != super::create_machines::LINK {
+        return;
+    }
+    *signal = 0;
+    let receiver = s.properties.get("receiver").map(String::as_str) == Some("true");
+    let facing = s.properties.get("facing").and_then(|f| Dir::parse(f));
+    if receiver && facing.is_some_and(|f| Dir::nearest(face.normal()) == f.opposite()) {
+        *signal = super::create_machines::link_signal(level_dimension_id(dimension), pos);
+    }
+}
+
+/// `RedstoneLinkBlock.isSignalSource`: a powered receiver.
+pub(super) fn is_signal_source(level: &super::GameLevel<'_>, state: BlockStateId, source: &mut bool) {
+    let Some(s) = level.registry.state(state) else {
+        return;
+    };
+    if s.name == super::create_machines::LINK {
+        *source = s.properties.get("receiver").map(String::as_str) == Some("true")
+            && s.properties.get("powered").map(String::as_str) == Some("true");
     }
 }
 

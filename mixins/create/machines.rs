@@ -33,6 +33,7 @@ pub(super) const DEPOT: &str = "create:depot";
 const MILLSTONE: &str = "create:millstone";
 pub(super) const BASIN: &str = "create:basin";
 pub(super) const BLAZE: &str = "create:blaze_burner";
+pub(super) const LINK: &str = "create:redstone_link";
 /// DepotBehaviour: the held item, then `processingOutputBuffer`.
 const DEPOT_SLOTS: usize = 9;
 /// MillstoneBlockEntity: `inputInv`, then `outputInv`.
@@ -143,7 +144,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || is_saw(block)) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || is_saw(block)) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -153,7 +154,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || is_saw(block) || super::create_logistics::is_chute_block(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || is_saw(block) || super::create_logistics::is_chute_block(block) {
         *ticks = true;
     }
 }
@@ -476,6 +477,200 @@ pub(super) fn submit_blaze(
     }
 }
 
+/// One redstone link as the network sees it (`LinkBehaviour`): its two
+/// frequency items, whether it listens, and what it sends and received.
+#[derive(Clone, Debug, Default)]
+struct LinkInfo {
+    freq: (String, String),
+    receiver: bool,
+    transmit: i32,
+    received: i32,
+}
+
+static LINKS: Mutex<Option<HashMap<(String, Pos), LinkInfo>>> = Mutex::new(None);
+
+/// What the powered receiver at `pos` gives (`getReceivedSignal`).
+pub(super) fn link_signal(dimension: &str, pos: Pos) -> i32 {
+    LINKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&(dimension.to_owned(), pos)))
+        .map_or(0, |l| l.received)
+}
+
+fn link_frequency(nbt: &Compound) -> (String, String) {
+    let text = |k: &str| match nbt.get(&JavaString::from(k)) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    (text("FrequencyFirst"), text("FrequencyLast"))
+}
+
+/// `RedstoneLinkBlockEntity.tick` and `RedstoneLinkNetworkHandler`: a
+/// transmitter sends the strongest signal beside it; a receiver takes the
+/// strongest of the transmitters of its frequency pair within `linkRange`
+/// (256) and powers the block it is mounted on.
+fn link_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
+    let Some((receiver, powered)) = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(pos[0], pos[1], pos[2]))
+        .filter(|s| s.name == LINK)
+        .map(|s| {
+            (
+                s.properties.get("receiver").map(String::as_str) == Some("true"),
+                s.properties.get("powered").map(String::as_str) == Some("true"),
+            )
+        })
+    else {
+        return;
+    };
+    let dimension = game.dim.id().to_owned();
+    let freq = link_frequency(&entity.nbt);
+    let mut power = 0;
+    if !receiver {
+        power = game.with_level(|b, level, ticks| {
+            b.best_neighbor_signal(level, ticks, horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]))
+        });
+    }
+    let (received, changed) = {
+        let mut guard = LINKS.lock().unwrap_or_else(|e| e.into_inner());
+        let map = guard.get_or_insert_with(HashMap::new);
+        // Links that are gone leave the network.
+        let gone: Vec<(String, Pos)> = map
+            .keys()
+            .filter(|(d, p)| *d == dimension && game.world.loaded(p[0], p[2]) && burner_name(game, *p) != LINK)
+            .cloned()
+            .collect();
+        for k in gone {
+            map.remove(&k);
+        }
+        let me = map.entry((dimension.clone(), pos)).or_default();
+        me.freq = freq.clone();
+        me.receiver = receiver;
+        if !receiver {
+            me.transmit = power;
+        } else {
+            me.transmit = 0;
+        }
+        let before = me.received;
+        let mut best = 0;
+        if receiver {
+            let range2 = 256.0f64 * 256.0;
+            for ((d, p), other) in map.iter() {
+                if *d != dimension || other.receiver || other.freq != freq {
+                    continue;
+                }
+                let d2: f64 = (0..3).map(|k| f64::from(p[k] - pos[k]).powi(2)).sum();
+                if d2 < range2 {
+                    best = best.max(other.transmit);
+                }
+            }
+        }
+        let me = map.get_mut(&(dimension.clone(), pos)).expect("link");
+        if receiver {
+            me.received = best;
+        } else {
+            me.received = 0;
+        }
+        (me.received, me.received != before)
+    };
+    let wanted = if receiver { received > 0 } else { power > 0 };
+    if wanted != powered {
+        let facing = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1], pos[2]))
+            .and_then(|s| s.properties.get("facing").cloned())
+            .unwrap_or_else(|| "north".to_owned());
+        if let Some(base) = game.pack.assets.registry.default_state(LINK)
+            && let Some(id) = game.with_props(
+                base,
+                &[
+                    ("facing", facing.as_str()),
+                    ("receiver", if receiver { "true" } else { "false" }),
+                    ("powered", if wanted { "true" } else { "false" }),
+                ],
+            )
+        {
+            game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+        }
+    }
+    if receiver && (changed || wanted != powered) {
+        game.native_update_signal_neighbors(&dimension, pos);
+    }
+}
+
+fn burner_name(game: &Game<'_>, pos: Pos) -> String {
+    game.pack
+        .assets
+        .registry
+        .state(game.world.block(pos[0], pos[1], pos[2]))
+        .map(|s| s.name.clone())
+        .unwrap_or_default()
+}
+
+/// `RedstoneLinkBlock.useWithoutItem` / `onWrenched` and `LinkBehaviour`'s
+/// frequency slots: sneaking with an empty hand or the wrench flips it between
+/// transmitter and receiver; an item in the hand sets the slot it was clicked on
+/// (the upper or the lower, as the face's frame shows them). True when it
+/// took the click.
+fn link_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
+    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    let held = game.held().map(|s| s.item.to_string());
+    let wrench = held.as_deref() == Some("create:wrench");
+    let Some(state) = game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2])).cloned() else {
+        return false;
+    };
+    let receiver = state.properties.get("receiver").map(String::as_str) == Some("true");
+    let facing = state.properties.get("facing").cloned().unwrap_or_else(|| "north".to_owned());
+    if wrench || (sneaking && held.is_none()) {
+        // toggleMode: the other mode, powered as its surroundings say.
+        let powered = game.native_acting_player().is_some() && !receiver && {
+            game.with_level(|b, level, ticks| {
+                b.has_neighbor_signal(level, ticks, horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]))
+            })
+        };
+        let base = game.pack.assets.registry.default_state(LINK);
+        if let Some(base) = base
+            && let Some(id) = game.with_props(
+                base,
+                &[
+                    ("facing", facing.as_str()),
+                    ("receiver", if receiver { "false" } else { "true" }),
+                    ("powered", if powered { "true" } else { "false" }),
+                ],
+            )
+        {
+            let dimension = game.dim.id().to_owned();
+            game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+        }
+        return true;
+    }
+    let Some(item) = held else {
+        return false;
+    };
+    if game.native_acting_player().is_some_and(|p| p.game_mode == 3) {
+        return false;
+    }
+    // Which slot: the face's two are one above the other (up and down faces:
+    // one behind the other); down is turned over.
+    let click = super::create_logistics::click_point(game, pos, super::create_kinetics::Dir::nearest(face));
+    let upper = match facing.as_str() {
+        "up" => click[2] > 0.0,
+        "down" => click[2] < 0.0,
+        _ => click[1] > 0.0,
+    };
+    let key = if upper { "FrequencyFirst" } else { "FrequencyLast" };
+    game.native_with_mod_block_entity(pos, |be| {
+        be.nbt.insert(JavaString::from(key), Tag::String(item.as_str().into()));
+    });
+    true
+}
+
 /// `BlazeBurnerBlockEntity.tick` on the server.
 fn blaze_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     let mut burner = read_burner(&entity.nbt);
@@ -561,6 +756,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         MILLSTONE => millstone_tick(game, pos, entity),
         b if is_saw(b) => saw_tick(game, pos, entity),
         BLAZE => blaze_tick(game, pos, entity),
+        LINK => link_tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {
@@ -1326,6 +1522,7 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         }
         Some(n) if is_saw(n) => saw_filter_click(game, pos, face),
         Some(BLAZE) => blaze_click(game, pos),
+        Some(LINK) => link_click(game, pos, face),
         Some(MILLSTONE) => {
             // MillstoneBlock.useItemOn: an empty hand takes the outputs.
             if game.held().is_none() {
