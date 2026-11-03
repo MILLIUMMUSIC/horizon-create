@@ -409,6 +409,27 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
 7. **Everything else**: Ponder scenes, schematics and the schematicannon, decoration sets, Create's
    compatibility with other mods.
 
+## Rework onto Horizon's hooks (pin 674948d)
+
+The new pin has the hooks most workarounds here stand in for. Each wave replaces them as Create does it, then
+VALIDATION.md is checked again for what it touches:
+
+1. Comparators: `native_has_analog_output` / `native_analog_output` for tanks (`ComparatorUtil.levelOfSmartFluidTank`),
+   the whole vault (`ItemHelper.calcRedstoneFromInventory`), depots, basins, chutes, belts' ends as Create answers.
+2. Create's own sounds (`native_play_sound` takes a mod's event by name, API 61) wherever Create plays them; Create's
+   particles (`ParticleOptions::named`, #5482) for the fan's air flow and the others.
+3. Fluids through `native_block_entity_fluids` (block entities on any template, #5549): tanks and basins keep their
+   tanks in their block entity; pipes and other mods reach them through the engine.
+4. Blocks with their own state properties (#5290) and `render_shape`: belts (`slope`, `part`, `casing`), funnels
+   (`extracting`, `powered`), tunnels (`shape`), chutes (`shape`), fluid pipes (six sides), tanks (`top`, `bottom`,
+   `shape`), the vault (`large`), the arm (`ceiling`), the smart chute (`powered`); rotating blocks drawn by their
+   block entity (`ENTITYBLOCK_ANIMATED`) instead of blank blockstates; shapes by several properties and
+   `collision_shapes`.
+5. Placement and shape updates: `native_state_for_placement` (`getStateForPlacement`), `native_update_shape`,
+   `native_can_survive`, `native_block_entity_inside` / `native_block_fall_on` for belts, funnels and chutes.
+6. Drawing through `native_block_entity_submit` instead of the `transient_block_geometry` mixin where a block entity
+   draws; the value settings board as a mod screen (`native_mod_screen_open`, API 111).
+
 ## Outlines
 
 Catnip's `Outliner` (`outline.rs`: slots kept alive each tick, eight ticks of fading, `AABBOutline`'s edges as thin
