@@ -448,6 +448,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_logistics::funnels_tick(game, dimension);
     super::create_logistics::chutes_update(game, dimension);
     super::create_logistics::tunnels_tick(game, dimension);
+    super::create_crafter_glue::level_tick(game, dimension);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
     super::create_actor_glue::breakers_tick(game, dimension, &drills);

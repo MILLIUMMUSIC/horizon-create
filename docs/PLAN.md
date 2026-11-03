@@ -469,8 +469,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    Its lid, arrow or belt and the items before its face are drawn. Connected inputs (`ConnectedInputHandler`): the
    wrench near an edge of a side face toward a crafter facing the same way (`EdgeInteractionHandler`'s 3/16 strip)
    joins their groups or splits one where they meet; an item put into any crafter of a group goes one at a time into
-   its crafters in Create's order (top rows first). Not yet: splitting a group when one of its crafters is broken
-   (`onRemove`), arms and hoppers putting items in, items' components through the grid (only id and
+   its crafters in Create's order (top rows first). A broken crafter (`onRemove`, seen at the level's tick end) drops
+   its cover, ejects its chain's grid and splits its group where it stood. Not yet: arms and hoppers putting items in, items' components through the grid (only id and
    count are kept), the items moving and spinning while they pass and craft, the belt's scrolling texture, the
    connected casing (`CrafterCTBehaviour`), the firework recipe's ingredient limit, the particles, advancements.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,

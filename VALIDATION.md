@@ -991,3 +991,5 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   joined them (`Input` became `c;0,0,0;1,0,0;2,0,0` on the first, `m;-1,0,0` and `m;-2,0,0` on the others), and a
   click with 3 oak logs on the third's front put one log into each. The wrench on the second's east edge again split
   off the third (the second became the controller of the first, the third alone).
+- The three joined again (the middle one the controller of both others), the middle one broken (`setblock ... air
+  destroy`): the two left were each a controller of themselves (`c;0,0,0`).

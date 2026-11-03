@@ -34,6 +34,8 @@ struct Crafter {
     /// The slot was filled: `whenContentsChanged` checks the recipe.
     check: bool,
     input: ConnectedInput,
+    /// Its facing and pointing at its last tick (for its `onRemove`).
+    was: Option<(Dir, Pointing)>,
 }
 
 impl Default for Crafter {
@@ -47,6 +49,7 @@ impl Default for Crafter {
             lazy: 20,
             check: false,
             input: ConnectedInput::default(),
+            was: None,
         }
     }
 }
@@ -267,6 +270,8 @@ pub(super) fn tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
             map.entry(key).or_insert_with(|| load(entity));
         }
     }
+    let was = crafter_at(game, pos);
+    with_crafter(game, pos, |c| c.was = was);
     let mut c = with_crafter(game, pos, |c| c.clone());
     let powered = super::create_glue::signal(game, pos);
     let mut start: Option<bool> = None;
@@ -593,8 +598,7 @@ impl InputWorld for Inputs<'_, '_> {
 /// `EdgeInteractionHandler.onBlockActivated` with the wrench (not
 /// sneaking): a hit near an edge of a side face toward a crafter facing
 /// the same way connects or splits their inputs. Not yet: the group drawn
-/// as one casing (`CrafterCTBehaviour`), splitting it when a crafter of it
-/// is broken.
+/// as one casing (`CrafterCTBehaviour`).
 fn edge_wrench(game: &mut Game<'_>, pos: Pos, face: Dir, facing: Dir) -> bool {
     let solid = |game: &Game<'_>, p: Pos, side: Dir| {
         let state = game.world.block(p[0], p[1], p[2]);
@@ -843,4 +847,107 @@ pub(super) fn submit(
         draw.pop();
     }
     draw.pop();
+}
+
+// ---- Broken crafters ------------------------------------------------------------------
+
+/// The world with a broken crafter still standing as it was, for its
+/// `onRemove`.
+struct Removed<'a, 'g> {
+    game: &'a Game<'g>,
+    pos: Pos,
+    was: (Dir, Pointing),
+}
+
+impl CrafterWorld for Removed<'_, '_> {
+    fn crafter(&self, pos: Pos) -> Option<(Dir, Pointing)> {
+        if pos == self.pos { Some(self.was) } else { crafter_at(self.game, pos) }
+    }
+}
+
+impl InputWorld for Removed<'_, '_> {
+    fn input(&self, pos: Pos) -> Option<ConnectedInput> {
+        self.crafter(pos)?;
+        Some(with_crafter(self.game, pos, |c| c.input.clone()))
+    }
+    fn set_input(&mut self, pos: Pos, input: ConnectedInput) {
+        with_crafter(self.game, pos, |c| c.input = input);
+    }
+}
+
+/// `MechanicalCrafterBlock.onRemove` for each crafter of `dimension` that
+/// is gone (seen at the level's tick end): its cover dropped, the chain's
+/// grid ejected (`ejectWholeGrid`), and its connection to each neighbour of
+/// its group toggled off.
+pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
+    let gone: Vec<(Pos, Crafter)> = {
+        let guard = crafters();
+        let Some(map) = guard.as_ref() else {
+            return;
+        };
+        map.iter()
+            .filter(|((d, p), _)| d == dimension && game.world.loaded(p[0], p[2]) && crafter_at(game, *p).is_none())
+            .map(|((_, p), c)| (*p, c.clone()))
+            .collect()
+    };
+    for (pos, c) in gone {
+        let Some(was) = c.was else {
+            crafters().get_or_insert_with(HashMap::new).remove(&(dimension.to_owned(), pos));
+            continue;
+        };
+        let centre = pos.map(|v| f64::from(v) + 0.5);
+        if c.covered {
+            game.spawn_item(ItemStack::new(SLOT_COVER, 1), centre, [0.0, 0.0, 0.0], 10);
+        }
+        // ejectWholeGrid from the broken crafter: the chain as it stood.
+        let chain = super::create_crafter::chain_if(&Removed { game, pos, was }, pos, |_| true, false);
+        for p in chain.unwrap_or_default() {
+            let present = p != pos;
+            let facing = if present { crafter_at(game, p).map_or([0, 0, 0], |c| c.0.normal()) } else { [0, 0, 0] };
+            let at = [
+                f64::from(p[0]) + 0.5 + f64::from(facing[0]) * 0.75,
+                f64::from(p[1]) + 0.5,
+                f64::from(p[2]) + 0.5 + f64::from(facing[2]) * 0.75,
+            ];
+            let grid = with_crafter(game, p, |c| {
+                c.phase = Phase::Idle;
+                std::mem::take(&mut c.grid)
+            });
+            let mut drops: Vec<ItemStack> = grid.grid.into_values().flatten().collect();
+            if present {
+                drops.extend(game.native_with_mod_block_entity(p, |be| be.items.first_mut().and_then(Option::take)).flatten());
+                let c = with_crafter(game, p, |c| c.clone());
+                game.native_with_mod_block_entity(p, |be| save(be, &c));
+            }
+            for s in drops {
+                game.spawn_item(s, at, [0.0, 0.0, 0.0], 10);
+            }
+        }
+        // The group split where it was (the neighbours sharing its controller).
+        for d in Dir::ALL {
+            if d.axis() == was.0.axis() {
+                continue;
+            }
+            let n = d.normal();
+            let other = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+            if crafter_at(game, other).is_none() {
+                continue;
+            }
+            let mine = with_crafter(game, pos, |c| c.input.controller_of(pos));
+            let theirs = with_crafter(game, other, |c| c.input.controller_of(other));
+            if mine == theirs {
+                super::create_crafter::toggle_connection(&mut Removed { game, pos, was }, pos, other);
+            }
+        }
+        for p in Dir::ALL.map(|d| {
+            let n = d.normal();
+            [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]]
+        }) {
+            if crafter_at(game, p).is_some() {
+                let c = with_crafter(game, p, |c| c.clone());
+                game.native_with_mod_block_entity(p, |be| save(be, &c));
+            }
+        }
+        crafters().get_or_insert_with(HashMap::new).remove(&(dimension.to_owned(), pos));
+    }
 }
