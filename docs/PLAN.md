@@ -223,7 +223,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      attack damage (`player.attack`, through Horizon's mob hooks; no armour, knockback, enchantments or tool wear,
      its drops falling where it dies). Not yet: other item uses and blocks' own uses, using items on entities
      (feeding, shearing), fist bumps, the filter slot, sandpaper polishing and sequenced assembly, the
-     crafting remainder of a damaged tool, hoppers into it (no block entity), its goggle lines, sounds and particles.
+     crafting remainder of a damaged tool, hoppers into it (no block entity), sounds and particles. The goggles show its mode and held item with its count above the kinetic lines (`DeployerBlockEntity.addToGoggleTooltip`).
    Part 3, brass funnel and belt tunnels (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md
    lists the in-game checks):
    - Brass funnel (`funnel.rs`, `logistics.rs`): the andesite funnel's blocks and modes (extracting and collecting

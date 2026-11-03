@@ -881,3 +881,9 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   sound plays and six shafts are thrown off the east side (`/data get entity`). Not checked: a belt feeding it and the
   belt or depot ahead taking the pieces, wood and stone sounds by name, stacks of several items.
 
+## Deployer goggle lines (macOS, offscreen)
+
+- Engineer's goggles on, looking at a deployer on a creative motor: "Deployer Information" and "Mode: Use" above the
+  kinetic stats and the network line (screenshot). The held item's line (with an item in its hand) is not checked
+  in the game.
+

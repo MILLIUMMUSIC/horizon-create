@@ -2166,7 +2166,15 @@ pub(super) fn hud(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
         c.view.blocks.get(&hit.pos).copied()
     };
     let lines = match view {
-        Some(view) => goggle_lines(&view),
+        Some(view) => {
+            let mut lines = super::create_arms::deployer_goggle_lines(game, hit.pos).unwrap_or_default();
+            let kinetic = goggle_lines(&view);
+            if !lines.is_empty() && !kinetic.is_empty() {
+                lines.push((String::new(), WHITE));
+            }
+            lines.extend(kinetic);
+            lines
+        }
         None => match super::create_fluid_glue::client_fluids(dim_code(game.dim.id()), hit.pos) {
             Some((tanks, count)) => fluid_lines(&tanks, count),
             None => match super::create_logistics::chute_goggle_lines(game, hit.pos) {

@@ -1624,6 +1624,23 @@ fn finish_placed(game: &mut Game<'_>, p: Placed) {
     }
 }
 
+/// `DeployerBlockEntity.addToGoggleTooltip`: its mode and the item it
+/// holds, above the kinetic lines.
+pub(super) fn deployer_goggle_lines(game: &Game<'_>, pos: Pos) -> Option<Vec<(String, u32)>> {
+    let guard = CLIENT.lock().unwrap_or_else(|e| e.into_inner());
+    let (ClientView::Deployer { punch, held, held_count, .. }, _) = guard.as_ref()?.get(&pos)? else {
+        return None;
+    };
+    let mut lines = vec![
+        ("Deployer Information".to_owned(), 0xFFFFFF),
+        (format!("Mode: {}", if *punch { "Attack" } else { "Use" }), 0xFFFF55),
+    ];
+    if !held.is_empty() && *held_count > 0 {
+        lines.push((format!("Item: {} x{held_count}", game.pack.names.display_item(held)), 0x55FF55));
+    }
+    Some(lines)
+}
+
 // ---- Players ------------------------------------------------------------------
 
 /// `native_right_click_block` on a vault, arm or deployer; true when it took
@@ -2419,6 +2436,7 @@ fn encode_deployer(d: &Deployer<ItemStack>, speed: f32) -> Vec<u8> {
     out.extend_from_slice(&timer_speed(speed).to_le_bytes());
     out.extend_from_slice(&d.reach.to_le_bytes());
     push_item(&mut out, d.held.as_ref());
+    out.push(d.held.as_ref().map_or(0, |s| s.count.min(255) as u8));
     out
 }
 
@@ -2649,6 +2667,7 @@ enum ClientView {
         timer_speed: i32,
         reach: f32,
         held: String,
+        held_count: u32,
     },
     Vault {
         along_x: bool,
@@ -2726,6 +2745,7 @@ pub(super) fn from_server(data: &[u8]) {
                 timer_speed: int(&v[7..]),
                 reach: float(&v[11..]),
                 held: item(&v[15..]),
+                held_count: v.get(16 + usize::from(v[15])).map_or(0, |c| u32::from(*c)),
             },
             _ => continue,
         };
@@ -2946,6 +2966,7 @@ pub(super) fn draw(
                 timer_speed,
                 reach,
                 held,
+                ..
             } => {
                 let Some((facing, along)) = deployer_at(game, *pos) else {
                     continue;
