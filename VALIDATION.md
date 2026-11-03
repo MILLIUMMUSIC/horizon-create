@@ -1071,3 +1071,10 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   clicked face. Its pointer lay across the pipe closed and along it open, its lamps following the model.
 - Glass pipes showed water flowing while the source was refilled; the unit test covers a closed valve stopping a flow.
   Not tried in the game: a corner pipe to glass (click point), a flow stopped by closing the valve, a guest's wrench.
+
+## Smart fluid pipe (macOS, offscreen)
+
+- Placed by hand on the floor it was `face=floor,facing=south` with rims at both ends. In the line above (`facing=east`) a lava
+  bucket clicked on its slot showed on the slope and the tank stayed at 3000 mB with the source refilled; a water bucket
+  in the slot let it go on to 4000 mB.
+  Not tried: placement on a wall or ceiling, against a pipe, the wrench's quarter turn, a filter with an empty hand.

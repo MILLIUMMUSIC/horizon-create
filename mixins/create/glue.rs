@@ -735,6 +735,13 @@ pub(super) fn state_for_placement(
         }
         return;
     }
+    if s.name == super::create_fluid_glue::SMART {
+        let clicked = Dir::nearest(context.face.normal());
+        if let Some(next) = super::create_fluid_glue::smart_placement(level, state, pos, clicked, context.yaw, context.pitch) {
+            *answer = Some(Some(next));
+        }
+        return;
+    }
     if s.name == super::create_fluid_glue::PIPE {
         let looking = super::create_placement::nearest_looking(context.yaw, context.pitch);
         if let Some(next) = super::create_fluid_glue::pipe_placement(level, state, pos, looking) {

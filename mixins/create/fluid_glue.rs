@@ -29,6 +29,7 @@ pub(super) const PUMP: &str = "create:mechanical_pump";
 pub(super) const GLASS: &str = "create:glass_fluid_pipe";
 pub(super) const ENCASED: &str = "create:encased_fluid_pipe";
 pub(super) const VALVE: &str = "create:fluid_valve";
+pub(super) const SMART: &str = "create:smart_fluid_pipe";
 pub(super) const TANK: &str = "create:fluid_tank";
 pub(super) const CREATIVE_TANK: &str = "create:creative_fluid_tank";
 /// Ticks between full updates to clients and between saves.
@@ -126,7 +127,7 @@ fn pending() -> MutexGuard<'static, Vec<(String, Pos, bool)>> {
 
 /// Blocks of ours outside the kinetics (the pump is a kinetic block).
 pub(super) fn is_ours(name: &str) -> bool {
-    name == PIPE || name == GLASS || name == ENCASED || is_tank_block(name)
+    name == PIPE || name == GLASS || name == ENCASED || name == SMART || is_tank_block(name)
 }
 
 pub(super) fn is_tank_block(name: &str) -> bool {
@@ -166,9 +167,165 @@ fn pipe_block(game: &Game<'_>, pos: Pos) -> Option<PipeBlock> {
         PUMP => s.properties.get("facing").and_then(|f| Dir::parse(f)).map(PipeBlock::Pump),
         ENCASED => Some(PipeBlock::Encased(encased_sides(&s.properties))),
         GLASS => glass_axis(&s.properties).map(PipeBlock::Glass),
+        SMART => smart_axis(&s.properties).map(PipeBlock::Smart),
         VALVE => valve_axis(&s.properties).map(|a| PipeBlock::Valve(a, s.properties.get("enabled").is_some_and(|v| v == "true"))),
         _ => None,
     }
+}
+
+/// A smart pipe's `FACE` and `FACING`.
+fn smart_state(props: &horizon_world::block_state_properties::BlockProperties) -> Option<(super::create_fluids::SmartFace, Dir)> {
+    let face = props.get("face").and_then(|f| super::create_fluids::SmartFace::parse(f))?;
+    Some((face, props.get("facing").and_then(|f| Dir::parse(f))?))
+}
+
+fn smart_axis(props: &horizon_world::block_state_properties::BlockProperties) -> Option<Axis> {
+    smart_state(props).map(|(face, facing)| super::create_fluids::smart_pipe_axis(face, facing))
+}
+
+/// The item of the smart pipe's filter (kept in its block entity's data).
+fn smart_filter_item(game: &Game<'_>, pos: Pos) -> Option<String> {
+    let Some(BlockEntity::Mod(m)) = game.world.block_entities.get(&(pos[0], pos[1], pos[2])) else {
+        return None;
+    };
+    read_filter(m)
+}
+
+fn read_filter(m: &ModBlockEntity) -> Option<String> {
+    match m.nbt.get(&JavaString::from("Filter")) {
+        Some(Tag::String(t)) => Some(t.to_string_lossy()).filter(|t| !t.is_empty()),
+        _ => None,
+    }
+}
+
+/// `SmartFluidPipeBlockEntity`: its filter's item, for clients to draw.
+pub(super) fn smart_tick(game: &mut Game<'_>, pos: Pos, entity: &ModBlockEntity) {
+    let view = read_filter(entity).map(|i| (i, 1)).into_iter().collect();
+    super::create_machines::note_view(game, pos, view);
+}
+
+/// `FilteringBehaviour.onShortInteract` on a smart pipe's slot
+/// (`ValueBoxTransform.testHit`): the held item is its filter, an empty hand
+/// clears it (`onFilterChanged` tells the pipes). Elsewhere on the pipe the
+/// click passes.
+pub(super) fn smart_click(game: &mut Game<'_>, pos: Pos) -> bool {
+    let Some(state) = block_state(game, pos).filter(|s| s.name == SMART).and_then(|s| smart_state(&s.properties)) else {
+        return false;
+    };
+    let held = game.held().map(|s| s.item.to_string());
+    // canShortInteract: not the wrench or the mechanical arm.
+    if held.as_deref().is_some_and(|i| i == "create:wrench" || i == super::create_arms::ARM)
+        || game.native_acting_player().is_some_and(|p| p.game_mode == 3)
+    {
+        return false;
+    }
+    let (at, _) = smart_slot_at(state);
+    let hit = game.pick().filter(|h| h.pos == pos).map(|h| [0, 1, 2].map(|k| (h.point[k] - f64::from(pos[k])) as f32));
+    // ValueBoxTransform.scale, 0.4, times SmartPipeFilterSlot's 1.02.
+    let on_slot = hit.is_some_and(|h| (0..3).map(|k| (h[k] - at[k]).powi(2)).sum::<f32>().sqrt() < 0.4 * 1.02 / 2.0);
+    if !on_slot {
+        return false;
+    }
+    let text = held.unwrap_or_default();
+    game.native_with_mod_block_entity(pos, |be| {
+        be.nbt.insert(JavaString::from("Filter"), Tag::String(text.as_str().into()));
+    });
+    let dimension = game.dim.id().to_owned();
+    block_changed(&dimension, pos, true);
+    true
+}
+
+/// The slot's centre in the block, and its turn about Y.
+fn smart_slot_at((face, facing): (super::create_fluids::SmartFace, Dir)) -> ([f32; 3], f32) {
+    let angle = super::create_fluids::smart_slot_angle(face, facing.horizontal_angle());
+    (super::create_funnel::rotate_centered_y(super::create_fluids::smart_slot(face), angle), angle)
+}
+
+/// `FilteringRenderer` on a smart pipe: its filter's item in its slot, turned
+/// by `SmartPipeFilterSlot.rotate`.
+pub(super) fn draw_smart_filter(
+    game: &Game<'_>,
+    camera: glam::DVec3,
+    pos: Pos,
+    slots: &[(String, u32)],
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    let Some((id, _)) = slots.first().filter(|(id, _)| !id.is_empty()) else {
+        return;
+    };
+    let Some((face, facing)) = block_state(game, pos).and_then(|s| smart_state(&s.properties)) else {
+        return;
+    };
+    let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+    if corner.distance_squared(camera) > 32.0 * 32.0 {
+        return;
+    }
+    let (at, angle) = smart_slot_at((face, facing));
+    let tilt: f32 = if face == super::create_fluids::SmartFace::Ceiling { -45.0 } else { 45.0 };
+    let block = game.pack.assets.registry.default_state(id).is_some();
+    let scale = (if block { 0.5 } else { 0.375 } + 1.0 / 64.0) * 1.02;
+    let z_offset = if block { 0.0 } else { -0.15 };
+    let centre = corner + glam::DVec3::new(f64::from(at[0]), f64::from(at[1]), f64::from(at[2]));
+    let m = glam::Mat4::from_translation((centre - camera).as_vec3())
+        * glam::Mat4::from_rotation_y(angle.to_radians())
+        * glam::Mat4::from_rotation_x(tilt.to_radians())
+        * glam::Mat4::from_scale(glam::Vec3::splat(scale))
+        * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z_offset));
+    let owner = super::item_draw::owner_at(centre.to_array(), 0.0, SMART);
+    let stack = ItemStack::new(id.as_str(), 1);
+    let resolved = game.resolve_item(&stack, horizon_assets::item_model::DisplayContext::Fixed, Some(&owner), pos[0] ^ pos[2]);
+    let light = game.world.light(pos[0], pos[1], pos[2]);
+    game.submit_item_world(&resolved, m, horizon_client::block_entity_render::vertex_light(light), out);
+}
+
+/// `SmartFluidPipeBlock.getStateForPlacement`.
+pub(super) fn smart_placement(
+    level: &super::GameLevel<'_>,
+    state: horizon_world::registry::BlockStateId,
+    pos: Pos,
+    clicked: Dir,
+    yaw: f32,
+    pitch: f32,
+) -> Option<horizon_world::registry::BlockStateId> {
+    let horizontal = super::create_placement::horizontal(yaw);
+    let (sin_yaw, cos_yaw) = yaw.to_radians().sin_cos();
+    let cos_pitch = pitch.to_radians().cos();
+    let look = |a: Axis| match a {
+        Axis::X if -sin_yaw * cos_pitch > 0.0 => Dir::East,
+        Axis::X => Dir::West,
+        Axis::Z if cos_yaw * cos_pitch > 0.0 => Dir::South,
+        Axis::Z => Dir::North,
+        Axis::Y if pitch < 0.0 => Dir::Up,
+        Axis::Y => Dir::Down,
+    };
+    let (face, facing) = super::create_fluids::smart_placement(clicked, horizontal, look, |d| {
+        super::create_fluids::pipe_connects(pipe_neighbour(level, pos, d), d)
+    });
+    let s = level.native_state_with_property(state, "face", face.name())?;
+    let s = level.native_state_with_property(s, "facing", facing.name())?;
+    with_attachments(level, s, pos)
+}
+
+/// `IWrenchable.getRotatedBlockState` of a smart pipe: `FACING` clockwise
+/// from above or below, nothing from the sides.
+fn wrench_smart(game: &mut Game<'_>, pos: Pos, face: Dir) -> Option<bool> {
+    let (_, facing) = block_state(game, pos).filter(|s| s.name == SMART).and_then(|s| smart_state(&s.properties))?;
+    if face.axis() != Axis::Y {
+        return Some(true);
+    }
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    let next = game.with_level(|_, level, _| {
+        let s = level.native_state_with_property(id, "facing", facing.clockwise(Axis::Y).name())?;
+        with_attachments(level, s, pos)
+    });
+    if let Some(next) = next {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, next, super::native_hooks::flags::UPDATE_ALL);
+        // IWrenchable.playRotateSound.
+        let pitch = horizon_core::random::RandomSource::next_float(&mut game.world.random) + 0.5;
+        super::create_glue::play_create_sound(game, "wrench_rotate", pos.map(|v| f64::from(v) + 0.5), 1.0, pitch);
+    }
+    Some(true)
 }
 
 fn glass_axis(props: &horizon_world::block_state_properties::BlockProperties) -> Option<Axis> {
@@ -198,6 +355,8 @@ pub(super) fn with_attachments(
     let s = level.registry.state(state)?;
     let (glass, axis) = match s.name.as_str() {
         GLASS => (true, glass_axis(&s.properties)?),
+        // `StraightPipeFluidTransportBehaviour`: rims as a glass pipe's.
+        SMART => (true, smart_axis(&s.properties)?),
         VALVE => (false, valve_axis(&s.properties)?),
         ENCASED => {
             let open = encased_sides(&s.properties);
@@ -285,6 +444,9 @@ pub(super) fn valves_client_tick() {
 /// `EncasedPipeBlock.onWrenched`: `true` when `pos` was one of them. A pipe
 /// clicked along its axis passes.
 pub(super) fn wrench_pipe(game: &mut Game<'_>, pos: Pos, face: Dir) -> Option<bool> {
+    if let Some(done) = wrench_smart(game, pos, face) {
+        return Some(done);
+    }
     let block = pipe_block(game, pos)?;
     let local = game.pick().filter(|h| h.pos == pos).map_or([0.5; 3], |h| {
         [0, 1, 2].map(|k| h.point[k] - f64::from(pos[k]))
@@ -418,6 +580,8 @@ pub(super) fn pipe_neighbour(level: &super::GameLevel<'_>, pos: Pos, d: Dir) -> 
         ENCASED => N::Encased(encased_sides(&s.properties)[d.opposite() as usize]),
         GLASS => glass_axis(&s.properties).map_or(N::Other, N::Glass),
         VALVE => valve_axis(&s.properties).map_or(N::Other, N::Valve),
+        // Along its axis, as a valve is to a pipe beside it.
+        SMART => smart_axis(&s.properties).map_or(N::Other, N::Valve),
         n if is_tank_block(n) || n == super::create_machines::BASIN => N::Holder,
         "minecraft:cauldron" | "minecraft:lava_cauldron" | "minecraft:water_cauldron" => N::Vanilla,
         _ if s.properties.contains_key("honey_level") => N::Vanilla,
@@ -448,7 +612,7 @@ pub(super) fn pipe_update_shape(
     direction: Dir,
 ) -> Option<horizon_world::registry::BlockStateId> {
     let s = level.registry.state(state)?;
-    if s.name == GLASS || s.name == ENCASED || s.name == VALVE {
+    if s.name == GLASS || s.name == ENCASED || s.name == VALVE || s.name == SMART {
         return with_attachments(level, state, pos);
     }
     if s.name != PIPE {
@@ -695,6 +859,9 @@ impl FluidAccess for Access<'_, '_> {
 }
 
 impl FluidWorld for Access<'_, '_> {
+    fn pipe_filter(&self, pos: Pos) -> super::create_fluids::PipeFilter {
+        super::create_fluids::PipeFilter::of(smart_filter_item(self.game, pos).as_deref())
+    }
     fn is_loaded(&self, pos: Pos) -> bool {
         in_world(self.game, pos)
     }

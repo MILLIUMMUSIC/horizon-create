@@ -183,7 +183,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      burner), each fluid ingredient from one tank as `BasinRecipe.apply` does; the fluids drawn side by side as
      `BasinRenderer` does.
    - Not yet: fluids without a block in Horizon (Create's honey, chocolate, tea, builder's tea, milk, potions) and
-     their pipe effects (`OpenPipeEffectHandler`), smart pipes, brackets, particles and sounds, the
+     their pipe effects (`OpenPipeEffectHandler`), brackets, particles and sounds, the
      hose pulley, portable fluid interfaces. The goggles show a tank's and a basin's fluids and amounts
      (`containedFluidTooltip`).
    Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
@@ -543,6 +543,14 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    tag only differs for a valve left turning); a guest's wrench on a corner pipe counts as a click in the middle, as the
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
+
+   The smart fluid pipe (`fluids.rs`, `fluid_glue.rs`): placed as `SmartFluidPipeBlock.getStateForPlacement` has it,
+   `FACING` turned by the wrench from above or below, open along `getPipeAxis`, its filter in a block entity's data and on
+   its slot (`SmartPipeFilterSlot`), drawn there; `canPullFluidFrom` takes empty or what the filter lets through, and a
+   changed filter runs `propagateChangedPipe`. Decisions: a block with `face`, `facing` and no use of its own has no
+   template here, so a chain's with its own properties. Engine gap: only buckets count as holding a fluid
+   (`GenericItemEmptying`), as Horizon has no other fluid items or Create's fluids, and filter items carry no lists yet
+   (`Filter` keeps an item's id): any other item passes nothing, as an item with no fluid does in Create.
 
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that

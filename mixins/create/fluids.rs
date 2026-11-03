@@ -379,6 +379,8 @@ pub enum PipeBlock {
     Glass(Axis),
     /// `FluidValveBlock`: `getPipeAxis` and `ENABLED`.
     Valve(Axis, bool),
+    /// `SmartFluidPipeBlock`: `getPipeAxis`; its filter is the world's.
+    Smart(Axis),
 }
 
 impl PipeBlock {
@@ -397,7 +399,7 @@ impl PipeBlock {
         match self {
             PipeBlock::Pipe(open) | PipeBlock::Encased(open) => open[d as usize],
             PipeBlock::Pump(f) => f.axis() == d.axis(),
-            PipeBlock::Glass(a) | PipeBlock::Valve(a, _) => a == d.axis(),
+            PipeBlock::Glass(a) | PipeBlock::Valve(a, _) | PipeBlock::Smart(a) => a == d.axis(),
         }
     }
     /// `FluidPropagator.validateNeighbourChange`'s check of the pipe.
@@ -410,7 +412,7 @@ impl PipeBlock {
             PipeBlock::Pump(f) => Some(f.axis()),
             PipeBlock::Glass(a) => Some(a),
             // Neither a `PumpBlock`, an `AxisPipeBlock` nor a `FluidPipeBlock`.
-            PipeBlock::Encased(_) | PipeBlock::Valve(..) => None,
+            PipeBlock::Encased(_) | PipeBlock::Valve(..) | PipeBlock::Smart(_) => None,
             PipeBlock::Pipe(_) => {
                 let mut found = None;
                 let mut connections = 0;
@@ -447,6 +449,142 @@ pub trait FluidWorld: FluidAccess {
     /// `FluidReactions.handlePipeFlowCollision`: the pipe at `pos` breaks
     /// (dropping itself) and `block`, if any, takes its place.
     fn pipe_collision(&mut self, pos: Pos, block: Option<&'static str>);
+    /// The filter of the smart pipe at `pos`.
+    fn pipe_filter(&self, _pos: Pos) -> PipeFilter {
+        PipeFilter::Any
+    }
+}
+
+/// `FilterItemStack.test` for fluids, as a smart pipe's filter answers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PipeFilter {
+    /// An empty filter.
+    Any,
+    /// An item holding this fluid.
+    Only(String),
+    /// An item holding no fluid: `filterFluidStack` is empty.
+    Nothing,
+}
+
+impl PipeFilter {
+    /// The filter of `item` (a bucket is the only item here that holds a
+    /// fluid: `GenericItemEmptying`).
+    pub fn of(item: Option<&str>) -> PipeFilter {
+        match item {
+            None => PipeFilter::Any,
+            Some(item) => {
+                bucket_fluid(item).map_or(PipeFilter::Nothing, |f| PipeFilter::Only(f.to_owned()))
+            }
+        }
+    }
+    /// `SmartPipeBehaviour.canPullFluidFrom`: empty passes too.
+    pub fn passes(&self, fluid: &FluidStack) -> bool {
+        fluid.is_empty()
+            || match self {
+                PipeFilter::Any => true,
+                PipeFilter::Only(f) => *f == fluid.fluid,
+                PipeFilter::Nothing => false,
+            }
+    }
+}
+
+/// `SmartFluidPipeBlock.getStateForPlacement` by
+/// `FaceAttachedHorizontalDirectionalBlock`'s: the placed `face` and `facing`
+/// for a click on `clicked`, `horizontal` the placer's facing and `look` their
+/// looking direction along each axis, `connects` the sides with something to
+/// connect to.
+pub fn smart_placement(
+    clicked: Dir,
+    horizontal: Dir,
+    look: impl Fn(Axis) -> Dir,
+    connects: impl Fn(Dir) -> bool,
+) -> (SmartFace, Dir) {
+    let first = clicked.opposite();
+    let (mut face, mut facing) = match first {
+        Dir::Up => (SmartFace::Ceiling, horizontal),
+        Dir::Down => (SmartFace::Floor, horizontal),
+        d => (SmartFace::Wall, d.opposite()),
+    };
+    let mut preferred = None;
+    for side in Dir::ALL {
+        if !connects(side) {
+            continue;
+        }
+        if preferred.is_some_and(|p| p != side.axis()) {
+            preferred = None;
+            break;
+        }
+        preferred = Some(side.axis());
+    }
+    match preferred {
+        Some(Axis::Y) => {
+            face = SmartFace::Wall;
+            facing = facing.opposite();
+        }
+        Some(axis) => {
+            if face == SmartFace::Wall {
+                face = SmartFace::Floor;
+            }
+            facing = look(axis);
+        }
+        None => {}
+    }
+    (face, facing)
+}
+
+/// `AttachFace`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SmartFace {
+    Floor,
+    Wall,
+    Ceiling,
+}
+
+impl SmartFace {
+    pub fn name(self) -> &'static str {
+        match self {
+            SmartFace::Floor => "floor",
+            SmartFace::Wall => "wall",
+            SmartFace::Ceiling => "ceiling",
+        }
+    }
+    pub fn parse(s: &str) -> Option<SmartFace> {
+        match s {
+            "floor" => Some(SmartFace::Floor),
+            "wall" => Some(SmartFace::Wall),
+            "ceiling" => Some(SmartFace::Ceiling),
+            _ => None,
+        }
+    }
+}
+
+/// `SmartFluidPipeBlock.getPipeAxis`.
+pub fn smart_pipe_axis(face: SmartFace, facing: Dir) -> Axis {
+    if face == SmartFace::Wall {
+        Axis::Y
+    } else {
+        facing.axis()
+    }
+}
+
+/// `SmartPipeFilterSlot`: the slot's centre in the block, before its turn
+/// about Y (`smart_slot_angle`).
+pub fn smart_slot(face: SmartFace) -> [f32; 3] {
+    let (y, z) = match face {
+        SmartFace::Ceiling => (0.55, 4.6),
+        SmartFace::Wall => (11.4, 0.55),
+        SmartFace::Floor => (15.45, 4.625),
+    };
+    [0.5, y / 16.0, z / 16.0]
+}
+
+/// `SmartPipeFilterSlot.angleY`, from the facing's horizontal angle.
+pub fn smart_slot_angle(face: SmartFace, horizontal_angle: f32) -> f32 {
+    if face == SmartFace::Wall {
+        horizontal_angle + 180.0
+    } else {
+        horizontal_angle
+    }
 }
 
 /// `FlowSource.OpenEndedPipe`'s state: its 1000 mB buffer and whether it was
@@ -748,7 +886,10 @@ impl Fluids {
                 self.remove(pos);
                 self.neighbour_changed(world, pos);
             }
-            (Some(old), Some(new)) if old == new => {}
+            // `onPlace`'s tick, or `onFilterChanged`.
+            (Some(old), Some(new)) if old == new => {
+                self.propagate_changed_pipe(world, pos, Some(new))
+            }
             (Some(old), Some(new)) => {
                 let pump = |b| matches!(b, PipeBlock::Pump(_));
                 if pump(old) != pump(new) {
@@ -1146,12 +1287,15 @@ impl Fluids {
     /// `FlowSource.provideFluid` of the connection at `pos`, `side`, through
     /// `canPullFluidFrom`: anything, but nothing through a closed valve.
     fn provide_fluid(&mut self, world: &mut dyn FluidWorld, pos: Pos, side: Dir) -> FluidStack {
-        if matches!(
-            self.transports.get(&pos).map(|t| t.block),
-            Some(PipeBlock::Valve(_, false))
-        ) {
+        let block = self.transports.get(&pos).map(|t| t.block);
+        if matches!(block, Some(PipeBlock::Valve(_, false))) {
             return FluidStack::empty();
         }
+        let filter = if matches!(block, Some(PipeBlock::Smart(_))) {
+            world.pipe_filter(pos)
+        } else {
+            PipeFilter::Any
+        };
         let source = self
             .transports
             .get(&pos)
@@ -1167,17 +1311,34 @@ impl Fluids {
             Some(2) => {
                 // OtherPipe: what the pipe beyond sends out toward us.
                 let other = offset(pos, side);
-                self.transports
+                let fluid = self
+                    .transports
                     .get(&other)
                     .and_then(|t| t.connection(side.opposite()))
-                    .map_or_else(FluidStack::empty, Connection::outbound_flow)
+                    .map_or_else(FluidStack::empty, Connection::outbound_flow);
+                if filter.passes(&fluid) {
+                    fluid
+                } else {
+                    FluidStack::empty()
+                }
             }
             Some(0 | 1) => {
                 let Some(t) = self.handler_of(world, pos, side) else {
                     return FluidStack::empty();
                 };
-                // `tank.drain(1, SIMULATE)`, which the predicate accepts.
-                self.target_drain(world, t, 1, None, true)
+                // `tank.drain(1, SIMULATE)` if the predicate accepts it, else
+                // the first of its tanks' fluids that it does.
+                let fluid = self.target_drain(world, t, 1, None, true);
+                if filter.passes(&fluid) {
+                    return fluid;
+                }
+                match &filter {
+                    PipeFilter::Only(f) => {
+                        let wanted = FluidStack::new(f, 1);
+                        self.target_drain(world, t, 1, Some(&wanted), true)
+                    }
+                    _ => FluidStack::empty(),
+                }
             }
             _ => FluidStack::empty(),
         }
@@ -2863,6 +3024,50 @@ mod tests {
         let b = pipe_stream_box(&s(Dir::Up, false, 0));
         assert_eq!([b[1], b[4]], [0.5, 0.5]);
         assert_eq!([b[0], b[3]], [0.5 - 3.0 / 16.0, 0.5 + 3.0 / 16.0]);
+    }
+
+    #[test]
+    fn smart_pipe_filter_and_placement() {
+        let water = FluidStack::new(WATER, 1);
+        assert!(PipeFilter::of(None).passes(&water));
+        assert!(PipeFilter::of(Some("minecraft:water_bucket")).passes(&water));
+        assert!(!PipeFilter::of(Some("minecraft:lava_bucket")).passes(&water));
+        assert!(!PipeFilter::of(Some("minecraft:stone")).passes(&water));
+        assert!(PipeFilter::of(Some("minecraft:stone")).passes(&FluidStack::empty()));
+        let look = |a: Axis| Dir::positive_of(a);
+        // On the floor, nothing beside: as clicked.
+        assert_eq!(
+            smart_placement(Dir::Up, Dir::North, look, |_| false),
+            (SmartFace::Floor, Dir::North)
+        );
+        assert_eq!(
+            smart_placement(Dir::Down, Dir::North, look, |_| false),
+            (SmartFace::Ceiling, Dir::North)
+        );
+        assert_eq!(
+            smart_placement(Dir::East, Dir::West, look, |_| false),
+            (SmartFace::Wall, Dir::East)
+        );
+        // A pipe beside it along X: the floor, turned along X.
+        assert_eq!(
+            smart_placement(Dir::East, Dir::West, look, |d| d == Dir::East),
+            (SmartFace::Floor, Dir::East)
+        );
+        // Above: on a wall, turned round.
+        assert_eq!(
+            smart_placement(Dir::Up, Dir::North, look, |d| d == Dir::Up),
+            (SmartFace::Wall, Dir::South)
+        );
+        // Two axes: no preference.
+        assert_eq!(
+            smart_placement(Dir::Up, Dir::North, look, |d| d == Dir::Up
+                || d == Dir::East),
+            (SmartFace::Floor, Dir::North)
+        );
+        assert_eq!(smart_pipe_axis(SmartFace::Wall, Dir::North), Axis::Y);
+        assert_eq!(smart_pipe_axis(SmartFace::Floor, Dir::North), Axis::Z);
+        assert_eq!(PipeBlock::Smart(Axis::X).straight_axis(), None);
+        assert!(PipeBlock::Smart(Axis::X).open(Dir::West));
     }
 
     #[test]

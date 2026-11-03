@@ -728,6 +728,7 @@ def fit_logistics(content, names):
     fit_encased_cogwheels(content)
     fit_turntable(content)
     fit_straight_pipes(content)
+    fit_smart_pipe(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1498,6 +1499,58 @@ def fit_straight_pipes(content):
             for when, model in end_parts(pipe_axis(f, a), ["drain"]):
                 parts.append({"when": {"facing": f, "axis_along_first": a, **when}, "apply": {"model": model}})
     write_json(states / "fluid_valve.json", {"multipart": parts})
+
+
+# The smart fluid pipe (SmartFluidPipeBlock): no template has a `face` with all
+# six looks and no use of its own, so a chain's, with its `face` and `facing`
+# and its ends as the glass pipe's; AllShapes.SMART_FLUID_PIPE_*, made for
+# south. A block entity for its filter.
+def fit_smart_pipe(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    decl = read_json(blocks / "smart_fluid_pipe.json") if (blocks / "smart_fluid_pipe.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    end_values = {"type": "enum", "values": ["none", "rim", "drain"]}
+    decl["state_properties"] = {"face": {"type": "enum", "values": ["floor", "wall", "ceiling"]},
+                                "facing": {"type": "enum", "values": ["north", "south", "west", "east"]},
+                                "end_negative": end_values, "end_positive": end_values}
+    decl["default_state"] = {"face": "floor", "facing": "north", "end_negative": "none", "end_positive": "none"}
+    tail = {"floor": [(4, 4, 0, 12, 12, 16), (5, 13, 3, 11, 14, 11), (5, 14, 4, 11, 15, 10), (5, 15, 5, 11, 16, 9),
+                      (5, 16, 6, 11, 17, 8)],
+            "wall": [(4, 0, 4, 12, 16, 12), (5, 5, 13, 11, 13, 14), (5, 6, 14, 11, 12, 15), (5, 7, 15, 11, 11, 16),
+                     (5, 8, 16, 11, 10, 17)],
+            "ceiling": [(4, 4, 0, 12, 12, 16), (5, 2, 3, 11, 3, 11), (5, 1, 4, 11, 2, 10), (5, 0, 5, 11, 1, 9),
+                        (5, -1, 6, 11, 0, 8)]}
+    def turned(b, facing):
+        x0, y0, z0, x1, y1, z1 = b
+        return {"south": (x0, y0, z0, x1, y1, z1),
+                "north": (16 - x1, y0, 16 - z1, 16 - x0, y1, 16 - z0),
+                "west": (16 - z1, y0, x0, 16 - z0, y1, x1),
+                "east": (z0, y0, 16 - x1, z1, y1, 16 - x0)}[facing]
+    faces = ("floor", "wall", "ceiling")
+    facings = ("north", "south", "west", "east")
+    decl["shapes"] = {"properties": ["face", "facing"], "values": {
+        f"{face},{facing}": [box(*turned(b, facing)) for b in [(3, 3, 3, 13, 13, 13)] + tail[face]]
+        for face in faces for facing in facings}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "smart_fluid_pipe.json", decl)
+    original = read_json(states / "smart_fluid_pipe.json")
+    parts = []
+    for key, apply in original["variants"].items():
+        when = dict(kv.split("=") for kv in key.split(","))
+        if when.pop("waterlogged", "false") == "true":
+            continue
+        parts.append({"when": when, "apply": apply})
+    ends = {"x": ("west", "east"), "y": ("down", "up"), "z": ("north", "south")}
+    horizontal = {"north": "z", "south": "z", "west": "x", "east": "x"}
+    for face in faces:
+        for facing in facings:
+            axis = "y" if face == "wall" else horizontal[facing]
+            for prop, side in zip(("end_negative", "end_positive"), ends[axis]):
+                for value in ("rim", "drain"):
+                    parts.append({"when": {"face": face, "facing": facing, prop: value},
+                                  "apply": {"model": f"create:block/fluid_pipe/{value}/{side}"}})
+    write_json(states / "smart_fluid_pipe.json", {"multipart": parts})
 
 
 def fit_turntable(content):

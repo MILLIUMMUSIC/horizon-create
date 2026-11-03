@@ -148,7 +148,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block)) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || block == super::create_fluid_glue::SMART) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -158,7 +158,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || super::create_logistics::is_chute_block(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || super::create_logistics::is_chute_block(block) || block == super::create_fluid_glue::SMART {
         *ticks = true;
     }
 }
@@ -818,6 +818,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         super::create_crusher_glue::CONTROLLER => super::create_crusher_glue::tick(game, pos, entity),
         n if super::create_redstone_glue::is_ours(n) => super::create_redstone_glue::tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
+        super::create_fluid_glue::SMART => super::create_fluid_glue::smart_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {
             super::create_arms::block_entity_tick(game, pos, entity);
@@ -1584,6 +1585,7 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         }
         Some(n) if is_saw(n) => saw_filter_click(game, pos, face),
         Some(BLAZE) => blaze_click(game, pos),
+        Some(super::create_fluid_glue::SMART) => super::create_fluid_glue::smart_click(game, pos),
         // SpoutBlock has no use of its own (the template's menu stays shut).
         Some(super::create_spout_glue::SPOUT) => true,
         Some(super::create_spout_glue::DRAIN) => super::create_spout_glue::drain_click(game, pos),
@@ -1681,6 +1683,7 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                             && s.name != LINK
                             && s.name != super::create_spout_glue::DRAIN
                             && s.name != super::create_crafter_glue::CRAFTER
+                            && s.name != super::create_fluid_glue::SMART
                             && !super::create_logistics::is_chute_block(&s.name)
                             && !super::create_funnel::is_funnel(&s.name)
                     })
@@ -1806,6 +1809,10 @@ pub(super) fn draw_depots(
         }
         // Crafters draw their items from their block entity.
         if super::create_crafter_glue::crafter_at(game, *pos).is_some() {
+            continue;
+        }
+        if game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2])).is_some_and(|s| s.name == super::create_fluid_glue::SMART) {
+            super::create_fluid_glue::draw_smart_filter(game, camera, *pos, slots, out);
             continue;
         }
         if super::create_spout_glue::is_drain(game, *pos) {
