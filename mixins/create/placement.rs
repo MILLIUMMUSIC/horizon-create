@@ -111,6 +111,15 @@ pub fn rotated_pillar(ctx: &Ctx, around: &dyn Around) -> Axis {
     }
 }
 
+fn chain_axis(ctx: &Ctx, around: &dyn Around) -> Axis {
+    let looking = nearest_looking(ctx.yaw, ctx.pitch).axis();
+    if ctx.sneaking {
+        looking
+    } else {
+        preferred_axis(around).unwrap_or(looking)
+    }
+}
+
 /// `DirectionalKineticBlock.getStateForPlacement`.
 pub fn directional(ctx: &Ctx, around: &dyn Around) -> Dir {
     let looking = nearest_looking(ctx.yaw, ctx.pitch);
@@ -244,6 +253,16 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
     Some(match kind {
         Kind::Shaft(_) => Kind::Shaft(rotated_pillar(ctx, around)),
         Kind::CrushingWheel(_) => Kind::CrushingWheel(rotated_pillar(ctx, around)),
+        Kind::Flywheel(_) => Kind::Flywheel(rotated_pillar(ctx, around)),
+        // ChainDriveBlock.getStateForPlacement: its look when sneaking, else
+        // the shafts around; its part comes from its neighbours (glue).
+        Kind::ChainDrive(_) => {
+            Kind::ChainDrive(super::create_chain::Chain::new(chain_axis(ctx, around)))
+        }
+        Kind::ChainGearshift(..) => Kind::ChainGearshift(
+            super::create_chain::Chain::new(chain_axis(ctx, around)),
+            false,
+        ),
         Kind::Cogwheel(_) => Kind::Cogwheel(cog_axis(ctx, around)),
         Kind::LargeCogwheel(_) => Kind::LargeCogwheel(cog_axis(ctx, around)),
         // GearboxBlock: always upright.

@@ -83,6 +83,8 @@ ROTATING = {
     "shaft": {"shapes": [POLE], "particle": "create:block/axis"},
     "cogwheel": {"shapes": [POLE, SMALL_GEAR], "particle": "block/stripped_spruce_log_top"},
     "large_cogwheel": {"shapes": [POLE, LARGE_GEAR], "particle": "block/stripped_spruce_log_top"},
+    # FlywheelBlock: ENTITYBLOCK_ANIMATED, AllShapes.LARGE_GEAR.
+    "flywheel": {"shapes": [POLE, LARGE_GEAR], "particle": "block/stripped_spruce_log_top"},
     # CrushingWheelBlock: ENTITYBLOCK_ANIMATED, AllShapes' full collision.
     "crushing_wheel": {"shapes": [box(0, 0, 0, 16, 16, 16)], "particle": "create:block/palettes/stone_types/cut/andesite_cut"},
 }
@@ -226,6 +228,7 @@ PARTIALS = {
     "millstone_inner": "create:block/millstone/inner",
     "encased_fan_inner": "create:block/encased_fan/propeller",
     "cogwheel_shaftless": "create:block/cogwheel_shaftless",
+    "turntable": "create:block/turntable",
     "large_cogwheel_shaftless": "create:block/large_cogwheel_shaftless",
     "mechanical_mixer_pole": "create:block/mechanical_mixer/pole",
     "mechanical_mixer_head": "create:block/mechanical_mixer/head",
@@ -718,6 +721,8 @@ def fit_logistics(content, names):
     fit_mechanical_crafter(content)
     fit_crushing_wheel_controller(content)
     fit_encased_cogwheels(content)
+    fit_turntable(content)
+    fit_chain_drives(content)
     fit_psi(content)
     fit_contacts(content, names)
     fit_large_wheel(content, names)
@@ -1364,6 +1369,34 @@ def fit_redstone_link(content, names):
             props = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
             out[f"facing={props['facing']},powered={props['powered']},receiver={props['receiver']}"] = model
         write_json(states / "redstone_link.json", {"variants": out})
+
+
+# The turntable: AllShapes.TURNTABLE_SHAPE on stone; its model turns whole.
+def fit_turntable(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    models = content / "assets" / "create" / "models" / "block"
+    decl = read_json(blocks / "turntable.json") if (blocks / "turntable.json").exists() else {}
+    decl["template"] = "minecraft:stone"
+    decl["shapes"] = {"default": [box(1, 4, 1, 15, 8, 15), box(5, 0, 5, 11, 4, 11)]}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "turntable.json", decl)
+    write_json(models / "hz_blank_turntable.json", {"textures": {"particle": "block/spruce_planks"}})
+    write_json(states / "turntable.json", {"variants": {"": {"model": "create:block/hz_blank_turntable"}}})
+
+
+# The encased chain drive and adjustable chain gearshift (ChainDriveBlock): a
+# log's `axis` with their own `part`, `axis_along_first` and (the gearshift)
+# `powered`; Create's blockstates pick the casing, a shaft turns inside.
+def fit_chain_drives(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    for name, extra in [("encased_chain_drive", {}), ("adjustable_chain_gearshift", {"powered": {"type": "boolean"}})]:
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:oak_log"
+        decl["state_properties"] = {"part": {"type": "enum", "values": ["start", "middle", "end", "none"]},
+                                    "axis_along_first": {"type": "boolean"}, **extra}
+        decl["default_state"] = {"part": "none", "axis_along_first": "false", **{k: "false" for k in extra}}
+        write_json(blocks / f"{name}.json", decl)
 
 
 # Encased cogwheels (EncasedCogwheelBlock): a log's `axis` as the encased shafts

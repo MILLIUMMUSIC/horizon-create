@@ -241,6 +241,8 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut large_wheels: Vec<(Pos, Axis)> = Vec::new();
     let mut split_shafts: Vec<(Pos, Kind)> = Vec::new();
     let mut crushing_wheels: Vec<(Pos, Axis, f32)> = Vec::new();
+    let mut chain_gearshifts: Vec<(Pos, Kind)> = Vec::new();
+    let mut turntables: Vec<(Pos, f32)> = Vec::new();
     let mut amounts: Vec<(Pos, i32)> = Vec::new();
     let save_now;
     {
@@ -376,6 +378,16 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             {
                 pumps.push((p, f, kinetics.speed_of(&level, p)));
             }
+            // Adjustable chain gearshifts, for their signal; turntables, for
+            // what stands on them.
+            if let Some(k @ Kind::ChainGearshift(..)) = kinetics.get(p).map(|e| e.kind)
+                && level.is_loaded(p)
+            {
+                chain_gearshifts.push((p, k));
+            }
+            if matches!(kinetics.get(p).map(|e| e.kind), Some(Kind::Turntable)) && level.is_loaded(p) {
+                turntables.push((p, kinetics.speed_of(&level, p)));
+            }
             // Crushing wheels, for their controllers.
             if let Some(Kind::CrushingWheel(a)) = kinetics.get(p).map(|e| e.kind)
                 && level.is_loaded(p)
@@ -457,6 +469,8 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_logistics::tunnels_tick(game, dimension);
     super::create_crafter_glue::level_tick(game, dimension);
     super::create_crusher_glue::level_tick(game, dimension, &crushing_wheels);
+    chain_gearshifts_tick(game, dimension, &chain_gearshifts);
+    turntables_tick(game, dimension, &turntables);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
     super::create_actor_glue::breakers_tick(game, dimension, &drills);
@@ -750,6 +764,12 @@ pub(super) fn state_for_placement(
     let Some(placed) = super::create_placement::place(kind, &ctx, &Near { level, pos }) else {
         return;
     };
+    // ChainDriveBlock.getStateForPlacement: its part from its neighbours, and
+    // a gearshift's `powered` follows at its first tick.
+    if let Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) = placed {
+        *answer = chain_state(level, state, chain_with_neighbours(level, pos, c.axis)).map(Some);
+        return;
+    }
     // The kinds are placed as their blocks are; the redstone contact, the
     // portable storage interface, the vault and the attached actors below.
     let Some((key, value)) = placed.state_property() else {
@@ -767,6 +787,33 @@ pub(super) fn state_for_placement(
     }
 }
 
+fn chain_at(level: &super::GameLevel<'_>, p: Pos) -> Option<super::create_chain::Chain> {
+    let s = level.registry.state(level.world.block(p[0], p[1], p[2]))?;
+    match Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str))? {
+        Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => Some(c),
+        _ => None,
+    }
+}
+
+/// `updateAfterWrenched` and placement: a chain block with `axis`, its part
+/// from each neighbour.
+fn chain_with_neighbours(level: &super::GameLevel<'_>, pos: Pos, axis: Axis) -> super::create_chain::Chain {
+    let mut c = super::create_chain::Chain::new(axis);
+    for d in Dir::ALL {
+        if d.axis() != axis {
+            let n = d.normal();
+            c = c.update_shape(d, chain_at(level, [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]]));
+        }
+    }
+    c
+}
+
+fn chain_state(level: &super::GameLevel<'_>, state: BlockStateId, c: super::create_chain::Chain) -> Option<BlockStateId> {
+    let st = level.native_state_with_property(state, "axis", c.axis.name())?;
+    let st = level.native_state_with_property(st, "part", c.part.name())?;
+    level.native_state_with_property(st, "axis_along_first", if c.along_first { "true" } else { "false" })
+}
+
 /// `BlockBehaviour.updateShape` of Create's blocks: a neighbour on
 /// `direction` changed.
 pub(super) fn update_shape(
@@ -779,6 +826,17 @@ pub(super) fn update_shape(
     let d = Dir::nearest(direction.normal());
     if let Some(next) = super::create_fluid_glue::pipe_update_shape(level, state, pos, d) {
         *new = Some(next);
+    }
+    // ChainDriveBlock.updateShape.
+    if let Some(s) = level.registry.state(state)
+        && let Some(Kind::ChainDrive(c) | Kind::ChainGearshift(c, _)) =
+            Kind::from_block(&s.name, |k| s.properties.get(k).map(String::as_str))
+    {
+        let n = d.normal();
+        let next = c.update_shape(d, chain_at(level, [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]]));
+        if next != c {
+            *new = chain_state(level, state, next);
+        }
     }
     // RedstoneLinkBlock.neighborChanged: its support gone, it breaks (with
     // its drops, as the level removes a block whose shape update is air).
@@ -1171,6 +1229,99 @@ fn large_wheel_blocked(game: &mut Game<'_>, stack: &horizon_client::items::ItemS
 /// `WrenchItem.useOn` on an `IWrenchable` of ours: `onWrenched` turns it
 /// (`getRotatedBlockState`), `onSneakWrenched` takes it into the player's
 /// inventory. False when the block isn't one (or the player may not build).
+/// `ChainGearshiftBlock.neighborChanged` and `ChainGearshiftBlockEntity.tick`:
+/// `powered` and the signal follow what is beside it.
+fn chain_gearshifts_tick(game: &mut Game<'_>, dimension: &str, gearshifts: &[(Pos, Kind)]) {
+    for &(p, k) in gearshifts {
+        let at = horizon_core::position::BlockPos::new(p[0], p[1], p[2]);
+        let power = game.with_level(|b, level, ticks| b.best_neighbor_signal(level, ticks, at));
+        let powered = signal(game, p);
+        if matches!(k, Kind::ChainGearshift(_, was) if was != powered) {
+            game.native_set_block_property(p, "powered", if powered { "true" } else { "false" });
+        }
+        let mut guard = server();
+        let s = guard.get_or_insert_with(Server::default);
+        let Some(kinetics) = s.dims.get_mut(dimension) else {
+            continue;
+        };
+        if kinetics.get(p).is_some_and(|e| e.chain_signal != power) {
+            let mut level = InPlace { game, destroyed: Vec::new() };
+            kinetics.set_chain_signal(&mut level, p, power);
+        }
+    }
+}
+
+/// `TurntableBlock.entityInside` for mobs: what stands on a turning table turns
+/// with it, at `speed * 3 / 10` degrees a tick. Through `/tp`, as nothing else
+/// sets a mob's facing.
+fn turntables_tick(game: &mut Game<'_>, dimension: &str, tables: &[(Pos, f32)]) {
+    if tables.iter().all(|t| t.1 == 0.0) {
+        return;
+    }
+    let mobs = game.native_mobs(dimension);
+    for &(p, speed) in tables {
+        if speed == 0.0 {
+            continue;
+        }
+        let [x, y, z] = p.map(f64::from);
+        for m in &mobs {
+            let [mx, my, mz] = m.pos;
+            if (x..x + 1.0).contains(&mx) && (z..z + 1.0).contains(&mz) && (y + 0.5..y + 1.0).contains(&my) {
+                let yaw = m.yaw - speed * 3.0 / 10.0;
+                game.native_run_command(&format!(
+                    "execute in {dimension} positioned {mx} {my} {mz} run tp @e[type={},limit=1,sort=nearest,distance=..0.75] {mx} {my} {mz} {yaw} 0",
+                    m.kind
+                ));
+            }
+        }
+    }
+}
+
+/// `TurntableHandler.gameRenderFrame` and `TurntableBlock.entityInside` for the
+/// window's player: on a table its view turns (less toward the edge); only
+/// its box over a table's edge carries it round.
+pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
+    let Some(p) = game.player.as_ref() else {
+        return;
+    };
+    if !p.ground.on_ground {
+        return;
+    }
+    let [x, y, z] = [p.position.x, p.position.y, p.position.z];
+    let is_table = |g: &Game<'_>, b: Pos| {
+        g.pack.assets.registry.state(g.world.block(b[0], b[1], b[2])).is_some_and(|s| s.name == "create:turntable")
+    };
+    let on = [x.floor() as i32, (y - 0.2).floor() as i32, z.floor() as i32];
+    if is_table(game, on)
+        && let Some(speed) = client_speed(on).filter(|s| *s != 0.0)
+    {
+        let offset = ((x - f64::from(on[0]) - 0.5).powi(2) + (z - f64::from(on[2]) - 0.5).powi(2)).sqrt() as f32;
+        let mut turn = speed * 2.0 / 3.0 * 0.5;
+        if offset > 0.25 {
+            turn *= ((0.5 - offset) * 2.0).clamp(0.0, 1.0);
+        }
+        game.yaw -= turn;
+    }
+    let cell = [x.floor() as i32, y.floor() as i32, z.floor() as i32];
+    for (dx, dz) in [(-0.3, -0.3), (-0.3, 0.3), (0.3, -0.3), (0.3, 0.3)] {
+        let t = [(x + dx).floor() as i32, y.floor() as i32, (z + dz).floor() as i32];
+        if t == cell || y < f64::from(t[1]) + 0.5 || !is_table(game, t) {
+            continue;
+        }
+        let Some(speed) = client_speed(t).filter(|s| *s != 0.0) else {
+            continue;
+        };
+        let a = f64::from((speed * 3.0 / 10.0).clamp(-16.0, 16.0)).to_radians();
+        let (ox, oz) = (x - f64::from(t[0]) - 0.5, z - f64::from(t[2]) - 0.5);
+        let (nx, nz) = (ox * a.cos() + oz * a.sin(), oz * a.cos() - ox * a.sin());
+        if let Some(p) = game.player.as_mut() {
+            p.velocity.x += nx - ox;
+            p.velocity.z += nz - oz;
+        }
+        break;
+    }
+}
+
 /// `EncasableBlock.tryEncase` (`ShaftBlock`, `CogWheelBlock`): a casing used on
 /// a bare shaft or cogwheel, not sneaking, encases it. The casing is kept, as
 /// in Create. A cog takes a shaft on each side where a neighbour reaches it
@@ -1245,6 +1396,22 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
             set_kind(game, pos, bare);
             return true;
         }
+    }
+    // ChainDriveBlock.getRotatedBlockState, then updateAfterWrenched.
+    if !sneaking && let Some(k @ (Kind::ChainDrive(_) | Kind::ChainGearshift(..))) = kind {
+        let axis = k.wrenched(Dir::nearest(face)).rotation_axis();
+        let (state, c) = {
+            let state = game.world.block(pos[0], pos[1], pos[2]);
+            game.with_level(|_, level, _| (state, chain_with_neighbours(level, pos, axis)))
+        };
+        let next = game.with_level(|_, level, _| chain_state(level, state, c));
+        if let Some(next) = next {
+            let dimension = game.dim.id().to_owned();
+            game.native_set_block(&dimension, pos, next, super::native_hooks::flags::UPDATE_ALL);
+            let pitch = horizon_core::random::RandomSource::next_float(&mut game.world.random) + 0.5;
+            play_create_sound(game, "wrench_rotate", pos.map(|v| f64::from(v) + 0.5), 1.0, pitch);
+        }
+        return true;
     }
     // EncasedCogwheelBlock.onWrenched: on its axis, a shaft on or off.
     if let Some(Kind::EncasedCog(b, l, a, top, bottom)) = kind {
@@ -1730,6 +1897,16 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
         Kind::Shaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
         Kind::CrushingWheel(a) => {
             want.push(("create:hz_crushing_wheel", Some(("axis", a.name())), id, a, standard, 0.0))
+        }
+        // FlywheelRenderer: the wheel and its shaft. Not yet: `visualSpeed`'s
+        // easing.
+        Kind::Flywheel(a) => {
+            want.push(("create:hz_flywheel", Some(("axis", a.name())), id, a, standard, 0.0));
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+        }
+        Kind::Turntable => want.push(("create:hz_part_turntable", None, id, Axis::Y, standard, 0.0)),
+        Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => {
+            want.push(("create:hz_shaft", Some(("axis", c.axis.name())), id, c.axis, standard, 0.0))
         }
         // The casing stays in the chunk mesh; KineticBlockEntityRenderer's
         // shaft turns inside it.

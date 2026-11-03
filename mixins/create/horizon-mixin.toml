@@ -166,6 +166,12 @@ name = "create_crafter"
 source = "crafter.rs"
 
 [[module]]
+id = "chain"
+file = "crates/horizon-client/src/game.rs"
+name = "create_chain"
+source = "chain.rs"
+
+[[module]]
 id = "crusher"
 file = "crates/horizon-client/src/game.rs"
 name = "create_crusher"

@@ -1032,3 +1032,12 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   `top_shaft` on and off. A sneaking wrench on the encased shaft gave back a bare shaft. A motor wrenched away and set
   back drove the speedometer at 16 RPM again (`reActivateSource`; it stayed at 0 before the fix).
   Not tried: large encased cogs, turning an encased cog with the wrench, saving and reloading.
+
+## Chain drives, flywheel, turntable (macOS, offscreen)
+
+- A motor into an adjustable chain gearshift with two encased chain drives beside it took `part` start, middle, end
+  (`axis_along_first=true`) on their own. Through them a flywheel (large, turning) and a speedometer read 16 RPM; a
+  redstone block beside the gearshift set `powered=true` and the speedometer to 32 RPM (signal 15: modifier 2).
+- A pig on a turntable turned by about 4.8 degrees a tick at 16 RPM (`Rotation` read twice a second); the window's
+  player standing on it turned by about 5.8 degrees a tick.
+  Not tried: chains at right angles, the wrench on a chain, placing them by hand, a player carried over a table's edge.

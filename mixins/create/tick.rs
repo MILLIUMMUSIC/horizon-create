@@ -7,4 +7,5 @@ fn create_tick(game: &mut crate::game::Game<'_>) {
     crate::game::create_glue::send_scrolled_values(game);
     crate::game::create_arms::client_tick(game);
     crate::game::create_glue::outlines_tick(game);
+    crate::game::create_glue::turntable_client_tick(game);
 }

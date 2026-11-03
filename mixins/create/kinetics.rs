@@ -227,6 +227,27 @@ impl Kind {
             Kind::Shaft(a) => Kind::Shaft(turn_axis(a)),
             Kind::CrushingWheel(a) => Kind::CrushingWheel(turn_axis(a)),
             Kind::EncasedShaft(b, a) => Kind::EncasedShaft(b, turn_axis(a)),
+            Kind::Flywheel(a) => Kind::Flywheel(turn_axis(a)),
+            // ChainDriveBlock.getRotatedBlockState: about its connection's
+            // axis when it is part of a line; the parts follow (glue).
+            Kind::ChainDrive(c) => {
+                let about = if c.part == super::create_chain::Part::None {
+                    face.axis()
+                } else {
+                    c.connection_axis()
+                };
+                let axis = Dir::positive_of(c.axis).clockwise(about).axis();
+                Kind::ChainDrive(super::create_chain::Chain::new(axis))
+            }
+            Kind::ChainGearshift(c, p) => {
+                let about = if c.part == super::create_chain::Part::None {
+                    face.axis()
+                } else {
+                    c.connection_axis()
+                };
+                let axis = Dir::positive_of(c.axis).clockwise(about).axis();
+                Kind::ChainGearshift(super::create_chain::Chain::new(axis), p)
+            }
             // EncasedCogwheelBlock.getRotatedBlockState: its shafts swap when
             // the quarter turn takes its axis the other way. On its own axis
             // the wrench switches a shaft instead, in the native mod.
@@ -273,6 +294,7 @@ impl Kind {
         match self {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
+            | Kind::Flywheel(a)
             | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
@@ -280,6 +302,8 @@ impl Kind {
             | Kind::SplitShaft(_, a, _)
             | Kind::RopePulley(a) => Some(("axis", a.name())),
             Kind::EncasedCog(_, _, a, ..) => Some(("axis", a.name())),
+            Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => Some(("axis", c.axis.name())),
+            Kind::Turntable => None,
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
             | Kind::MechanicalPress(f)
@@ -470,6 +494,14 @@ pub enum Kind {
     MechanicalCrafter(Dir),
     /// `CrushingWheelBlock`: a shaft along its axis (crusher.rs).
     CrushingWheel(Axis),
+    /// `FlywheelBlock`: a shaft along its axis, no stress.
+    Flywheel(Axis),
+    /// `TurntableBlock`: turned from below.
+    Turntable,
+    /// `ChainDriveBlock`.
+    ChainDrive(super::create_chain::Chain),
+    /// `ChainGearshiftBlock`, `POWERED` (its signal is in the entity).
+    ChainGearshift(super::create_chain::Chain, bool),
     /// `EncasedShaftBlock`: brass (or andesite) casing, its axis.
     EncasedShaft(bool, Axis),
     /// `EncasedCogwheelBlock`: brass, large, its axis, `TOP_SHAFT` (its
@@ -488,6 +520,20 @@ impl Kind {
         match name {
             "create:shaft" => axis().map(Kind::Shaft),
             "create:crushing_wheel" => axis().map(Kind::CrushingWheel),
+            "create:flywheel" => axis().map(Kind::Flywheel),
+            "create:turntable" => Some(Kind::Turntable),
+            "create:encased_chain_drive" | "create:adjustable_chain_gearshift" => axis().map(|a| {
+                let c = super::create_chain::Chain {
+                    axis: a,
+                    part: super::create_chain::Part::parse(prop("part").unwrap_or("none")),
+                    along_first: prop("axis_along_first") == Some("true"),
+                };
+                if name == "create:encased_chain_drive" {
+                    Kind::ChainDrive(c)
+                } else {
+                    Kind::ChainGearshift(c, prop("powered") == Some("true"))
+                }
+            }),
             "create:andesite_encased_shaft" => axis().map(|a| Kind::EncasedShaft(false, a)),
             "create:brass_encased_shaft" => axis().map(|a| Kind::EncasedShaft(true, a)),
             "create:andesite_encased_cogwheel"
@@ -550,6 +596,10 @@ impl Kind {
         match self {
             Kind::Shaft(_) => "create:shaft",
             Kind::CrushingWheel(_) => "create:crushing_wheel",
+            Kind::Flywheel(_) => "create:flywheel",
+            Kind::Turntable => "create:turntable",
+            Kind::ChainDrive(_) => "create:encased_chain_drive",
+            Kind::ChainGearshift(..) => "create:adjustable_chain_gearshift",
             Kind::EncasedShaft(false, _) => "create:andesite_encased_shaft",
             Kind::EncasedShaft(true, _) => "create:brass_encased_shaft",
             Kind::EncasedCog(false, false, ..) => "create:andesite_encased_cogwheel",
@@ -606,6 +656,7 @@ impl Kind {
         match self {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
+            | Kind::Flywheel(a)
             | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
@@ -623,6 +674,8 @@ impl Kind {
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => f.axis(),
             Kind::EncasedCog(_, _, a, ..) => a,
+            Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => c.axis,
+            Kind::Turntable => Axis::Y,
             Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
             Kind::Deployer(f, along)
@@ -640,6 +693,7 @@ impl Kind {
         match self {
             Kind::Shaft(a)
             | Kind::CrushingWheel(a)
+            | Kind::Flywheel(a)
             | Kind::EncasedShaft(_, a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
@@ -652,7 +706,8 @@ impl Kind {
             Kind::EncasedCog(_, _, a, top, bottom) => {
                 face.axis() == a && if face.positive() { top } else { bottom }
             }
-            Kind::Millstone => face == Dir::Down,
+            Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => face.axis() == c.axis,
+            Kind::Millstone | Kind::Turntable => face == Dir::Down,
             Kind::EncasedFan(f)
             | Kind::MechanicalBearing(f)
             | Kind::WindmillBearing(f)
@@ -697,6 +752,7 @@ impl Kind {
             Kind::MechanicalPump(_) => 4.0,
             Kind::MechanicalCrafter(_) => 2.0,
             Kind::CrushingWheel(_) => 8.0,
+            Kind::Turntable => 4.0,
             Kind::MechanicalMixer => 4.0,
             Kind::MechanicalArm => 2.0,
             Kind::Deployer(..) => 4.0,
@@ -740,6 +796,12 @@ impl Kind {
         {
             return false;
         }
+        // ChainGearshiftBlock.areStatesKineticallyEquivalent.
+        if let (Kind::ChainGearshift(_, a), Kind::ChainGearshift(_, b)) = (self, other)
+            && a != b
+        {
+            return false;
+        }
         // areStatesKineticallyEquivalent: its shafts change what it reaches.
         if let (Kind::EncasedCog(_, _, _, a, b), Kind::EncasedCog(_, _, _, c, d)) = (self, other)
             && (a, b) != (c, d)
@@ -774,6 +836,8 @@ pub struct Kinetic {
     pub reactivate_source: bool,
     /// `CreativeMotorBlockEntity.generatedSpeed`'s value.
     pub motor_speed: i32,
+    /// `ChainGearshiftBlockEntity.signal`.
+    pub chain_signal: i32,
     /// `HandCrankBlockEntity.inUse` and `backwards`.
     pub crank_in_use: i32,
     pub crank_backwards: bool,
@@ -869,6 +933,7 @@ impl Kinetic {
             last_capacity_provided: 0.0,
             reactivate_source: false,
             motor_speed: MOTOR_DEFAULT_SPEED,
+            chain_signal: 0,
             crank_in_use: 0,
             crank_backwards: false,
             flow_score: 0,
@@ -1444,6 +1509,23 @@ impl Kinetics {
             }
             return self.axis_modifier(from, direction) * axis_modifier;
         }
+        // Attached Encased Belts
+        if let (
+            Kind::ChainDrive(a) | Kind::ChainGearshift(a, _),
+            Kind::ChainDrive(b) | Kind::ChainGearshift(b, _),
+        ) = (kf, kt)
+        {
+            if !a.connected_to(b, direction) {
+                return 0.0;
+            }
+            let modifier = |p: Pos| match self.e(p).kind {
+                Kind::ChainGearshift(..) => {
+                    super::create_chain::modifier_for_signal(self.e(p).chain_signal)
+                }
+                _ => 1.0,
+            };
+            return modifier(from) / modifier(to);
+        }
         // Large Gear <-> Large Gear
         if is_large_to_large_gear(kf, kt, diff) {
             let source_axis_diff = kf.rotation_axis().choose(diff);
@@ -1967,6 +2049,16 @@ impl Kinetics {
         true
     }
     /// The creative motor's scroll value changed.
+    /// `ChainGearshiftBlockEntity.analogSignalChanged`.
+    pub fn set_chain_signal(&mut self, level: &mut dyn Level, pos: Pos, signal: i32) {
+        if !self.has(pos) || self.e(pos).chain_signal == signal {
+            return;
+        }
+        self.detach_kinetics(level, pos);
+        self.remove_source(level, pos);
+        self.em(pos).chain_signal = signal;
+        self.attach_kinetics(level, pos);
+    }
     pub fn set_motor_speed(&mut self, level: &mut dyn Level, pos: Pos, rpm: i32) -> bool {
         let Some(e) = self.entities.get_mut(&pos) else {
             return false;
@@ -2002,7 +2094,7 @@ impl Kinetics {
                 .map_or("-".to_owned(), |s| format!("{},{},{}", s[0], s[1], s[2]));
             let network = e.network.map_or("-".to_owned(), |n| n.to_string());
             out.push_str(&format!(
-                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
+                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
                 pos[0],
                 pos[1],
                 pos[2],
@@ -2024,6 +2116,7 @@ impl Kinetics {
                 u8::from(e.mixing.running),
                 e.mixing.running_ticks,
                 e.material,
+                e.chain_signal,
             ));
         }
         out
@@ -2039,8 +2132,9 @@ impl Kinetics {
         for line in lines {
             let f: Vec<&str> = line.split(' ').collect();
             // 14 fields before the water wheel and the press, 18 before the
-            // mixer, 20 before the wheel's wood, 21 since.
-            if ![14, 18, 20, 21].contains(&f.len()) {
+            // mixer, 20 before the wheel's wood, 21 before the chain gearshift's
+            // signal, 22 since.
+            if ![14, 18, 20, 21, 22].contains(&f.len()) {
                 continue;
             }
             let num = |i: usize| f[i].parse::<f32>().ok();
@@ -2062,6 +2156,7 @@ impl Kinetics {
             e.last_capacity_provided = num(11).unwrap_or(0.0);
             e.motor_speed = int(12).unwrap_or(MOTOR_DEFAULT_SPEED);
             e.crank_backwards = f[13] == "1";
+            e.chain_signal = f.get(21).and_then(|v| v.parse().ok()).unwrap_or(0);
             if f.len() >= 18 {
                 e.flow_score = int(14).unwrap_or(0);
                 e.pressing.running = f[15] == "1";
@@ -2095,6 +2190,7 @@ fn kind_key(k: Kind) -> String {
     let state = match k {
         Kind::Shaft(a)
         | Kind::CrushingWheel(a)
+        | Kind::Flywheel(a)
         | Kind::EncasedShaft(_, a)
         | Kind::Cogwheel(a)
         | Kind::LargeCogwheel(a)
@@ -2113,7 +2209,8 @@ fn kind_key(k: Kind) -> String {
         | Kind::WindmillBearing(f)
         | Kind::Drill(f) => f.name(),
         Kind::EncasedCog(_, _, a, ..) => a.name(),
-        Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => "",
+        Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => c.axis.name(),
+        Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm | Kind::Turntable => "",
         Kind::Deployer(f, _)
         | Kind::MechanicalPiston(f, ..)
         | Kind::Saw(f, _)
@@ -2127,6 +2224,22 @@ fn kind_key(k: Kind) -> String {
     };
     if let Kind::SplitShaft(_, _, powered) = k {
         return format!("{}[{state};{powered}]", k.block());
+    }
+    if let Kind::ChainDrive(c) = k {
+        return format!(
+            "{}[{state};{},{},false]",
+            k.block(),
+            c.part.name(),
+            c.along_first
+        );
+    }
+    if let Kind::ChainGearshift(c, p) = k {
+        return format!(
+            "{}[{state};{},{},{p}]",
+            k.block(),
+            c.part.name(),
+            c.along_first
+        );
     }
     if let Kind::EncasedCog(_, _, a, top, bottom) = k {
         return format!(
@@ -2146,6 +2259,9 @@ fn parse_kind_key(s: &str) -> Option<Kind> {
     let (first, second) = state.split_once(';').unwrap_or((state, ""));
     Kind::from_block(block, |key| match key {
         "axis" | "facing" => Some(first),
+        "part" => second.split(',').next(),
+        "axis_along_first" => second.split(',').nth(1),
+        "powered" if second.contains(',') => second.split(',').nth(2),
         "face" | "powered" => Some(second),
         "top_shaft" => Some(if second.starts_with('1') {
             "true"
@@ -2158,6 +2274,25 @@ fn parse_kind_key(s: &str) -> Option<Kind> {
             "false"
         }),
         _ => None,
+    })
+}
+
+fn chain_code(c: super::create_chain::Chain) -> u8 {
+    use super::create_chain::Part;
+    let axis = Axis::ALL.iter().position(|a| *a == c.axis).unwrap_or(0) as u8;
+    let part = [Part::Start, Part::Middle, Part::End, Part::None]
+        .iter()
+        .position(|p| *p == c.part)
+        .unwrap_or(3) as u8;
+    axis | part << 2 | u8::from(c.along_first) << 4
+}
+
+fn chain_from_code(state: u8) -> Option<super::create_chain::Chain> {
+    use super::create_chain::Part;
+    Some(super::create_chain::Chain {
+        axis: Axis::ALL.get(usize::from(state & 3)).copied()?,
+        part: [Part::Start, Part::Middle, Part::End, Part::None][usize::from(state >> 2 & 3)],
+        along_first: state & 16 != 0,
     })
 }
 
@@ -2257,6 +2392,10 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::MechanicalCrafter(d) => (27, dir(d)),
         Kind::CrushingWheel(a) => (28, axis(a)),
         Kind::EncasedShaft(b, a) => (29, axis(a) | u8::from(b) << 2),
+        Kind::Flywheel(a) => (31, axis(a)),
+        Kind::Turntable => (32, 0),
+        Kind::ChainDrive(c) => (33, chain_code(c)),
+        Kind::ChainGearshift(c, p) => (34, chain_code(c) | u8::from(p) << 5),
         Kind::EncasedCog(b, l, a, t, u) => (
             30,
             axis(a) | u8::from(b) << 2 | u8::from(l) << 3 | u8::from(t) << 4 | u8::from(u) << 5,
@@ -2305,6 +2444,10 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         12 => Kind::MechanicalPump(dir?),
         27 => Kind::MechanicalCrafter(dir?),
         28 => Kind::CrushingWheel(axis?),
+        31 => Kind::Flywheel(axis?),
+        32 => Kind::Turntable,
+        33 => Kind::ChainDrive(chain_from_code(state)?),
+        34 => Kind::ChainGearshift(chain_from_code(state)?, state & 32 != 0),
         29 => Kind::EncasedShaft(
             state & 4 != 0,
             Axis::ALL.get(usize::from(state & 3)).copied()?,
@@ -2702,6 +2845,36 @@ mod tests {
         assert_eq!(r.speed([2, 64, 0]), -16.0);
         assert_eq!(r.speed([1, 64, 1]), 16.0);
         assert_eq!(r.speed([1, 64, -1]), -16.0);
+    }
+
+    #[test]
+    fn chains_carry_the_speed_along_their_line_and_a_signal_changes_it() {
+        use super::super::create_chain::Chain;
+        let mut r = Rig::new();
+        let lone = Chain::new(Axis::Z);
+        let start = lone.update_shape(Dir::East, Some(lone));
+        let end = lone.update_shape(Dir::West, Some(start));
+        r.place([0, 64, -1], Kind::CreativeMotor(Dir::South));
+        r.place([0, 64, 0], Kind::ChainGearshift(start, false));
+        r.place([1, 64, 0], Kind::ChainDrive(end));
+        r.ticks(3);
+        assert_eq!(r.speed([1, 64, 0]), 16.0);
+        r.k.set_chain_signal(&mut r.world, [0, 64, 0], 15);
+        r.ticks(4);
+        assert_eq!(r.speed([0, 64, 0]), 16.0);
+        assert_eq!(r.speed([1, 64, 0]), 32.0);
+        assert_eq!(
+            parse_kind_key(&kind_key(Kind::ChainGearshift(start, true))),
+            Some(Kind::ChainGearshift(start, true))
+        );
+        assert_eq!(
+            parse_kind_key(&kind_key(Kind::Turntable)),
+            Some(Kind::Turntable)
+        );
+        assert!(
+            Kind::Turntable.has_shaft_towards(Dir::Down)
+                && !Kind::Turntable.has_shaft_towards(Dir::Up)
+        );
     }
 
     #[test]

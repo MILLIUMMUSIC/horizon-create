@@ -503,6 +503,16 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    inside. Not yet: the casing's connected textures (`EncasedCogCTBehaviour`), `canSurvive` beside large cogs, the
    encase's particles. Generators start again
    after a change of state (`switchToBlockState`'s `reActivateSource`: a wrenched motor no longer stops for good).
+   The encased chain drive and adjustable chain gearshift (`chain.rs`, `Kind::ChainDrive`, `Kind::ChainGearshift`:
+   `ChainDriveBlock`, `ChainGearshiftBlockEntity`): `part` and `axis_along_first` from their neighbours (`updateShape`, at
+   placement and on a neighbour's change), the speed passed along a line (`areBlocksConnected`), the gearshift's
+   modifier from its redstone signal (`getModifierForSignal`, saved with the kinetics) and `powered`; the wrench turns
+   them about their line and rebuilds the part (`updateAfterWrenched`). A shaft turns inside the casing. The flywheel
+   (`Kind::Flywheel`: a shaft along its axis, no stress, the wheel and shaft drawn turning; not yet `visualSpeed`'s
+   easing). The turntable (`Kind::Turntable`: turned from below, 4 su per rpm, its model turning): mobs on it turn at
+   `speed * 3 / 10` degrees a tick (`entityInside`, through `/tp`), the window's player's view turns
+   (`TurntableHandler`, a tick at a time rather than each frame, LAN guests not) and a box over its edge is carried
+   round. Not yet: rotating and mirroring chains on contraptions (`transform`).
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that
    pipes drain from every side but the top and can't fill. Items come in from belts and chutes
