@@ -137,6 +137,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if super::create_arms::block_entity(block, entity) {
         return;
     }
+    super::create_logistics::block_entity(block, entity);
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }

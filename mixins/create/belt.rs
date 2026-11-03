@@ -569,6 +569,9 @@ pub trait BeltWorld<S> {
     /// The brass tunnel at `pos` takes `stack` to distribute
     /// (`setStackToDistribute`), entered from `from`.
     fn tunnel_take(&mut self, _pos: Pos, _stack: S, _from: Dir) {}
+    /// `BeltTunnelInteractionHandler.flapTunnel`: the tunnel at `pos`'s
+    /// flap on `side` swings (in or out), if there is a tunnel.
+    fn flap_tunnel(&mut self, _pos: Pos, _side: Dir, _inward: bool) {}
     /// `Level.isLoaded`.
     fn loaded(&self, _pos: Pos) -> bool {
         true
@@ -1027,56 +1030,61 @@ impl<S: Stack> BeltInventory<S> {
         let movement_facing = belt.movement_facing();
         let segment = belt.position_for_offset(upcoming);
         let tunnel_pos = [segment[0], segment[1] + 1, segment[2]];
-        let Some(tunnel) = world.tunnel(tunnel_pos) else {
-            return false;
-        };
-        // stuckAtTunnel: a brass tunnel that can't take it (`canInsert`).
-        if tunnel.brass && tunnel.distributes && !tunnel.can_take {
-            self.items[i].belt_position = current as f32 + if positive { 0.99 } else { 0.01 };
-            return true;
-        }
-        if tunnel.brass {
-            if !tunnel.distributes {
-                return false;
+        let here = belt.position_for_offset(current);
+        let here_tunnel = [here[0], here[1] + 1, here[2]];
+        let next = world.tunnel(tunnel_pos);
+        let mut removed = false;
+        if let Some(tunnel) = next {
+            // stuckAtTunnel: a brass tunnel that can't take it (`canInsert`).
+            if tunnel.brass && tunnel.distributes && !tunnel.can_take {
+                self.items[i].belt_position = current as f32 + if positive { 0.99 } else { 0.01 };
+                return true;
             }
-            let stack = self.items[i].stack.clone();
-            self.items[i].stack.set_count(0);
-            world.tunnel_take(tunnel_pos, stack, movement_facing.opposite());
-            self.dirty = true;
-            return true;
-        }
-        if self.items[i].stack.count() > 1
-            && tunnel.junction
-            && movement_facing.axis() == tunnel.axis
-        {
-            for d in [Dir::South, Dir::West, Dir::North, Dir::East] {
-                if d.axis() == tunnel.axis || !tunnel.flaps.contains(&d) {
-                    continue;
+            if tunnel.brass {
+                if tunnel.distributes {
+                    let stack = self.items[i].stack.clone();
+                    self.items[i].stack.set_count(0);
+                    world.tunnel_take(tunnel_pos, stack, movement_facing.opposite());
+                    self.dirty = true;
+                    removed = true;
                 }
-                let n = d.normal();
-                let out = [segment[0] + n[0], segment[1] + n[1], segment[2] + n[2]];
-                if !world.loaded(out) {
-                    return true;
-                }
-                if !world.has_direct_input(out) || !world.can_insert_from_side(out, d) {
-                    continue;
-                }
-                let mut one = self.items[i].copied();
-                one.stack.set_count(1);
-                match world.direct_insert(out, &one, d) {
-                    Some(None) => {}
-                    Some(Some(left)) if left.count() == 0 => {}
-                    _ => return true,
-                }
-                let count = self.items[i].stack.count();
-                self.items[i].stack.set_count(count - 1);
-                self.dirty = true;
-                if count - 1 <= 1 {
-                    break;
+            } else if self.items[i].stack.count() > 1
+                && tunnel.junction
+                && movement_facing.axis() == tunnel.axis
+            {
+                for d in [Dir::South, Dir::West, Dir::North, Dir::East] {
+                    if d.axis() == tunnel.axis || !tunnel.flaps.contains(&d) {
+                        continue;
+                    }
+                    let n = d.normal();
+                    let out = [segment[0] + n[0], segment[1] + n[1], segment[2] + n[2]];
+                    if !world.loaded(out) {
+                        return true;
+                    }
+                    if !world.has_direct_input(out) || !world.can_insert_from_side(out, d) {
+                        continue;
+                    }
+                    let mut one = self.items[i].copied();
+                    one.stack.set_count(1);
+                    match world.direct_insert(out, &one, d) {
+                        Some(None) => {}
+                        Some(Some(left)) if left.count() == 0 => {}
+                        _ => return true,
+                    }
+                    world.flap_tunnel(tunnel_pos, d, false);
+                    let count = self.items[i].stack.count();
+                    self.items[i].stack.set_count(count - 1);
+                    self.dirty = true;
+                    if count - 1 <= 1 {
+                        break;
+                    }
                 }
             }
         }
-        false
+        // The item leaves the tunnel over this segment and enters the next's.
+        world.flap_tunnel(here_tunnel, movement_facing, false);
+        world.flap_tunnel(tunnel_pos, movement_facing.opposite(), true);
+        removed
     }
 
     /// `resolveEnding`.

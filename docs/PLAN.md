@@ -140,7 +140,9 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      funnel (`getShapeForPosition`): pulling items off the belt into the inventory behind
      (`BeltFunnelInteractionHandler`), or pushing one at a time onto it, by its shape and the belt's movement. The
      wrench switches it. An item clicked into a collecting andesite funnel's opening goes into the inventory behind. A horizontal funnel's flaps are drawn at rest (`FunnelRenderer`, its blockstate). Not yet: the belt funnel's own model
-     and flap offsets, the flaps moving (`FunnelFlapPacket`). Brass funnels: part 3.
+     and flap offsets. Brass funnels: part 3. Funnels and tunnels have block entities (any template, #5549): their flaps swing as
+     items pass (`FunnelBlockEntity.flap`, `BeltTunnelBlockEntity.flap`: told to clients in the block entity's
+     update tag) and are drawn by `native_block_entity_submit` as `FlapStuffs.renderFlaps` does, chasing back to rest.
    Fluids (run in the game: see VALIDATION.md):
    - Fluid pipes (`fluids.rs`: `FluidTransportBehaviour`, `PipeConnection` with its three layers, `FlowSource`,
      `FluidNetwork`, `FluidPropagator`, `OpenEndedPipe`; `fluid_glue.rs`): pipes open on the six sides
@@ -243,7 +245,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      goes. Its sides and flaps (`updateTunnelConnections`) are worked out each tick. A stack entering a junction
      along the belt puts one item onto each side with a flap that takes it, and waits while one doesn't
      (`flapTunnelsAndCheckIfStuck`). Flaps are drawn at rest (`BeltTunnelRenderer`/`FlapStuffs`: the content's blockstates add four flaps on the sides
-     `updateTunnelConnections` gives each shape). Not yet: the flaps moving (`TunnelFlapPacket`), hidden by a tunnel
+     `updateTunnelConnections` gives each shape). The flaps swing as items cross into and out of the tunnel on the belt (`flapTunnelsAndCheckIfStuck`) and as a
+     junction hands one sideways. Not yet: brass tunnels' flaps when distributing, hidden by a tunnel
      or extended funnel beside,
      the belt's casing under it (belts have no casing here), placing it only on belts (`BeltTunnelItem`; one placed
      elsewhere breaks at once), display links (its item handler, `cap`, reaches the belt below it: funnels, chutes and arms insert and extract through it).

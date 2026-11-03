@@ -27,7 +27,7 @@ use super::create_tunnel::{
 use super::create_kinetics::{Axis, Dir, Kind, Pos};
 use horizon_client::containers::ModBlockEntity;
 use horizon_client::items::ItemStack;
-use horizon_world::nbt::{JavaString, Tag};
+use horizon_world::nbt::{Compound, JavaString, Tag};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -602,7 +602,12 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
         if !has_inventory(self.game, behind) {
             return Some(stack.clone());
         }
-        insert_into(self.game, behind, f.facing, stack.clone())
+        let left = insert_into(self.game, behind, f.facing, stack.clone());
+        // BeltFunnelInteractionHandler: the flap swings in as it takes.
+        if left.as_ref().is_none_or(|l| l.count < stack.count) {
+            flap(self.game, pos, f.facing, true);
+        }
+        left
     }
     fn has_direct_input(&self, pos: Pos) -> bool {
         has_direct_input(self.game, pos)
@@ -647,6 +652,11 @@ impl BeltWorld<ItemStack> for BeltsWorld<'_, '_> {
     fn tunnel_take(&mut self, pos: Pos, stack: ItemStack, from: Dir) {
         let dim = self.game.dim.id().to_owned();
         with_state(|s| s.tunnels.entry((dim, pos)).or_default().brass.set_stack(Some(stack), Some(from)));
+    }
+    fn flap_tunnel(&mut self, pos: Pos, side: Dir, inward: bool) {
+        if tunnel_at(self.game, pos).is_some() {
+            flap(self.game, pos, side, inward);
+        }
     }
     fn loaded(&self, pos: Pos) -> bool {
         self.game.world.loaded(pos[0], pos[2])
@@ -2083,6 +2093,134 @@ pub(super) fn funnels_tick(game: &mut Game<'_>, dimension: &str) {
     }
 }
 
+/// Funnels' and tunnels' block entities (`FunnelBlockEntity`,
+/// `BeltTunnelBlockEntity`): they hold only what their flaps did, for
+/// clients to swing them.
+pub(super) const FUNNEL_ENTITY: &str = "create:funnel";
+pub(super) const TUNNEL_ENTITY: &str = "create:belt_tunnel";
+
+/// `native_block_entity` for funnels and tunnels.
+pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>) {
+    if entity.is_some() {
+        return;
+    }
+    if super::create_funnel::is_funnel(block) {
+        *entity = Some((FUNNEL_ENTITY.to_owned(), Compound::new()));
+    } else if TunnelState::from_block(block, |_| None).is_some() {
+        *entity = Some((TUNNEL_ENTITY.to_owned(), Compound::new()));
+    }
+}
+
+/// `FunnelBlockEntity.flap` / `BeltTunnelBlockEntity.flap` on the server:
+/// the flap on `side` swings (in or out), told to clients with the block
+/// entity (`FunnelFlapPacket`, `TunnelFlapPacket`).
+pub(super) fn flap(game: &mut Game<'_>, pos: Pos, side: Dir, inward: bool) {
+    let key = format!("Flap{}", side.name());
+    let done = game.native_with_mod_block_entity(pos, |be| {
+        let n = match be.nbt.get(&JavaString::from(key.as_str())) {
+            Some(Tag::Int(n)) => *n,
+            _ => 0,
+        };
+        be.nbt.insert(JavaString::from(key.as_str()), Tag::Int(n.wrapping_add(1)));
+        be.nbt.insert(JavaString::from(format!("{key}In").as_str()), Tag::Byte(i8::from(inward)));
+    });
+    if done.is_some() {
+        game.native_block_entity_sync(pos);
+    }
+}
+
+/// `native_block_entity_update_tag`: a funnel's or tunnel's flaps.
+pub(super) fn update_tag(entity: &horizon_client::containers::ModBlockEntity, tag: &mut Option<Compound>) {
+    if entity.id == FUNNEL_ENTITY || entity.id == TUNNEL_ENTITY {
+        *tag = Some(entity.nbt.clone());
+    }
+}
+
+/// Clients' flaps: by position and side, the swings counted and the value
+/// at the last one (`LerpedFloat` chasing 0 at .05, `createChasingFlap`).
+type ClientFlaps = HashMap<(Pos, Dir), (i32, f32, std::time::Instant)>;
+static CLIENT_FLAPS: Mutex<Option<ClientFlaps>> = Mutex::new(None);
+
+/// `FlapStuffs`: the flaps' four segments, their step and pivot.
+const FLAP_X_OFFSET: f32 = 0.075 / 16.0;
+const FLAP_SEGMENT_STEP: f32 = -3.05 / 16.0;
+
+/// `FlapStuffs.flapAngle`.
+fn flap_angle(flapness: f32, segment: i32) -> f32 {
+    let intensity = if segment == 3 { 1.5 } else { (segment + 1) as f32 };
+    let angle = ((1.0 - flapness.abs()) * std::f32::consts::PI * intensity).sin() * 30.0 * flapness;
+    if flapness < 0.0 { angle * 0.5 } else { angle }
+}
+
+/// `native_block_entity_submit`: a horizontal funnel's flap
+/// (`FunnelRenderer`) and a tunnel's flaps (`BeltTunnelRenderer`), swinging
+/// after each `flap` the server told of (`FlapStuffs.renderFlaps`).
+pub(super) fn submit(
+    game: &Game<'_>,
+    pos: Pos,
+    entity: &horizon_client::containers::ModBlockEntity,
+    draw: &mut super::native_block_entity_draw::BlockEntityDraw,
+) {
+    // (side, pivot, z offset, flap model)
+    let flaps: Vec<(Dir, [f32; 3], f32, &str)> = if entity.id == FUNNEL_ENTITY {
+        match funnel_at(game, pos) {
+            // -getFlapOffset: 1/16 out for a funnel not on a belt.
+            Some(f) if f.facing.axis() != Axis::Y => {
+                vec![(f.facing, [0.0, 10.0 / 16.0, 9.5 / 16.0], 1.0 / 16.0, "create:hz_part_funnel_flap")]
+            }
+            _ => Vec::new(),
+        }
+    } else if entity.id == TUNNEL_ENTITY {
+        match tunnel_at(game, pos) {
+            Some(t) => t
+                .flaps(pos, &World { game })
+                .into_iter()
+                .map(|d| (d, [0.0, 10.0 / 16.0, 1.0 / 16.0], 0.0, "create:hz_part_belt_tunnel_flap"))
+                .collect(),
+            None => Vec::new(),
+        }
+    } else {
+        return;
+    };
+    let now = std::time::Instant::now();
+    let mut still = true;
+    let mut guard = CLIENT_FLAPS.lock().unwrap_or_else(|e| e.into_inner());
+    let known = guard.get_or_insert_with(HashMap::new);
+    for (side, pivot, z, model) in flaps {
+        let key = format!("Flap{}", side.name());
+        let count = match entity.nbt.get(&JavaString::from(key.as_str())) {
+            Some(Tag::Int(n)) => *n,
+            _ => 0,
+        };
+        let inward = matches!(entity.nbt.get(&JavaString::from(format!("{key}In").as_str())), Some(Tag::Byte(1)));
+        let entry = known.entry((pos, side)).or_insert((count, 0.25, now));
+        if entry.0 != count {
+            *entry = (count, if inward { -1.0 } else { 1.0 }, now);
+        }
+        let ticks = now.duration_since(entry.2).as_secs_f32() * 20.0;
+        let mut f = entry.1 * 0.95f32.powf(ticks);
+        if f.abs() < 1.0 / 128.0 {
+            f = 0.0;
+        } else {
+            still = false;
+        }
+        draw.push();
+        draw.rotate_about([0.0, 1.0, 0.0], side.opposite().horizontal_angle(), [0.5; 3]);
+        draw.translate([FLAP_X_OFFSET, 0.0, z]);
+        for segment in 0..4 {
+            draw.push();
+            draw.rotate_about([1.0, 0.0, 0.0], flap_angle(f, segment), pivot);
+            game.native_draw_block(draw, model, &[]);
+            draw.pop();
+            draw.translate([FLAP_SEGMENT_STEP, 0.0, 0.0]);
+        }
+        draw.pop();
+    }
+    if still {
+        draw.keep();
+    }
+}
+
 /// `FilteringBehaviour.test` as a predicate on stacks.
 fn passes(filter: Option<&Filter>) -> impl Fn(&ItemStack) -> bool + '_ {
     move |s| filter.is_none_or(|f| f.test(&s.item))
@@ -2110,6 +2248,7 @@ fn extract(game: &mut Game<'_>, pos: Pos, f: FunnelState, behind: Pos, filter: O
     };
     let (at, motion) = extracted_item(pos, f.facing);
     game.spawn_item(stack, at, motion, PICKUP_DELAY);
+    flap(game, pos, f.facing, false);
     true
 }
 
@@ -2180,6 +2319,8 @@ fn collect(game: &mut Game<'_>, pos: Pos, f: FunnelState, filter: Option<&Filter
         if n != stack.count {
             game.dropped[i].stack.count = n;
             changed = true;
+            // AbstractFunnelBlock.entityInside: the flap swings in.
+            flap(game, pos, f.facing, true);
         }
     }
     if changed {

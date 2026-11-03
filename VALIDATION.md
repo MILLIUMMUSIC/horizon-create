@@ -12,6 +12,10 @@ Create's sounds: the client hears `create:wrench_rotate` when a shaft is wrenche
 when a slimeball makes a mechanical piston sticky (it turns into a sticky one, a slimeball used up in survival).
 Not checked yet: the contraption, depot and press sounds.
 
+Moving flaps: an andesite funnel set on a chest's side (`setblock`) gets its block entity, counts its swings as it
+puts cobblestone out in front (`Flapsouth` 1, then 5 as the items were cleared) and its flap is drawn swung out,
+moving between frames. Not checked yet: tunnels' flaps on a belt, a collecting funnel's flap swinging in.
+
 Ceiling arms: a mechanical arm placed against the underside of a stone block hangs from it (`ceiling=true`),
 drawn upside down; with a depot to take from and one to deposit to (cogwheel and creative motor beside it), it
 moved 8 iron ingots from the one to the other.
