@@ -26,11 +26,13 @@ pub enum PistonState {
 }
 
 impl PistonState {
+    #[allow(dead_code)]
     pub const ALL: [PistonState; 3] = [
         PistonState::Retracted,
         PistonState::Moving,
         PistonState::Extended,
     ];
+    #[allow(dead_code)]
     pub fn name(self) -> &'static str {
         match self {
             PistonState::Retracted => "retracted",
@@ -1692,6 +1694,7 @@ impl ElevatorColumn {
         }
     }
 
+    #[allow(dead_code)]
     pub fn remove(&mut self, y: i32) {
         self.contacts.retain(|c| *c != y);
     }

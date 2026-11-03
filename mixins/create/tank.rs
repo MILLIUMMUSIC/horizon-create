@@ -244,6 +244,7 @@ impl Tanks {
     }
 
     /// How the block at `pos` looks (`notifyMultiUpdated` and `setWindows`).
+    #[allow(dead_code)]
     pub fn look(&self, pos: Pos) -> Option<Look> {
         let part = self.parts.get(&pos)?;
         let c = part.controller_of(pos);

@@ -377,6 +377,7 @@ pub enum PipeBlock {
 
 impl PipeBlock {
     /// A straight pipe along `axis`.
+    #[allow(dead_code)]
     pub fn straight(axis: Axis) -> PipeBlock {
         let mut open = [false; 6];
         for d in Dir::ALL {
@@ -1777,6 +1778,7 @@ pub enum PipeSide {
 }
 
 impl PipeSide {
+    #[allow(dead_code)]
     pub const ALL: [PipeSide; 5] = [
         PipeSide::Closed,
         PipeSide::Rim,
@@ -1793,6 +1795,7 @@ impl PipeSide {
             PipeSide::DetailedConnection => "detailed",
         }
     }
+    #[allow(dead_code)]
     pub fn parse(s: &str) -> Option<PipeSide> {
         PipeSide::ALL.into_iter().find(|p| p.name() == s)
     }

@@ -54,6 +54,7 @@ impl ActorKind {
         }
     }
 
+    #[allow(dead_code)]
     pub fn block(self) -> &'static str {
         match self {
             ActorKind::Drill => DRILL,
@@ -613,6 +614,7 @@ impl Breaker {
 }
 
 /// `DrillBlock.getDamage`.
+#[allow(dead_code)]
 pub fn drill_damage(rpm: f32) -> f64 {
     let s = f64::from(rpm.abs());
     let sum = (s / 16.0).min(2.0) + (s / 32.0).min(4.0) + (s / 64.0).min(4.0);

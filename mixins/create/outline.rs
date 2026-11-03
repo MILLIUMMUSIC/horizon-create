@@ -40,10 +40,12 @@ pub struct Entry {
 
 impl Entry {
     /// `isFading`.
+    #[allow(dead_code)]
     pub fn fading(&self) -> bool {
         self.ticks_till_removal < 0
     }
     /// The outline's alpha this tick: 1, then down to 0 as it fades.
+    #[allow(dead_code)]
     pub fn alpha(&self) -> f32 {
         if self.fading() {
             (self.fade as f32 / FADE_TICKS as f32).clamp(0.0, 1.0)
