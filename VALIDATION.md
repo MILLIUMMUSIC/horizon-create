@@ -874,3 +874,10 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   outline around both shows with the glue in the main hand afterwards, screenshot). The glue's use is counted out of
   creative only (not checked).
 
+## Mechanical saw facing up (macOS, offscreen)
+
+- A saw facing up driven by a creative motor: an andesite alloy dropped on it goes into its inventory, is cut after
+  about 18 s of game time at 256 RPM-ish processing (`ProcessingTime` counting down in the block data), the stone
+  sound plays and six shafts are thrown off the east side (`/data get entity`). Not checked: a belt feeding it and the
+  belt or depot ahead taking the pieces, wood and stone sounds by name, stacks of several items.
+

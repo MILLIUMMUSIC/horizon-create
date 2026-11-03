@@ -674,6 +674,7 @@ fn has_direct_input(game: &Game<'_>, pos: Pos) -> bool {
     }
     match block_name(game, pos).as_deref() {
         Some(super::create_machines::DEPOT) => true,
+        Some(name) if super::create_machines::is_saw(name) => prop(game, pos, "facing").as_deref() == Some("up"),
         // canDirectlyInsert: an open chute not under one facing down.
         Some(name) if is_chute_block(name) => {
             chute_at(game, pos).is_some_and(|(f, s)| super::create_chute::is_open(f, s))
@@ -706,6 +707,28 @@ fn direct_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack) -> Option<Opti
                 held.count = held.count.min(max);
                 be.items[0] = Some(held);
                 Some(left)
+            })
+            .flatten()
+        }
+        // The saw facing up: one item into the empty processing inventory
+        // (its slot limit), the rest stays where it was.
+        Some(name) if super::create_machines::is_saw(name) => {
+            if prop(game, pos, "facing").as_deref() != Some("up") {
+                return None;
+            }
+            game.native_with_mod_block_entity(pos, |be| {
+                if be.items.len() < 32 {
+                    be.items.resize(32, None);
+                }
+                if be.items.iter().any(Option::is_some) {
+                    return None;
+                }
+                let mut one = stack.clone();
+                one.count = 1;
+                be.items[0] = Some(one);
+                let mut left = stack.clone();
+                left.count -= 1;
+                Some((left.count > 0).then_some(left))
             })
             .flatten()
         }
@@ -2677,7 +2700,7 @@ fn side_insert(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack, simul
     if simulate {
         let free = match block_name(game, pos).as_deref() {
             Some(name) if is_chute_block(name) => chute_accepts(game, pos, &stack),
-            Some(name) if name == super::create_machines::DEPOT => {
+            Some(name) if name == super::create_machines::DEPOT || super::create_machines::is_saw(name) => {
                 use horizon_client::containers::BlockEntity as B;
                 match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
                     Some(B::Mod(m)) => m.items.iter().all(Option::is_none),
@@ -3370,4 +3393,19 @@ pub(super) fn with_belt_segment<R>(
         let belt = e.belt;
         Some(f(&mut e.inv, &belt, index))
     })
+}
+
+/// What the saw's belt handoff needs of this file (`DirectBeltInputBehaviour`
+/// at the next position).
+pub(super) fn has_belt_input(game: &Game<'_>, pos: Pos) -> bool {
+    has_direct_input(game, pos)
+}
+
+pub(super) fn can_insert_side(game: &Game<'_>, pos: Pos, side: Dir) -> bool {
+    can_insert_from_side(game, pos, side)
+}
+
+/// `handleInsertion` from `side`: what is left of `stack`.
+pub(super) fn insert_side(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack) -> Option<ItemStack> {
+    side_insert(game, pos, side, stack, false)
 }

@@ -388,8 +388,12 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       `DirectionalAxisKineticBlock` as the deployer, a block per `axis_along_first` on a lightning rod's template;
       a standing saw facing sideways breaks sawable blocks in front and fells the tree, its drops thrown away from
       it (`dropItemFromCutTree`). The blade is a partial (active, reversed or still), drawn on moving structures
-      too. Not yet: the saw facing up processing items (`create:cutting`, belts and dropped items) and its filter,
-      `flipped`, the tree's blocks' break effects by chance (all show), dynamic trees, wrenching a saw.
+      too. A saw facing up processes items (`SawBlockEntity`: a block entity with `ProcessingInventory`'s
+      state on its lightning rod template; an item lands on it or comes from a belt or depot end, one at a time as
+      `bulkCutting` is off, `create:cutting` recipes in round robin, the time scaled by speed, its pieces handed to
+      the belt or depot ahead or thrown, the stone or wood sound by a name heuristic). Not yet: its filter, cutting
+      by vanilla stonecutting recipes (Horizon's recipe tables don't hand them to mods: an engine gap, no issue
+      yet), package contents, belt funnels it hands to, the item and particles drawn on it, `flipped`, the tree's blocks' break effects by chance (all show), dynamic trees, wrenching a saw.
       Part 4c, storage, deployers and portable storage interfaces (**done, checked in the game in part**): the
       structure's storage is its chests', barrels' and shulker boxes' slots (`create:chest_mounted_storage`,
       `create:simple_mounted_storage`) in its blocks' order, read and written in their captured data

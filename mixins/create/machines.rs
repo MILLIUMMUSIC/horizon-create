@@ -36,6 +36,7 @@ pub(super) const BASIN: &str = "create:basin";
 const DEPOT_SLOTS: usize = 9;
 /// MillstoneBlockEntity: `inputInv`, then `outputInv`.
 const MILLSTONE_SLOTS: usize = 10;
+const SAW_SLOTS: usize = 32;
 /// BasinBlockEntity: `inputInventory`, then `outputInventory`.
 const BASIN_ALL_SLOTS: usize = 2 * BASIN_SLOTS;
 /// `BasinBlockEntity.recipeBackupCheck`: 20 lazy ticks of 10.
@@ -141,7 +142,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || is_saw(block)) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -151,7 +152,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || super::create_logistics::is_chute_block(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || is_saw(block) || super::create_logistics::is_chute_block(block) {
         *ticks = true;
     }
 }
@@ -168,6 +169,8 @@ pub(super) fn block_entity_container(block: &str, container: &mut Option<ModCont
     let (slots, inputs, outputs): (usize, Vec<usize>, Vec<usize>) = match block {
         DEPOT => (DEPOT_SLOTS, vec![0], (0..DEPOT_SLOTS).collect()),
         MILLSTONE => (MILLSTONE_SLOTS, vec![0], (1..MILLSTONE_SLOTS).collect()),
+        // ProcessingInventory: 32 slots, input in the first, nothing taken.
+        b if is_saw(b) => (SAW_SLOTS, vec![0], Vec::new()),
         // The output inventory forbids insertion; both are taken from
         // (`CombinedInvWrapper`).
         BASIN => (BASIN_ALL_SLOTS, (0..BASIN_SLOTS).collect(), (0..BASIN_ALL_SLOTS).collect()),
@@ -176,9 +179,11 @@ pub(super) fn block_entity_container(block: &str, container: &mut Option<ModCont
         _ => return,
     };
     let all: Vec<usize> = (0..slots).collect();
+    // The saw's inventory answers every side but the bottom.
+    let bottom = is_saw(block);
     *container = Some(ModContainer {
         slots,
-        faces: std::array::from_fn(|_| all.clone()),
+        faces: std::array::from_fn(|i| if bottom && i == 0 { Vec::new() } else { all.clone() }),
         inputs,
         outputs,
         menu: None,
@@ -241,6 +246,11 @@ fn insert_stacked(
 
 /// The recipes of `kind` (`create:pressing`) that take `stack`, first.
 fn find_recipe(game: &Game<'_>, kind: &'static str, stack: &ItemStack) -> Option<Recipe> {
+    find_recipes(game, kind, stack).into_iter().next()
+}
+
+/// Every recipe of `kind` that takes `stack`, in file order.
+fn find_recipes(game: &Game<'_>, kind: &'static str, stack: &ItemStack) -> Vec<Recipe> {
     let mut guard = machines();
     let m = guard.get_or_insert_with(Machines::default);
     // The server's table straight: `native_recipes_of_type` and
@@ -260,8 +270,9 @@ fn find_recipe(game: &Game<'_>, kind: &'static str, stack: &ItemStack) -> Option
             .collect()
     });
     list.iter()
-        .find(|(_, i)| i.as_ref().is_some_and(|i| i.test(stack)))
+        .filter(|(_, i)| i.as_ref().is_some_and(|i| i.test(stack)))
         .map(|(r, _)| r.clone())
+        .collect()
 }
 
 /// `native_recipe_ingredient` without its player: ids and `#tags`, bare
@@ -346,6 +357,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
     match entity.id.as_str() {
         DEPOT => depot_tick(game, pos, entity),
         MILLSTONE => millstone_tick(game, pos, entity),
+        b if is_saw(b) => saw_tick(game, pos, entity),
         BASIN => basin_tick(game, pos, entity),
         super::create_logistics::CHUTE => super::create_logistics::chute_tick(game, pos, entity),
         _ => {
@@ -558,6 +570,199 @@ fn millstone_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
         None => 100,
     };
     put_int(&mut entity.nbt, "Timer", timer);
+}
+
+pub(super) fn is_saw(block: &str) -> bool {
+    block == super::create_actors::SAW || block == super::create_actors::SAW_ALONG
+}
+
+fn get_float(nbt: &Compound, key: &str) -> Option<f32> {
+    match nbt.get(&JavaString::from(key)) {
+        Some(Tag::Float(v)) => Some(f32::from_bits(*v)),
+        _ => None,
+    }
+}
+
+fn put_float(nbt: &mut Compound, key: &str, v: f32) {
+    nbt.insert(JavaString::from(key), Tag::Float(v.to_bits()));
+}
+
+/// Wood or stone for `SawBlockEntity.applyRecipe`'s `playEvent` (Create asks
+/// the block's sound type; here the item's name stands in for it).
+fn is_wood(item: &str) -> bool {
+    const WOODS: [&str; 12] = [
+        "oak", "spruce", "birch", "jungle", "acacia", "mangrove", "cherry", "bamboo", "crimson", "warped",
+        "planks", "log",
+    ];
+    let path = item.rsplit(':').next().unwrap_or(item);
+    WOODS.iter().any(|w| path.contains(w)) && !path.contains("stone")
+}
+
+/// `SawBlockEntity.tick` for a saw facing up (`canProcess`): the item it
+/// holds is cut (`start`, `applyRecipe`) and its pieces handed on along the
+/// saw's way (the next belt or depot, else thrown).
+fn saw_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
+    if entity.items.len() < SAW_SLOTS {
+        entity.items.resize(SAW_SLOTS, None);
+    }
+    let name = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(pos[0], pos[1], pos[2]))
+        .map(|s| (s.name.clone(), s.properties.get("facing").cloned()));
+    let Some((block, facing)) = name else {
+        return;
+    };
+    if facing.as_deref() != Some("up") {
+        return;
+    }
+    // SawBlock.updateEntityAfterFallOn: an item landing on it goes in.
+    take_landed(game, pos, 1.0, |_, mut stack| {
+        if entity.items.iter().any(Option::is_some) {
+            return Some(stack);
+        }
+        // The slot limit of 1 (`bulkCutting` is off).
+        let mut one = stack.clone();
+        one.count = 1;
+        entity.items[0] = Some(one);
+        stack.count -= 1;
+        (stack.count > 0).then_some(stack)
+    });
+    let speed = super::create_glue::with_kinetics(game, |k, level| k.speed_of(level, pos));
+    if speed == 0.0 {
+        return;
+    }
+    let empty = entity.items.iter().all(Option::is_none);
+    let applied = get_bool(&entity.nbt, "AppliedRecipe");
+    let remaining = get_float(&entity.nbt, "ProcessingTime").unwrap_or(-1.0);
+    if remaining == -1.0 {
+        if !empty && !applied {
+            saw_start(game, entity);
+        }
+        return;
+    }
+    let remaining = remaining - (speed.abs() / 24.0).clamp(1.0, 128.0);
+    put_float(&mut entity.nbt, "ProcessingTime", remaining);
+    if remaining < 5.0 && !applied {
+        if let Some(input) = entity.items[0].clone() {
+            let sound = if is_wood(&input.item) { "saw_activate_wood" } else { "saw_activate_stone" };
+            super::create_glue::play_create_sound(game, sound, pos.map(|v| f64::from(v) + 0.5), 3.0, 1.0);
+        }
+        saw_apply(game, entity);
+        put_bool(&mut entity.nbt, "AppliedRecipe", true);
+        put_float(&mut entity.nbt, "RecipeTime", 20.0);
+        put_float(&mut entity.nbt, "ProcessingTime", 20.0);
+        return;
+    }
+    if remaining > 0.0 {
+        return;
+    }
+    put_float(&mut entity.nbt, "ProcessingTime", 0.0);
+    // getItemMovementVec.
+    let along_x = block != super::create_actors::SAW_ALONG;
+    let sign = if speed < 0.0 { -1 } else { 1 };
+    let movement = if along_x { [sign, 0, 0] } else { [0, 0, -sign] };
+    let toward = super::create_kinetics::Dir::nearest(movement);
+    let next = [pos[0] + movement[0], pos[1], pos[2] + movement[2]];
+    if super::create_logistics::has_belt_input(game, next) {
+        if !super::create_logistics::can_insert_side(game, next, toward) {
+            return;
+        }
+        for slot in entity.items.iter_mut() {
+            let Some(stack) = slot.clone() else {
+                continue;
+            };
+            let left = super::create_logistics::insert_side(game, next, toward, stack.clone());
+            if left.as_ref().is_some_and(|l| l.count == stack.count) {
+                continue;
+            }
+            *slot = left;
+        }
+        if entity.items.iter().all(Option::is_none) {
+            saw_reset(entity);
+        }
+        return;
+    }
+    // Eject Items.
+    let at = [
+        f64::from(pos[0]) + 0.5 + f64::from(movement[0]) * 0.5,
+        f64::from(pos[1]) + 1.0,
+        f64::from(pos[2]) + 0.5 + f64::from(movement[2]) * 0.5,
+    ];
+    let motion = [f64::from(movement[0]) * 0.0625, 0.125, f64::from(movement[2]) * 0.0625];
+    for slot in entity.items.iter_mut() {
+        if let Some(stack) = slot.take() {
+            game.spawn_item(stack, at, motion, 10);
+        }
+    }
+    saw_reset(entity);
+}
+
+fn saw_reset(entity: &mut ModBlockEntity) {
+    put_float(&mut entity.nbt, "ProcessingTime", -1.0);
+    put_float(&mut entity.nbt, "RecipeTime", 0.0);
+    put_bool(&mut entity.nbt, "AppliedRecipe", false);
+}
+
+/// `SawBlockEntity.start`: the recipe taken next (the round robin over
+/// those that fit) and how long the cut takes.
+fn saw_start(game: &Game<'_>, entity: &mut ModBlockEntity) {
+    let Some(input) = entity.items[0].clone() else {
+        return;
+    };
+    let recipes = find_recipes(game, "create:cutting", &input);
+    put_bool(&mut entity.nbt, "AppliedRecipe", false);
+    if recipes.is_empty() {
+        put_float(&mut entity.nbt, "ProcessingTime", 10.0);
+        put_float(&mut entity.nbt, "RecipeTime", 10.0);
+        return;
+    }
+    let mut index = get_int(&entity.nbt, "RecipeIndex") + 1;
+    if index as usize >= recipes.len() {
+        index = 0;
+    }
+    put_int(&mut entity.nbt, "RecipeIndex", index);
+    let time = recipes[index as usize].processing_time as f32 * (input.count / 5).max(1) as f32;
+    put_float(&mut entity.nbt, "ProcessingTime", time);
+    put_float(&mut entity.nbt, "RecipeTime", time);
+}
+
+/// `SawBlockEntity.applyRecipe`: the input's cuts rolled once per item of
+/// the stack, into the slots after the first; with no recipe the input stays.
+fn saw_apply(game: &Game<'_>, entity: &mut ModBlockEntity) {
+    let Some(input) = entity.items[0].clone() else {
+        return;
+    };
+    let recipes = find_recipes(game, "create:cutting", &input);
+    if recipes.is_empty() {
+        return;
+    }
+    let mut index = get_int(&entity.nbt, "RecipeIndex") as usize;
+    if index >= recipes.len() {
+        index = 0;
+        put_int(&mut entity.nbt, "RecipeIndex", 0);
+    }
+    let recipe = &recipes[index];
+    for slot in entity.items.iter_mut() {
+        *slot = None;
+    }
+    let mut list: Vec<ItemStack> = Vec::new();
+    let add = |list: &mut Vec<ItemStack>, stack: ItemStack| {
+        if let Some(have) = list.iter_mut().find(|s| s.same_item_same_components(&stack)) {
+            have.count += stack.count;
+        } else {
+            list.push(stack);
+        }
+    };
+    for _ in 0..input.count {
+        for out in roll(recipe) {
+            add(&mut list, out);
+        }
+    }
+    for (slot, stack) in list.into_iter().enumerate().take(SAW_SLOTS - 1) {
+        entity.items[slot + 1] = Some(stack);
+    }
 }
 
 fn mill(game: &mut Game<'_>, entity: &mut ModBlockEntity) {
