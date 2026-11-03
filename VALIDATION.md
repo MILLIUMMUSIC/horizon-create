@@ -931,3 +931,9 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - The mouse wheel over a brass tunnel steps its selection mode: two scrolls up read `Brass Tunnel: Round Robin` on the
   action bar (screenshot). The wrench's window toggle was not tried.
 
+## Piston movement mode (macOS, offscreen)
+
+- The mouse wheel over a mechanical piston steps its movement mode: one scroll up reads
+  `Movement Mode: Place only in Starting Position` on the action bar (screenshot). The modes' effect on a running
+  piston is covered by a unit test only; it was not run in the game.
+

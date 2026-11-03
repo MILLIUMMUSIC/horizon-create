@@ -1046,6 +1046,11 @@ pub struct Actuator {
     pub assemble_next_tick: bool,
     pub waiting: bool,
     pub last_rpm: f32,
+    /// `MovementMode`: 0 always place when stopped, 1 only in the starting
+    /// position, 2 only when the anchor is destroyed.
+    pub mode: u8,
+    /// `getInitialOffset`: where the structure started.
+    pub initial: i32,
 }
 
 impl Default for Actuator {
@@ -1057,6 +1062,8 @@ impl Default for Actuator {
             assemble_next_tick: true,
             waiting: false,
             last_rpm: 0.0,
+            mode: 0,
+            initial: 0,
         }
     }
 }
@@ -1124,6 +1131,7 @@ impl Actuator {
         }
         self.running = true;
         self.offset = c.initial_extension_progress as f32;
+        self.initial = c.initial_extension_progress;
         true
     }
 
@@ -1178,9 +1186,7 @@ impl Actuator {
             if colliding(grid, dir) {
                 // collided(): back on the grid, then placed.
                 let at = self.grid_offset(self.offset);
-                return ActuatorStep::Disassemble {
-                    grid_offset: self.grid_offset(at as f32 - speed),
-                };
+                return self.try_disassemble(self.grid_offset(at as f32 - speed));
             }
         }
         self.offset = new;
@@ -1190,11 +1196,19 @@ impl Actuator {
             } else {
                 self.extension_length as f32
             };
-            return ActuatorStep::Disassemble {
-                grid_offset: self.offset as i32,
-            };
+            return self.try_disassemble(self.offset as i32);
         }
         ActuatorStep::Moved
+    }
+
+    /// `LinearActuatorBlockEntity.tryDisassemble`: stopped, its structure placed
+    /// unless the movement mode keeps it (then it waits for a speed change).
+    fn try_disassemble(&mut self, grid_offset: i32) -> ActuatorStep {
+        if self.mode == 2 || (self.mode == 1 && (self.offset + 0.5) as i32 != self.initial) {
+            self.waiting = true;
+            return ActuatorStep::Idle;
+        }
+        ActuatorStep::Disassemble { grid_offset }
     }
 
     /// `disassemble`: stopped, its contraption placed.
@@ -2246,6 +2260,46 @@ mod tests {
             w.0.insert([-i, 0, 0], B::Part(PistonPart::Pole { facing: Dir::East }));
         }
         w
+    }
+
+    #[test]
+    fn a_movement_mode_keeps_the_structure_from_being_placed() {
+        let mut a = Actuator {
+            running: true,
+            offset: 3.995,
+            extension_length: 4,
+            assemble_next_tick: false,
+            initial: 0,
+            mode: 2,
+            ..Actuator::default()
+        };
+        // Never place: it waits at the end for a speed change.
+        let step = a.tick(-16.0, Dir::East, [0, 0, 0], false, |_, _| false);
+        assert_eq!(step, ActuatorStep::Idle);
+        assert!(a.waiting);
+        // Place only in the starting position: away from it, it waits too.
+        let mut b = Actuator {
+            mode: 1,
+            waiting: false,
+            offset: 3.995,
+            ..a
+        };
+        assert_eq!(
+            b.tick(-16.0, Dir::East, [0, 0, 0], false, |_, _| false),
+            ActuatorStep::Idle
+        );
+        assert!(b.waiting);
+        // The default places it.
+        let mut c = Actuator {
+            mode: 0,
+            waiting: false,
+            offset: 3.995,
+            ..a
+        };
+        assert!(matches!(
+            c.tick(-16.0, Dir::East, [0, 0, 0], false, |_, _| false),
+            ActuatorStep::Disassemble { .. }
+        ));
     }
 
     #[test]

@@ -1169,6 +1169,13 @@ pub(super) fn from_client(game: &mut Game<'_>, player: u128, channel: &str, data
     if value == 0 || value.abs() > max {
         return;
     }
+    if value == PISTON_MODE_UP || value == PISTON_MODE_DOWN {
+        if let Some(label) = super::create_contraptions::step_piston_mode(game, pos, value == PISTON_MODE_UP) {
+            let line = format!("Movement Mode: {label}");
+            super::create_contraptions::tell_later(player, horizon_client::text::Text::literal(line));
+        }
+        return;
+    }
     if value == TUNNEL_MODE_UP || value == TUNNEL_MODE_DOWN {
         if let Some(label) = super::create_logistics::step_tunnel_mode(game, pos, value == TUNNEL_MODE_UP) {
             let line = format!("Brass Tunnel: {label}");
@@ -1196,6 +1203,9 @@ const ARM_MODE_DOWN: i32 = -255;
 /// The same for a brass tunnel's selection mode.
 const TUNNEL_MODE_UP: i32 = 254;
 const TUNNEL_MODE_DOWN: i32 = -254;
+/// And a mechanical piston's movement mode.
+const PISTON_MODE_UP: i32 = 253;
+const PISTON_MODE_DOWN: i32 = -253;
 
 /// `V1`, the block's position and its new value.
 fn encode_value(pos: Pos, value: i32) -> Vec<u8> {
@@ -1280,6 +1290,17 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         let step = if steps > 0.0 { ARM_MODE_UP } else { ARM_MODE_DOWN };
         if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
             log::debug!("Create: arm mode: {e}");
+        }
+        return;
+    }
+    // A mechanical piston's movement mode, likewise.
+    if let Some(hit) = game.pick()
+        && super::create_contraptions::is_piston(game, hit.pos)
+    {
+        *claimed = true;
+        let step = if steps > 0.0 { PISTON_MODE_UP } else { PISTON_MODE_DOWN };
+        if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
+            log::debug!("Create: piston mode: {e}");
         }
         return;
     }

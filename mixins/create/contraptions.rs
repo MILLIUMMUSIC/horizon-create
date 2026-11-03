@@ -701,13 +701,14 @@ fn save_text(s: &State, dimension: &str) -> String {
         }
         let a = &piston.actuator;
         out += &format!(
-            "piston {} {} {} {} {} {}\n",
+            "piston {} {} {} {} {} {} {}\n",
             p[0],
             p[1],
             p[2],
             a.offset,
             a.extension_length,
-            u8::from(a.running)
+            u8::from(a.running),
+            a.mode
         );
         let Some(r) = &piston.running else {
             continue;
@@ -888,6 +889,7 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                 entry.actuator.offset = f[4].parse().unwrap_or(0.0);
                 entry.actuator.extension_length = f[5].parse().unwrap_or(0);
                 entry.actuator.running = f[6] == "1";
+                entry.actuator.mode = f.get(7).and_then(|m| m.parse().ok()).unwrap_or(0);
                 entry.actuator.assemble_next_tick = false;
                 current = Some(Target::Piston(pos));
             }
@@ -2452,6 +2454,30 @@ fn range_display_tick(game: &Game<'_>) {
             d.entries.insert(pos, (blocks, RANGE_DISPLAY_TICKS));
         }
     });
+}
+
+/// The mouse wheel over a mechanical piston steps its movement mode (the
+/// value box's `ScrollOptionBehaviour`): the new mode's name.
+pub(super) fn step_piston_mode(game: &Game<'_>, pos: Pos, up: bool) -> Option<&'static str> {
+    let name = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(pos[0], pos[1], pos[2]))
+        .map(|s| s.name.clone())?;
+    piston_of(&name)?;
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let piston = s.pistons.entry((game.dim.id().to_owned(), pos)).or_default();
+    let a = &mut piston.actuator;
+    a.mode = if up { (a.mode + 1) % 3 } else { (a.mode + 2) % 3 };
+    // `movementMode.withCallback`: the structure waits no more.
+    a.waiting = false;
+    Some(match a.mode {
+        0 => "Always Place when Stopped",
+        1 => "Place only in Starting Position",
+        _ => "Place only when Anchor Destroyed",
+    })
 }
 
 /// `native_wheel` on this client: the wrench over a chassis scrolls its
@@ -4060,4 +4086,13 @@ fn elevators_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) 
             changed.push(p);
         }
     }
+}
+
+/// Whether the block at `pos` is a mechanical piston (the wheel steps its mode).
+pub(super) fn is_piston(game: &Game<'_>, pos: Pos) -> bool {
+    game.pack
+        .assets
+        .registry
+        .state(game.world.block(pos[0], pos[1], pos[2]))
+        .is_some_and(|s| piston_of(&s.name).is_some())
 }
