@@ -3560,7 +3560,12 @@ pub(super) fn draw_filter_item(
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
     let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
-    let light = game.world.light(pos[0], pos[1], pos[2]);
+    // The slot's own block may keep no light (an opaque template), so the
+    // brightest of it and its neighbours, sky and block light apart.
+    let light = [[0, 0, 0], [0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+        .iter()
+        .map(|d: &[i32; 3]| game.world.light(pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]))
+        .fold(0u8, |a, l| (a & 0xF0).max(l & 0xF0) | (a & 15).max(l & 15));
     // isGui3d: block items stand at full size, others lie flat at half.
     let block = game.pack.assets.registry.default_state(id).is_some();
     let scale = if block { 1.0 } else { 0.5 } + 1.0 / 64.0;

@@ -956,5 +956,8 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A transmitter link beside a redstone block and a receiver link (both on stone, no frequency set) 4 blocks apart: the
   receiver turned `powered=true` and the redstone lamp beside the stone it is mounted on lit. Clicking the receiver
   with coal set its lower frequency slot (`FrequencyLast: "minecraft:coal"` in its block data) and the lamp went out.
-  The upper slot, the two links' mode flip, sneaking and the wrench were not tried; the frequency items aren't drawn.
+  The two links' mode flip, sneaking and the wrench were not tried.
+- With `FrequencyFirst: "minecraft:redstone"` and `FrequencyLast: "minecraft:coal"` in their data, a link facing up
+  and one facing north drew redstone dust on the upper (far) slot and coal on the lower one, lit like the stone
+  around them (filter items now take the brightest light of their block and its neighbours).
 

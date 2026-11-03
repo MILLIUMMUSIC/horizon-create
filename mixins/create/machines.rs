@@ -529,6 +529,8 @@ fn link_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     };
     let dimension = game.dim.id().to_owned();
     let freq = link_frequency(&entity.nbt);
+    // RedstoneLinkFrequencySlot: clients draw the two items.
+    note_view(game, pos, vec![(freq.0.clone(), u32::from(!freq.0.is_empty())), (freq.1.clone(), u32::from(!freq.1.is_empty()))]);
     let mut power = 0;
     if !receiver {
         power = game.with_level(|b, level, ticks| {
@@ -1613,6 +1615,7 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                     .is_none_or(|s| {
                         s.name != DEPOT
                             && s.name != BASIN
+                            && s.name != LINK
                             && !super::create_logistics::is_chute_block(&s.name)
                             && !super::create_funnel::is_funnel(&s.name)
                     })
@@ -1734,6 +1737,35 @@ pub(super) fn draw_depots(
             .is_some_and(|s| super::create_logistics::is_chute_block(&s.name));
         if chute {
             super::create_logistics::draw_chute(game, camera, *pos, slots, out);
+            continue;
+        }
+        let link = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1], pos[2]))
+            .filter(|s| s.name == LINK)
+            .and_then(|s| s.properties.get("facing").and_then(|f| super::create_kinetics::Dir::parse(f)));
+        if let Some(facing) = link {
+            // RedstoneLinkFrequencySlot: the two items on the plate, the first
+            // above (or behind) the second.
+            for (i, (id, count)) in slots.iter().enumerate().take(2) {
+                if *count == 0 || id.is_empty() {
+                    continue;
+                }
+                let first = if i == 0 { 5.0 / 16.0 } else { 0.0 };
+                let (at, y_rot, x_rot) = match facing {
+                    super::create_kinetics::Dir::Up => ([0.5, 3.01 / 16.0, 5.5 / 16.0 + first], 0.0, 90.0),
+                    super::create_kinetics::Dir::Down => ([0.5, 1.0 - 3.01 / 16.0, 1.0 - (5.5 / 16.0 + first)], 0.0, 270.0),
+                    f => {
+                        let a = f.horizontal_angle().to_radians();
+                        let (dx, dz) = (0.0f32, 3.01 / 16.0 - 0.5);
+                        let (rx, rz) = (dx * a.cos() + dz * a.sin(), -dx * a.sin() + dz * a.cos());
+                        ([0.5 + rx, 5.5 / 16.0 + first, 0.5 + rz], f.horizontal_angle() + 180.0, 0.0)
+                    }
+                };
+                super::create_logistics::draw_filter_item(game, camera, *pos, id, at, y_rot, x_rot, LINK, out);
+            }
             continue;
         }
         let saw = game
