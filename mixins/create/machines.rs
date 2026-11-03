@@ -1344,6 +1344,9 @@ pub(super) fn mixer_world_step(game: &mut Game<'_>, pos: Pos, step: MixStep) {
             });
         }
         MixStep::Apply => {
+            // MechanicalMixerBlockEntity.tickAudio: the mix at its twentieth tick.
+            let at = pos.map(|v| f64::from(v) + 0.5);
+            super::create_glue::play_create_sound(game, "mixing", at, 0.75, 1.0);
             let Some(id) = machines().as_ref().and_then(|m| m.mixing.get(&key).cloned()) else {
                 return;
             };

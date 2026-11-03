@@ -891,6 +891,7 @@ fn right_click_hand(
     *canceled = true;
     let dimension = game.dim.id().to_owned();
     let mut told = None;
+    let mut crank_sound = None;
     {
         let mut guard = server();
         let s = guard.get_or_insert_with(Server::default);
@@ -905,6 +906,7 @@ fn right_click_hand(
         match kind {
             Kind::HandCrank(_) => {
                 kinetics.turn_crank(&mut level, pos, false);
+                crank_sound = Some(pos);
             }
             _ => {
                 let now = kinetics.get(pos).map_or(16, |e| e.motor_speed);
@@ -920,6 +922,18 @@ fn right_click_hand(
     }
     if let (Some(line), Some(player)) = (told, game.native_acting_player()) {
         game.native_action_bar(player.uuid, horizon_client::text::Text::literal(line));
+    }
+    // HandCrankBlockEntity.tickAudio: while it is in use, a sound every ten
+    // ticks (loud and low at first), as the crank is turned.
+    if let Some(pos) = crank_sound {
+        static LAST: Mutex<Option<(Pos, u64)>> = Mutex::new(None);
+        let now = game.ticks as u64;
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_none_or(|(p, t)| p != pos || now.saturating_sub(t) >= 10) {
+            *last = Some((pos, now));
+            drop(last);
+            play_create_sound(game, "cranking", pos.map(|v| f64::from(v) + 0.5), 10.0 / 2.5, 0.65);
+        }
     }
 }
 

@@ -850,3 +850,10 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   stayed unturned; fixed.
 - Seen in a screenshot: the tunnel over the belt. The belt's casing under it and the brass tunnel's flaps swinging
   when it distributes (the funnel's flaps swing, same code) are not checked in the game yet.
+
+## More Create sounds (macOS, offscreen)
+
+- A hand crank turned by a right click: `create:cranking` and its compounded part are heard (at most one per ten ticks, as
+  `tickAudio` plays one every ten ticks while the crank is in use). Not checked in the game yet: the mixer's mix sound
+  at its twentieth tick and the funnel's flap sound (both compile and share the sound path).
+

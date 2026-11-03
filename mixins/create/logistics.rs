@@ -2139,6 +2139,10 @@ pub(super) fn flap(game: &mut Game<'_>, pos: Pos, side: Dir, inward: bool) {
     });
     if done.is_some() {
         game.native_block_entity_sync(pos);
+        // FunnelBlockEntity.flap: the funnel's flap sounds, a tunnel's doesn't.
+        if funnel_at(game, pos).is_some() {
+            super::create_glue::play_create_sound(game, "funnel_flap", pos.map(|v| f64::from(v) + 0.5), 1.0, 1.0);
+        }
     }
 }
 

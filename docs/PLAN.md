@@ -422,8 +422,8 @@ VALIDATION.md is checked again for what it touches:
    the whole vault (`ItemHelper.calcRedstoneFromInventory`), depots, basins, chutes, belts' ends as Create answers.
 2. Create's own sounds (`native_play_sound` takes a mod's event by name, API 61) wherever Create plays them
    (`sounds.rs`: AllSoundEvents' compound parts; done: the wrench's rotate and remove, contraptions assembling and
-   disassembling, the depot's slide and pick-up, the press's clang and bonk, slime on chassis and pistons; left: the
-   mixer, saw, crank, funnel flaps, value scrolling, super glue, the arm's and deployer's vanilla sounds); Create's
+   disassembling, the depot's slide and pick-up, the press's clang and bonk, slime on chassis and pistons, the mixer's mix, the crank, funnel flaps; left: the
+   saw, value scrolling, super glue, the arm's and deployer's vanilla sounds); Create's
    particles (`ParticleOptions::named`, #5482) for the fan's air flow and the others.
 3. Fluids through `native_block_entity_fluids` (block entities on any template, #5549): tanks and basins keep their
    tanks in their block entity; pipes and other mods reach them through the engine.
