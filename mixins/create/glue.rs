@@ -2177,7 +2177,9 @@ pub(super) fn hud(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
         }
         None => match super::create_fluid_glue::client_fluids(dim_code(game.dim.id()), hit.pos) {
             Some((tanks, count)) => fluid_lines(&tanks, count),
-            None => match super::create_logistics::chute_goggle_lines(game, hit.pos) {
+            None => match super::create_logistics::chute_goggle_lines(game, hit.pos)
+                .or_else(|| super::create_logistics::tunnel_goggle_lines(game, hit.pos))
+            {
                 Some(lines) => lines,
                 None => return,
             },

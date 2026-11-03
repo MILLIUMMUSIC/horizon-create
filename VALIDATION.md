@@ -887,3 +887,10 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   kinetic stats and the network line (screenshot). The held item's line (with an item in its hand) is not checked
   in the game.
 
+## Brass tunnel distributing (macOS, offscreen)
+
+- A brass tunnel over a belt with a depot on each side: it turns into the cross shape, an iron ingot stack riding the
+  belt through it is split, one ingot into each depot, and the east, west, north and south flaps swing (`Flap<side>`
+  counters in its block data). The goggle tooltip (`Currently distributing:`) is compiled only: the stack is held
+  for too short a time to look at in an offscreen run.
+

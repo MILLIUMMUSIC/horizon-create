@@ -224,7 +224,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      its drops falling where it dies). Not yet: other item uses and blocks' own uses, using items on entities
      (feeding, shearing), fist bumps, the filter slot, sandpaper polishing and sequenced assembly, the
      crafting remainder of a damaged tool, hoppers into it (no block entity), sounds and particles. The goggles show its mode and held item with its count above the kinetic lines (`DeployerBlockEntity.addToGoggleTooltip`).
-   Part 3, brass funnel and belt tunnels (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md
+   Part 3, brass funnel and belt tunnels (**a brass tunnel on a belt with two depots beside it was run in the game: its cross shape, flaps and the distribution to both depots; the brass funnel and the rest are compiled and unit-tested only**; VALIDATION.md
    lists the in-game checks):
    - Brass funnel (`funnel.rs`, `logistics.rs`): the andesite funnel's blocks and modes (extracting and collecting
      blocks on a lightning rod's template, the belt funnel it becomes on a belt) with its filter
@@ -261,7 +261,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      (`updateTunnelConnections`); an empty hand takes the group's stacks (`grabAllStacksOfGroup`); a broken one
      drops its stack. Mode and stack are saved in `create_logistics_*.txt`. Not yet: sided filters on the tunnel itself
      (`SidedFilteringBehaviour`); the brass tunnel's connected textures (`BrassTunnelCTBehaviour`); its window
-     toggle (the wrench switches the mode instead); the goggle tooltip;  the distribution's stack drawn (`BrassTunnelRenderer`).
+     toggle (the wrench switches the mode instead); the goggles list the stacks the connected brass tunnels hold (`addToGoggleTooltip`, from their block entities' data); the distribution's stack drawn (`BrassTunnelRenderer`).
    Later: the remaining belt features above.
 5. **Contraptions**: moving block structures (pistons, bearings, gantries, minecart contraptions). In Create a
    contraption is an entity (`AbstractContraptionEntity`) holding the moved blocks (`Contraption`), drawn by its

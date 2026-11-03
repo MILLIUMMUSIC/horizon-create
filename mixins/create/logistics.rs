@@ -2778,8 +2778,74 @@ pub(super) fn tunnels_tick(game: &mut Game<'_>, dimension: &str) {
         if t.brass.stack.is_some() || t.brass.progress > 0 || t.brass.synced {
             t.brass.tick(pos, &mut TunnelsAt { game });
         }
+        let shown = t.brass.stack.as_ref().map(|s| (s.item.to_string(), s.count));
         with_state(|s| s.tunnels.insert(key, t));
+        sync_tunnel_stack(game, pos, shown);
     }
+}
+
+/// The stack a brass tunnel holds, in its block entity's data so that
+/// clients' goggles can list it (`BrassTunnelBlockEntity.addToGoggleTooltip`);
+/// told to them when it changes.
+fn sync_tunnel_stack(game: &mut Game<'_>, pos: Pos, shown: Option<(String, u32)>) {
+    let changed = game
+        .native_with_mod_block_entity(pos, |be| {
+            let id = match be.nbt.get(&JavaString::from("StackId")) {
+                Some(Tag::String(s)) => Some(s.to_string_lossy()),
+                _ => None,
+            };
+            let count = match be.nbt.get(&JavaString::from("StackCount")) {
+                Some(Tag::Int(n)) => *n as u32,
+                _ => 0,
+            };
+            if id.as_deref() == shown.as_ref().map(|s| s.0.as_str()) && (shown.is_none() || count == shown.as_ref().map_or(0, |s| s.1)) {
+                return false;
+            }
+            match &shown {
+                Some((id, count)) => {
+                    be.nbt.insert(JavaString::from("StackId"), Tag::String(id.as_str().into()));
+                    be.nbt.insert(JavaString::from("StackCount"), Tag::Int(*count as i32));
+                }
+                None => {
+                    be.nbt.remove(&JavaString::from("StackId"));
+                    be.nbt.remove(&JavaString::from("StackCount"));
+                }
+            }
+            true
+        })
+        .unwrap_or(false);
+    if changed {
+        game.native_block_entity_sync(pos);
+    }
+}
+
+/// `BrassTunnelBlockEntity.addToGoggleTooltip`, on a client: what the
+/// connected brass tunnels hold (as their block entities were told).
+pub(super) fn tunnel_goggle_lines(game: &Game<'_>, pos: Pos) -> Option<Vec<(String, u32)>> {
+    use horizon_client::containers::BlockEntity as B;
+    if !tunnel_at(game, pos).is_some_and(|t| t.brass) {
+        return None;
+    }
+    let group = super::create_tunnel::group(&World { game }, pos, |p| game.world.loaded(p[0], p[2]))?;
+    let mut lines = Vec::new();
+    for p in group {
+        let Some(B::Mod(m)) = game.world.block_entities.get(&(p[0], p[1], p[2])) else {
+            continue;
+        };
+        let (Some(Tag::String(id)), Some(Tag::Int(count))) =
+            (m.nbt.get(&JavaString::from("StackId")), m.nbt.get(&JavaString::from("StackCount")))
+        else {
+            continue;
+        };
+        let name = game.pack.names.display_item(&id.to_string_lossy());
+        lines.push((format!("> {name} x{count}"), 0xAAAAAA));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    lines.insert(0, ("Currently distributing:".to_owned(), 0xFFFFFF));
+    lines.push(("Right-Click to retrieve".to_owned(), 0x555555));
+    Some(lines)
 }
 
 /// `FilteringRenderer` on a brass funnel: its filter's item in each of its
