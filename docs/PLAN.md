@@ -374,7 +374,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       bearings, rope pulleys and gantries take a `stalled` flag. `actor_glue.rs` ticks each moving structure's
       actors before it moves, breaks blocks with their drops, harvests and tills, and ticks standing drills; the
       drill's head is a partial drawn turning in the world and still on moving structures. The harvester and plough
-      stand on a grindstone's template (`facing`, `face` kept at wall). Not yet: hurting and throwing entities (engine gap), the cobblestone generator
+      stand on a grindstone's template (`facing`, `face` kept at wall). Moving drills and saws hurt what they move into (`damageEntities`, through `/damage`, the old gap is gone; Horizon's `/damage` knows vanilla's damage types only, so Create's `crush`, `mechanical_drill` and `mechanical_saw` are `minecraft:generic`, with its death message: **blocked on the engine**, no issue) and with ploughs throw it (mobs and the window's player; not LAN guests); standing drills and saws hurt what is in their cell. Not yet: the cobblestone generator
       optimisation, actors on gantries and
       pulleys checked in the game, placing a
       harvester on a wall while looking steeply up or down (it faces the player).
@@ -491,9 +491,9 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    it faces. Decisions, as Horizon has no collision shape for one entity: an item in the cell goes in at once rather
    than being drawn through slowly, and results start clear of the controller's collision (Create throws them 0.55
    out with its collision empty for them); `BypassCrushingWheel` is kept for the items thrown out. Hoppers don't
-   reach it (a mod container has no slot limit or validity hook: **blocked on the engine**, no issue). Not yet: hurting
-   and killing what stands in it (with the actors' entity damage), pushing entities on top of a wheel
-   (`entityInside`), the ambient sound and crit particles, item particles (they don't go over the network), the
+   reach it (a mod container has no slot limit or validity hook: **blocked on the engine**, no issue). Mobs and survival players in
+   it are pulled along and hurt (4, through `/damage`); `entityInside`'s push on a wheel's top never
+   runs in Create either (its full collision keeps entities below the 1.25 it asks for). Not yet: the ambient sound and crit particles, item particles (they don't go over the network), the
    wheels' advancements.
    The item drain (`spout.rs`, `spout_glue.rs`: `ItemDrainBlockEntity`, `ItemDrainItemHandler`,
    `GenericItemEmptying`): a mod block entity with `AllShapes.CASING_13PX` holding one item and a 1500 mB tank that

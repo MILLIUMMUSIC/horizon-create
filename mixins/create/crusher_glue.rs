@@ -17,6 +17,8 @@ use std::sync::Mutex;
 
 pub(super) const WHEEL: &str = "create:crushing_wheel";
 pub(super) const CONTROLLER: &str = "create:crushing_wheel_controller";
+/// `CKinetics.crushingDamage`.
+const CRUSHING_DAMAGE: i32 = 4;
 
 #[derive(Default)]
 struct State {
@@ -233,6 +235,10 @@ pub(super) fn tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
         return;
     }
     if entity.items.iter().all(Option::is_none) {
+        // `processingEntity`: what stands in it keeps items out.
+        if crush_entity(game, &dimension, pos, facing, crushing) {
+            return;
+        }
         intake(game, pos, entity);
     }
     if entity.items.iter().all(Option::is_none) {
@@ -261,6 +267,39 @@ pub(super) fn tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
             output(game, pos, entity, facing);
         }
     }
+}
+
+/// `checkEntityForProcessing` and `tick` for what isn't an item: a mob or a
+/// survival player in the cell (not a player on peaceful) is pulled to the
+/// middle and along its way, and hurt. A mob whose health is about to run out
+/// isn't moved out first, so its drops fall where it stands. True when there
+/// was one.
+fn crush_entity(game: &mut Game<'_>, dimension: &str, pos: Pos, facing: Dir, crushing: f32) -> bool {
+    let [x, y, z] = pos.map(f64::from);
+    let cell = [x, y, z, x + 1.0, y + 1.0, z + 1.0];
+    let speed = f64::from(crushing) * 4.0;
+    let n = facing.normal();
+    let offset = if facing.positive() { 1.0 } else { -1.0 };
+    let movement = (-speed / 4.0).max(-0.5) * -offset;
+    let motion = |feet: [f64; 3]| {
+        let along = |i: usize, centre: f64| if n[i] != 0 { movement } else { (centre - feet[i]) / 2.0 };
+        [along(0, x + 0.5), if n[1] != 0 { movement } else { 0.0 }, along(2, z + 0.5)]
+    };
+    let mob = game.native_mobs(dimension).into_iter().find(|m| super::create_actors::entity_touches(m.pos, cell));
+    if let Some(m) = mob {
+        game.native_push_mob(dimension, m.id, motion(m.pos));
+    } else {
+        let peaceful = game.with_level(|_, level, _| level.difficulty) == 0;
+        let player = game
+            .native_server_players()
+            .into_iter()
+            .find(|p| p.dimension == dimension && p.game_mode == 0 && super::create_actors::entity_touches(p.position, cell));
+        if player.is_none() || peaceful {
+            return false;
+        }
+    }
+    super::create_actor_glue::hurt_entities(game, dimension, cell, f64::from(CRUSHING_DAMAGE));
+    true
 }
 
 /// An item entity whose place is in the controller's cell.

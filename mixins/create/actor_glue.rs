@@ -559,6 +559,7 @@ fn visit(
     if !game.world.loaded(pos[0], pos[2]) {
         return;
     }
+    damage_entities(game, slot, pos);
     match slot.kind {
         ActorKind::Drill => visit_breaker(&mut slot.ctx, slot.kind, &World { game }, pos),
         ActorKind::Plough => {
@@ -870,6 +871,69 @@ pub(super) fn psi_items<R>(
 }
 
 /// `DrillBlockEntity.tick` and `SawBlockEntity.tick` for the dimension's
+/// `BlockBreakingMovementBehaviour.damageEntities` at a position an actor
+/// moves into that isn't solid: a drill or saw hurts what is there, all three
+/// breakers throw it. Riders aren't told apart from others in its way.
+fn damage_entities(game: &mut Game<'_>, slot: &Slot, pos: Pos) {
+    let hurts = match slot.kind {
+        ActorKind::Drill | ActorKind::Saw => true,
+        ActorKind::Plough => false,
+        _ => return,
+    };
+    let state = block_at(game, pos);
+    if game.res.facts().get(state).sturdy_full == 0b11_1111 {
+        return;
+    }
+    let cell = [pos[0], pos[1], pos[2]].map(f64::from);
+    let cell = [cell[0], cell[1], cell[2], cell[0] + 1.0, cell[1] + 1.0, cell[2] + 1.0];
+    let dimension = game.dim.id().to_owned();
+    if hurts {
+        hurt_entities(game, &dimension, cell, super::create_actors::moving_damage(slot.ctx.relative_motion));
+    }
+    let boost = super::create_actors::throw_boost(slot.ctx.motion);
+    for m in game.native_mobs(&dimension) {
+        if super::create_actors::entity_touches(m.pos, cell) {
+            game.native_push_mob(&dimension, m.id, boost);
+        }
+    }
+    // The window's player (LAN guests aren't moved from here).
+    if let Some(p) = game.player.as_mut() {
+        let feet = [p.position.x, p.position.y, p.position.z];
+        if super::create_actors::entity_touches(feet, cell) {
+            p.velocity = horizon_core::geometry::Vec3::new(
+                p.velocity.x + boost[0],
+                p.velocity.y + boost[1],
+                p.velocity.z + boost[2],
+            );
+        }
+    }
+}
+
+/// `Entity.hurt` for every mob and player touching `b` (min then max), through
+/// `/damage` as the fan's. Horizon's `/damage` knows vanilla's damage types
+/// only, so `create:crush`, `create:mechanical_drill` and the rest are generic.
+pub(super) fn hurt_entities(game: &mut Game<'_>, dimension: &str, b: [f64; 6], amount: f64) {
+    let ty = "minecraft:generic";
+    let mut commands = Vec::new();
+    for m in game.native_mobs(dimension) {
+        if super::create_actors::entity_touches(m.pos, b) {
+            let [x, y, z] = m.pos;
+            commands.push(format!(
+                "execute in {dimension} positioned {x} {y} {z} run damage @e[type={},limit=1,sort=nearest,distance=..0.75] {amount} {ty}",
+                m.kind
+            ));
+        }
+    }
+    for p in game.native_server_players() {
+        if p.dimension == dimension && p.game_mode != 3 && super::create_actors::entity_touches(p.position, b) {
+            commands.push(format!("damage {} {amount} {ty}", p.name));
+        }
+    }
+    for c in commands {
+        game.native_run_command(&c);
+    }
+}
+
 /// standing drills and saws (place, facing, speed, whether a saw), after
 /// the kinetics.
 pub(super) fn breakers_tick(game: &mut Game<'_>, dimension: &str, drills: &[(Pos, Dir, f32, bool)]) {
@@ -905,6 +969,12 @@ pub(super) fn breakers_tick(game: &mut Game<'_>, dimension: &str, drills: &[(Pos
         if !game.world.loaded(pos[0], pos[2]) {
             kept.insert(pos, d);
             continue;
+        }
+        // DrillBlock.entityInside and SawBlock.entityInside.
+        if rpm != 0.0 {
+            let [x, y, z] = pos.map(f64::from);
+            let cell = [x + 0.1, y + 0.1, z + 0.1, x + 0.9, y + 0.9, z + 0.9];
+            hurt_entities(game, dimension, cell, super::create_actors::drill_damage(rpm));
         }
         // SawBlockEntity.shouldRun: a saw facing up or down cuts nothing.
         if saw && facing.axis() == super::create_kinetics::Axis::Y {

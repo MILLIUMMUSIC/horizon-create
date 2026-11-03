@@ -1020,3 +1020,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   gravel with nothing below fell straight down as sand. The ejected sand wasn't taken back (`BypassCrushingWheel`).
   Not tried: sideways or upward wheels, belts and funnels into it, arms, breaking a wheel with items inside, milling
   recipes, chance results.
+- A zombie summoned into the working controller lost health in steps of 4 and died within about 2 seconds, dropping its
+  loot. A pig in the cell of a turning standing drill (16 rpm, 1 + 0.5 damage a hit from `getDamage`) died within about
+  1.5 seconds. Moving drills, saws and ploughs (`damageEntities`, throwing) are unit-tested only, not tried in the game.

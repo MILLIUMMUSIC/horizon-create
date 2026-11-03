@@ -614,11 +614,40 @@ impl Breaker {
 }
 
 /// `DrillBlock.getDamage`.
-#[allow(dead_code)]
 pub fn drill_damage(rpm: f32) -> f64 {
     let s = f64::from(rpm.abs());
     let sum = (s / 16.0).min(2.0) + (s / 32.0).min(4.0) + (s / 64.0).min(4.0);
     sum.clamp(1.0, 10.0)
+}
+
+/// `BlockBreakingMovementBehaviour.damageEntities`: what a moving drill or
+/// saw does at this relative speed.
+pub fn moving_damage(relative_motion: [f64; 3]) -> f64 {
+    let length = relative_motion.iter().map(|v| v * v).sum::<f64>().sqrt();
+    (6.0 * length.powf(0.4) + 1.0).clamp(2.0, 10.0)
+}
+
+/// `BlockBreakingMovementBehaviour.throwEntity`: the push, a quarter of its
+/// speed upward, at most 4 long.
+pub fn throw_boost(motion: [f64; 3]) -> [f64; 3] {
+    let length = motion.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let boost = [motion[0], motion[1] + length / 4.0, motion[2]];
+    let total = boost.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if total <= 4.0 {
+        return boost;
+    }
+    boost.map(|v| v / total * 4.0)
+}
+
+/// Whether a standing entity's box (.6 wide, 1.8 high) at `feet` meets `b`
+/// (min then max).
+pub fn entity_touches(feet: [f64; 3], b: [f64; 6]) -> bool {
+    feet[0] + 0.3 > b[0]
+        && feet[0] - 0.3 < b[3]
+        && feet[1] + 1.8 > b[1]
+        && feet[1] < b[4]
+        && feet[2] + 0.3 > b[2]
+        && feet[2] - 0.3 < b[5]
 }
 
 /// The facts of a block the drill moves into (`DrillMovementBehaviour.canBreak`).
@@ -1161,6 +1190,21 @@ mod tests {
             n += 1;
         }
         assert_eq!(n, 20);
+    }
+
+    #[test]
+    fn moving_actors_hurt_and_throw() {
+        assert_eq!(moving_damage([0.0; 3]), 2.0);
+        assert!((moving_damage([0.0, 0.0, 1.0]) - 7.0).abs() < 1e-9);
+        assert_eq!(moving_damage([0.0, 0.0, 10.0]), 10.0);
+        assert_eq!(throw_boost([0.0, 0.0, 1.0]), [0.0, 0.25, 1.0]);
+        let b = throw_boost([0.0, 0.0, 100.0]);
+        assert!((b.iter().map(|v| v * v).sum::<f64>().sqrt() - 4.0).abs() < 1e-9);
+        let cell = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        assert!(entity_touches([0.5, 0.0, 0.5], cell));
+        assert!(entity_touches([1.2, 0.0, 0.5], cell));
+        assert!(!entity_touches([1.4, 0.0, 0.5], cell));
+        assert!(!entity_touches([0.5, 1.0, 0.5], cell));
     }
 
     #[test]
