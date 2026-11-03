@@ -171,8 +171,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      fluid, pipes drain it endlessly and fills are voided; in survival an empty bucket takes it out and clears it.
      Not yet: the boiler (milestone 7, with the steam engine), tanks on moving structures (`FluidTankMovementBehavior`),
      light from glowing fluids
-     (`luminosity`: engine gap, a template's light is fixed), comparators (engine gap: no block entity on the
-     template), the fluid level's easing (`LerpedFloat`), sounds and particles on buckets.
+     (`luminosity`: engine gap, a template's light is fixed), the fluid level's easing (`LerpedFloat`), sounds and particles on buckets.
    - Basin fluids: two input and two output tanks of 1000 mB (`SmartFluidTankBehaviour`, inputs keeping their
      fluids apart, outputs taking nothing from outside), filled by pipes and buckets; `create:mixing` recipes with
      water and lava as ingredients or results run (dough, cardboard pulp; the heated ones still wait for the blaze
@@ -194,8 +193,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      the wrench from above or below takes it out of its vault and turns it. Its blockstate is blank: the native mod
      draws each block from hidden holders (`hz_vault_x`, `hz_vault_z`) with `ItemVaultCTBehaviour`'s connected
      textures (`ct.rs`, `CTModel`'s sheets: medium, or large past 2 wide, the `LARGE` property), its part sent over
-     `create:arms`. On moving structures it is drawn without them. Not yet: comparators (engine gap: no comparator
-     hook for a mod block entity's slots).
+     `create:arms`. On moving structures it is drawn without them. Comparators read the whole vault (`calcRedstoneFromBlockEntity`).
    - Mechanical arm (`arm.rs`: `ArmBlockEntity`, `ArmInteractionPoint` and the types for depots, belts, basins,
      chutes, deployers, millstones and funnels, `ArmAngleTarget`; `arms.rs`): a mod block entity holding its item on
      an enchanting table's template, a kinetic block (`Kind::MechanicalArm`: a small cog, 2 su). Its phases, the
@@ -414,7 +412,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
 The new pin has the hooks most workarounds here stand in for. Each wave replaces them as Create does it, then
 VALIDATION.md is checked again for what it touches:
 
-1. Comparators: `native_has_analog_output` / `native_analog_output` for tanks (`ComparatorUtil.levelOfSmartFluidTank`),
+1. Done: comparators: `native_has_analog_output` / `native_analog_output` for tanks (`ComparatorUtil.levelOfSmartFluidTank`),
    the whole vault (`ItemHelper.calcRedstoneFromInventory`), depots, basins, chutes, belts' ends as Create answers.
 2. Create's own sounds (`native_play_sound` takes a mod's event by name, API 61) wherever Create plays them; Create's
    particles (`ParticleOptions::named`, #5482) for the fan's air flow and the others.
