@@ -32,7 +32,7 @@ horizon-port-pack carries over without behaviour (decoration, plain items) count
 | 1. Kinetic core | 10 % | 100 % | 10.0 % |
 | 2. Visuals of kinetics | 5 % | 100 % | 5.0 % |
 | 3. First processing chain (depot, press, millstone, fan, mixer, basin, water wheel) | 10 % | 97.5 % | 9.75 % |
-| 4. Logistics and fluids (belts, chutes, funnels, tunnels, arm, deployer, vault, pipes, pump, tank) | 15 % | 99.5 % | 14.9 % |
+| 4. Logistics and fluids (belts, chutes, funnels, tunnels, arm, deployer, vault, pipes, pump, tank) | 15 % | 99.7 % | 15.0 % |
 | 5. Contraptions | 20 % | 87.5 % | 17.5 % |
 | 6. Trains | 15 % | 0 % | 0.0 % |
 | 7. Everything else (blaze burner and heat, crafters, saws, drills, spout and drain, gauges, redstone, packages, Ponder...) | 25 % | 2 % | 0.5 % |
