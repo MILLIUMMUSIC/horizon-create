@@ -856,4 +856,6 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A hand crank turned by a right click: `create:cranking` and its compounded part are heard (at most one per ten ticks, as
   `tickAudio` plays one every ten ticks while the crank is in use). Not checked in the game yet: the mixer's mix sound
   at its twentieth tick and the funnel's flap sound (both compile and share the sound path).
+- Super glue held: the first corner and the second corner each played `create:slime_added` and the item frame's click
+  (heard in `status`); taking glue off plays the low slime sound (not checked in the game).
 

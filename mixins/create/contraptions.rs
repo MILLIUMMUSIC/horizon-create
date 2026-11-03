@@ -2041,6 +2041,16 @@ fn tell(game: &mut Game<'_>, text: horizon_client::text::Text) {
     }
 }
 
+/// The sounds of a glue corner chosen (`SuperGlueSelectionHandler`): slime
+/// at `pitch` and the item frame's click.
+fn glue_sound(game: &mut Game<'_>, pos: Pos, pitch: f32) {
+    let at = pos.map(|v| f64::from(v) + 0.5);
+    super::create_glue::play_create_sound(game, "slime_added", at, 0.5, pitch);
+    game.with_level(|_, level, _| {
+        level.native_play_sound("minecraft:entity.item_frame.add_item", at, super::create_sounds::BLOCKS, 0.75, 1.0);
+    });
+}
+
 fn tell_key(game: &mut Game<'_>, key: &str) {
     tell(game, horizon_client::text::Text::translate(key, &[]));
 }
@@ -2123,6 +2133,7 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
             .selecting
             .insert(player.uuid, (dimension, pos));
         tell_key(game, "create.super_glue.first_pos");
+        glue_sound(game, pos, 0.85);
         return true;
     };
     if (0..3).any(|k| (first[k] - pos[k]).abs() > GLUE_REACH) {
@@ -2153,6 +2164,7 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         s.glue.entry(dimension).or_default().push((first, pos));
     }
     tell_key(game, "create.super_glue.success");
+    glue_sound(game, pos, 0.95);
     true
 }
 
@@ -2165,6 +2177,7 @@ pub(super) fn left_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool 
     }
     let out = [0, 1, 2].map(|k| pos[k] + face[k]);
     let dimension = game.dim.id().to_owned();
+    let mut removed = false;
     let mut guard = state();
     let s = guard.get_or_insert_with(State::default);
     if let Some(all) = s.glue.get_mut(&dimension) {
@@ -2176,7 +2189,13 @@ pub(super) fn left_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool 
             .map(|(i, _)| i);
         if let Some(i) = found {
             all.remove(i);
+            removed = true;
         }
+    }
+    drop(guard);
+    if removed {
+        // SuperGlueRemovalPacket: a quiet, low slime sound.
+        super::create_glue::play_create_sound(game, "slime_added", pos.map(|v| f64::from(v) + 0.5), 0.5, 0.5);
     }
     true
 }

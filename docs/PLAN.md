@@ -315,7 +315,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       of sticky sides is a hidden `create:hz_<chassis>_<sides>` dropping the plain one; linear chassis take the
       axis of a chassis beside them or the player's look. Not yet: the selection's preview before the second
       click (`SuperGlueSelectionHandler`'s client outlines and messages), glue in the off hand gluing a placed
-      block (`SuperGlueHandler`), glue particles and sounds, the sticker, chassis' connected textures and range
+      block (`SuperGlueHandler`), glue particles, the sticker, chassis' connected textures and range
       display (`ChassisRangeDisplay`), Create 6's value board for the range (the wheel steps it here).
       Part 2b, mechanical and windmill bearings (**done, checked in the game in part**): `contraption.rs` has
       `BearingContraption` (the shared `searchMovedStructure` from the block in front, the bearing anchoring, the
@@ -422,8 +422,8 @@ VALIDATION.md is checked again for what it touches:
    the whole vault (`ItemHelper.calcRedstoneFromInventory`), depots, basins, chutes, belts' ends as Create answers.
 2. Create's own sounds (`native_play_sound` takes a mod's event by name, API 61) wherever Create plays them
    (`sounds.rs`: AllSoundEvents' compound parts; done: the wrench's rotate and remove, contraptions assembling and
-   disassembling, the depot's slide and pick-up, the press's clang and bonk, slime on chassis and pistons, the mixer's mix, the crank, funnel flaps; left: the
-   saw, value scrolling, super glue, the arm's and deployer's vanilla sounds); Create's
+   disassembling, the depot's slide and pick-up, the press's clang and bonk, slime on chassis and pistons, the mixer's mix, the crank, funnel flaps, super glue's corners and removal; left: the
+   saw, value scrolling, the arm's and deployer's vanilla sounds); Create's
    particles (`ParticleOptions::named`, #5482) for the fan's air flow and the others.
 3. Fluids through `native_block_entity_fluids` (block entities on any template, #5549): tanks and basins keep their
    tanks in their block entity; pipes and other mods reach them through the engine.
