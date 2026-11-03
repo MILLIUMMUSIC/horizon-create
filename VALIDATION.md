@@ -14,7 +14,9 @@ Not checked yet: the contraption, depot and press sounds.
 
 Fluid pipes on their own properties: a pipe placed by a tank opens towards it with a drain, a second placed on top
 turns the first into a junction once a third goes beside it (casing drawn), open ends have rims and joined pipes
-join without them, as Create's `PipeAttachmentModel` draws them.
+join without them, as Create's `PipeAttachmentModel` draws them. Lava from a creative tank runs through a pipe that
+bends at a pump (creative motor and cogwheel, facing east) into another tank: 2328 mB within ten seconds, the
+wire behind the second tank's comparator at 4.
 
 Placement (`native_state_for_placement`): a shaft placed on the floor beside a shaft along X lies along X, one with
 nothing beside it takes the look's axis (Z, looking north), and a fan placed beside the first shaft blows away from
