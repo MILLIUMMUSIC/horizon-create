@@ -204,6 +204,10 @@ pub(super) fn spout_held(
                 set_spout_tank(be, &t);
             });
             game.native_block_entity_sync(spout);
+            // spawnSplash: 20 of the fluid's particles bursting up from the
+            // item, 2 - 5/16 below the spout's centre.
+            let at = [f64::from(spout[0]) + 0.5, f64::from(spout[1]) + 0.5 - (2.0 - 5.0 / 16.0), f64::from(spout[2]) + 0.5];
+            fluid_particles(game, &tank.fluid.fluid, at, [0.0; 3], 0.125, 20);
             let Some(out) = out else {
                 return Some((true, None));
             };
@@ -228,6 +232,26 @@ pub(super) fn spout_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEnt
     }
     let tank = spout_tank(entity);
     super::create_fluid_glue::note_spout(game.dim.id(), pos, &tank.fluid, next);
+    // spawnProcessingParticles: while it pours, one a tick falling from its
+    // nozzle.
+    if next >= 8 && !tank.fluid.is_empty() {
+        let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]), f64::from(pos[2]) + 0.5];
+        fluid_particles(game, &tank.fluid.fluid, at, [0.0, -1.0, 0.0], 0.1, 0);
+    }
+}
+
+/// `FluidFX.getFluidParticle`: Create's fluid particle takes the fluid's
+/// texture; Horizon has no particle drawn from a fluid, so the fluid
+/// block's own particle (its still texture, tinted as the block) stands in.
+/// `count` 0 sends one moving along `spread` at `speed`.
+fn fluid_particles(game: &mut Game<'_>, fluid: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+    let Some(state) = game.pack.assets.registry.default_state(fluid) else {
+        return;
+    };
+    let options = horizon_client::mod_api::ParticleOptions::simple(horizon_client::mod_api::ParticleType::Block);
+    game.with_level(|_, level, _| {
+        level.native_send_particles(&options, Some(state), at, spread, speed, count);
+    });
 }
 
 // ---- Clients ------------------------------------------------------------------

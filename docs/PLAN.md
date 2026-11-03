@@ -456,8 +456,9 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    Horizon has, a glass bottle with water into a water bottle, an empty bucket into a water or lava bucket), the
    result held as `convertToAndLeaveHeld`; the tank's fluid, the stream and the nozzle's three bits squeezing as
    `SpoutRenderer` draws them. Not yet: `BlockSpoutingBehaviour` (filling blocks below: other mods' only),
-   sequenced assembly's filling steps, potion and tea fluids (no fluid in Horizon), the splash and processing
-   particles, the food advancements, spouts on contraptions. Comparators read its fill (`levelOfSmartFluidTank`).
+   sequenced assembly's filling steps, potion and tea fluids (no fluid in Horizon), the food advancements, spouts on contraptions. Comparators read its fill (`levelOfSmartFluidTank`). Its splash (20 particles) and the falling
+   particles while it pours are sent from the server; Create's `FluidParticleData` draws the fluid's texture, which
+   Horizon's particles can't, so the fluid block's own particle stands in (decision: the closest Create look).
    The mechanical crafter (`crafter.rs`, `crafter_glue.rs`: `MechanicalCrafterBlock`, `MechanicalCrafterBlockEntity`,
    `RecipeGridHandler`, `MechanicalCraftingInput`, `MechanicalCraftingRecipe`): `Kind::MechanicalCrafter`, a small cog
    about its facing's axis (2 su per rpm), on a stone template with its own `facing` and `pointing` and a block entity;

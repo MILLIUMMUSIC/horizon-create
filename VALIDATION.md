@@ -1006,3 +1006,5 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A comparator reading an item drain: powered with 1000 mB in it, off when its data was set to empty, on again at
   1500 mB (the spout answers the same way; not tried).
 - The stone under a receiver link facing up set to air: the link broke and dropped as an item.
+- A spout filling a bottle on a depot: the game's status counted 32 block particles (the splash and the falling
+  ones) while it poured.
