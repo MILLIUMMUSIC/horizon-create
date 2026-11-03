@@ -1005,3 +1005,4 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   the chest.
 - A comparator reading an item drain: powered with 1000 mB in it, off when its data was set to empty, on again at
   1500 mB (the spout answers the same way; not tried).
+- The stone under a receiver link facing up set to air: the link broke and dropped as an item.

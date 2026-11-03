@@ -427,7 +427,9 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    frequency within 256 blocks and powers the block it is mounted on through `native_block_signal` and
    `native_is_signal_source`; an item clicked on its upper or lower slot sets that frequency, sneaking with an empty
    hand or the wrench flips the mode; the two frequency items are drawn on its plate, `RedstoneLinkFrequencySlot`).
-   Not yet: dyed items as different frequencies, the link's `canSurvive`, redstone controllers and factory panels, the
+   It needs a block behind it that isn't replaceable (`canSurvive`, through
+   `native_can_survive`) and breaks with its drops when that block goes (`neighborChanged`, through the shape update).
+   Not yet: dyed items as different frequencies, redstone controllers and factory panels, the
    network's save across reloads (the transmitters re-announce at their first tick), `blockUpdated` on the attached
    block, and the link's range display.
    The blaze burner (`blaze.rs`: `HeatLevel`, `BlazeBurnerBlockEntity`'s fuel, burn time and

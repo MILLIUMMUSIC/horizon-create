@@ -772,6 +772,35 @@ pub(super) fn update_shape(
     if let Some(next) = super::create_fluid_glue::pipe_update_shape(level, state, pos, d) {
         *new = Some(next);
     }
+    // RedstoneLinkBlock.neighborChanged: its support gone, it breaks (with
+    // its drops, as the level removes a block whose shape update is air).
+    if let Some(facing) = link_facing(level, state)
+        && d == facing.opposite()
+        && !link_supported(level, pos, facing)
+    {
+        *new = level.registry.default_state("minecraft:air");
+    }
+}
+
+/// A redstone link's facing (away from the block it is mounted on).
+fn link_facing(level: &super::GameLevel<'_>, state: BlockStateId) -> Option<Dir> {
+    let s = level.registry.state(state).filter(|s| s.name == super::create_machines::LINK)?;
+    s.properties.get("facing").and_then(|f| Dir::parse(f))
+}
+
+/// `RedstoneLinkBlock.canSurvive`: the block behind it isn't replaceable.
+fn link_supported(level: &super::GameLevel<'_>, pos: Pos, facing: Dir) -> bool {
+    let n = facing.opposite().normal();
+    let behind = level.world.block(pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]);
+    !level.facts.get(behind).replaceable
+}
+
+/// `native_can_survive` for Create's blocks: the redstone link on a block
+/// that isn't replaceable.
+pub(super) fn can_survive(level: &super::GameLevel<'_>, pos: Pos, state: BlockStateId, survives: &mut Option<bool>) {
+    if let Some(facing) = link_facing(level, state) {
+        *survives = Some(link_supported(level, pos, facing));
+    }
 }
 
 /// `RedstoneLinkBlock.getSignal` and `getDirectSignal`: a powered receiver
