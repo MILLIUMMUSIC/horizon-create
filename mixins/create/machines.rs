@@ -617,6 +617,8 @@ fn saw_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     if facing.as_deref() != Some("up") {
         return;
     }
+    // The filter, told to clients (it is drawn on the top).
+    note_view(game, pos, saw_filter(entity).into_iter().map(|i| (i, 1)).collect());
     // SawBlock.updateEntityAfterFallOn: an item landing on it goes in.
     take_landed(game, pos, 1.0, |_, mut stack| {
         if entity.items.iter().any(Option::is_some) {
@@ -699,6 +701,57 @@ fn saw_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     saw_reset(entity);
 }
 
+/// `FilteringBehaviour` on a saw facing up (`SawFilterSlot`, on its top): a
+/// click there sets the held item as the filter (an empty hand clears it).
+/// True when it took the click.
+fn saw_filter_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool {
+    let up = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(pos[0], pos[1], pos[2]))
+        .is_some_and(|s| s.properties.get("facing").map(String::as_str) == Some("up"));
+    if !up || face != [0, 1, 0] {
+        return false;
+    }
+    let held = game.held().map(|s| s.item.to_string());
+    // canShortInteract: not the wrench or the mechanical arm.
+    if held.as_deref().is_some_and(|i| i == "create:wrench" || i == super::create_arms::ARM) {
+        return false;
+    }
+    if game.native_acting_player().is_some_and(|p| p.game_mode == 3) {
+        return false;
+    }
+    game.native_with_mod_block_entity(pos, |be| match &held {
+        Some(id) => {
+            be.nbt.insert(JavaString::from("Filter"), Tag::String(id.as_str().into()));
+        }
+        None => {
+            be.nbt.remove(&JavaString::from("Filter"));
+        }
+    });
+    let view = held.iter().map(|i| (i.clone(), 1)).collect();
+    note_view(game, pos, view);
+    true
+}
+
+/// The saw's filter item.
+fn saw_filter(entity: &ModBlockEntity) -> Option<String> {
+    match entity.nbt.get(&JavaString::from("Filter")) {
+        Some(Tag::String(s)) => Some(s.to_string_lossy()),
+        _ => None,
+    }
+}
+
+/// `RecipeConditions.outputMatchesFilter`: the recipes with an output the
+/// filter takes, all of them with no filter.
+fn filtered(recipes: Vec<Recipe>, filter: Option<&str>) -> Vec<Recipe> {
+    match filter {
+        Some(f) => recipes.into_iter().filter(|r| r.results.iter().any(|o| o.item == f)).collect(),
+        None => recipes,
+    }
+}
+
 fn saw_reset(entity: &mut ModBlockEntity) {
     put_float(&mut entity.nbt, "ProcessingTime", -1.0);
     put_float(&mut entity.nbt, "RecipeTime", 0.0);
@@ -711,7 +764,7 @@ fn saw_start(game: &Game<'_>, entity: &mut ModBlockEntity) {
     let Some(input) = entity.items[0].clone() else {
         return;
     };
-    let recipes = find_recipes(game, "create:cutting", &input);
+    let recipes = filtered(find_recipes(game, "create:cutting", &input), saw_filter(entity).as_deref());
     put_bool(&mut entity.nbt, "AppliedRecipe", false);
     if recipes.is_empty() {
         put_float(&mut entity.nbt, "ProcessingTime", 10.0);
@@ -734,7 +787,7 @@ fn saw_apply(game: &Game<'_>, entity: &mut ModBlockEntity) {
     let Some(input) = entity.items[0].clone() else {
         return;
     };
-    let recipes = find_recipes(game, "create:cutting", &input);
+    let recipes = filtered(find_recipes(game, "create:cutting", &input), saw_filter(entity).as_deref());
     if recipes.is_empty() {
         return;
     }
@@ -1068,6 +1121,7 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
             }
             true
         }
+        Some(n) if is_saw(n) => saw_filter_click(game, pos, face),
         Some(MILLSTONE) => {
             // MillstoneBlock.useItemOn: an empty hand takes the outputs.
             if game.held().is_none() {
@@ -1279,6 +1333,26 @@ pub(super) fn draw_depots(
             .is_some_and(|s| super::create_logistics::is_chute_block(&s.name));
         if chute {
             super::create_logistics::draw_chute(game, camera, *pos, slots, out);
+            continue;
+        }
+        let saw = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1], pos[2]))
+            .filter(|s| is_saw(&s.name) && s.properties.get("facing").map(String::as_str) == Some("up"))
+            .map(|s| s.name.clone());
+        if let Some(block) = saw {
+            // SawFilterSlot: on the top, 3/16 along the saw's way.
+            if let Some((id, _)) = slots.first().filter(|(id, c)| *c > 0 && !id.is_empty())
+                && glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])).distance_squared(camera)
+                    <= 32.0 * 32.0
+            {
+                let along = block == super::create_actors::SAW_ALONG;
+                let at = if along { [0.5 + 3.0 / 16.0, 12.5 / 16.0, 0.5] } else { [0.5, 12.5 / 16.0, 0.5 + 3.0 / 16.0] };
+                let y_rot = if along { 90.0 } else { 0.0 } + 180.0;
+                super::create_logistics::draw_filter_item(game, camera, *pos, id, at, y_rot, 90.0, &block, out);
+            }
             continue;
         }
         let funnel = game

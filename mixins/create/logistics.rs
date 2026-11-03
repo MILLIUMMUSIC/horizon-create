@@ -2867,24 +2867,9 @@ pub(super) fn draw_funnel_filter(
     if corner.distance_squared(camera) > 32.0 * 32.0 {
         return;
     }
-    let light = game.world.light(pos[0], pos[1], pos[2]);
-    // isGui3d: block items stand at full size, others lie flat at half.
-    let block = game.pack.assets.registry.default_state(id).is_some();
-    let scale = if block { 1.0 } else { 0.5 } + 1.0 / 64.0;
-    let z_offset = if block { 0.0 } else { -0.15 };
-    let stack = ItemStack::new(id, 1);
     for side in f.filter_sides() {
         let (at, y_rot, x_rot) = filter_slot(f, side);
-        let centre = corner + glam::DVec3::new(f64::from(at[0]), f64::from(at[1]), f64::from(at[2]));
-        let m = glam::Mat4::from_translation((centre - camera).as_vec3())
-            * glam::Mat4::from_rotation_y(y_rot.to_radians())
-            * glam::Mat4::from_rotation_x(x_rot.to_radians())
-            * glam::Mat4::from_scale(glam::Vec3::splat(0.5 * scale))
-            * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z_offset));
-        let owner = super::item_draw::owner_at(centre.to_array(), 0.0, f.block());
-        let resolved =
-            game.resolve_item(&stack, horizon_assets::item_model::DisplayContext::Fixed, Some(&owner), pos[0] ^ pos[2]);
-        game.submit_item_world(&resolved, m, horizon_client::block_entity_render::vertex_light(light), out);
+        draw_filter_item(game, camera, pos, id, at, y_rot, x_rot, f.block(), out);
     }
 }
 
@@ -3474,4 +3459,37 @@ pub(super) fn can_insert_side(game: &Game<'_>, pos: Pos, side: Dir) -> bool {
 /// `handleInsertion` from `side`: what is left of `stack`.
 pub(super) fn insert_side(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack) -> Option<ItemStack> {
     side_insert(game, pos, side, stack, false)
+}
+
+/// `ValueBoxRenderer.renderItemIntoValueBox`: `id` in a filter slot at
+/// `at` (from the block's corner), turned `y_rot` about Y then `x_rot` about X.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_filter_item(
+    game: &Game<'_>,
+    camera: glam::DVec3,
+    pos: Pos,
+    id: &str,
+    at: [f32; 3],
+    y_rot: f32,
+    x_rot: f32,
+    owner_block: &str,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+    let light = game.world.light(pos[0], pos[1], pos[2]);
+    // isGui3d: block items stand at full size, others lie flat at half.
+    let block = game.pack.assets.registry.default_state(id).is_some();
+    let scale = if block { 1.0 } else { 0.5 } + 1.0 / 64.0;
+    let z_offset = if block { 0.0 } else { -0.15 };
+    let stack = ItemStack::new(id, 1);
+    let centre = corner + glam::DVec3::new(f64::from(at[0]), f64::from(at[1]), f64::from(at[2]));
+    let m = glam::Mat4::from_translation((centre - camera).as_vec3())
+        * glam::Mat4::from_rotation_y(y_rot.to_radians())
+        * glam::Mat4::from_rotation_x(x_rot.to_radians())
+        * glam::Mat4::from_scale(glam::Vec3::splat(0.5 * scale))
+        * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z_offset));
+    let owner = super::item_draw::owner_at(centre.to_array(), 0.0, owner_block);
+    let resolved =
+        game.resolve_item(&stack, horizon_assets::item_model::DisplayContext::Fixed, Some(&owner), pos[0] ^ pos[2]);
+    game.submit_item_world(&resolved, m, horizon_client::block_entity_render::vertex_light(light), out);
 }

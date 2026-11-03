@@ -391,7 +391,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       too. A saw facing up processes items (`SawBlockEntity`: a block entity with `ProcessingInventory`'s
       state on its lightning rod template; an item lands on it or comes from a belt or depot end, one at a time as
       `bulkCutting` is off, `create:cutting` recipes in round robin, the time scaled by speed, its pieces handed to
-      the belt or depot ahead or thrown, the stone or wood sound by a name heuristic). Not yet: its filter, cutting
+      the belt or depot ahead or thrown, the stone or wood sound by a name heuristic). Its filter (`SawFilterSlot`, a click on its top with an item, `outputMatchesFilter` over the recipes, drawn on the top) is ported. Not yet: cutting
       by vanilla stonecutting recipes (Horizon's recipe tables don't hand them to mods: an engine gap, no issue
       yet), package contents, belt funnels it hands to, the item and particles drawn on it, `flipped`, the tree's blocks' break effects by chance (all show), dynamic trees, wrenching a saw.
       Part 4c, storage, deployers and portable storage interfaces (**done, checked in the game in part**): the

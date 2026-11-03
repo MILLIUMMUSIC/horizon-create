@@ -896,4 +896,7 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   belt through it is split, one ingot into each depot, and the east, west, north and south flaps swing (`Flap<side>`
   counters in its block data). The goggle tooltip (`Currently distributing:`) is compiled only: the stack is held
   for too short a time to look at in an offscreen run.
+- The saw's filter: an iron ingot set on its top (a click with it in hand, `Filter` in the block data); an andesite
+  alloy dropped on it then came out uncut (no recipe with an iron ingot output). The filter item drawn on the saw's
+  top was not looked at in a screenshot.
 
