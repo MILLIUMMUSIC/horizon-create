@@ -751,14 +751,15 @@ fn save_text(s: &State, dimension: &str) -> String {
         }
         let bearing = &b.bearing;
         out += &format!(
-            "bearing {} {} {} {} {} {} {}\n",
+            "bearing {} {} {} {} {} {} {} {}\n",
             p[0],
             p[1],
             p[2],
             bearing.angle,
             u8::from(bearing.running),
             bearing.last_rpm,
-            bearing.mode
+            bearing.mode,
+            bearing.hand_of.map_or_else(|| "-".to_owned(), |o| format!("{},{},{}", o[0], o[1], o[2]))
         );
         if let Some(t) = &b.turning {
             let c = &t.contraption;
@@ -923,6 +924,10 @@ fn load(game: &Game<'_>, s: &mut State, dimension: &str) {
                 // KineticBlockEntity.read: a loaded speed isn't a change.
                 entry.bearing.last_rpm = f.get(6).and_then(|v| v.parse().ok()).unwrap_or(0.0);
                 entry.bearing.mode = f.get(7).and_then(|v| v.parse().ok()).unwrap_or(0);
+                entry.bearing.hand_of = f.get(8).and_then(|v| {
+                    let n: Vec<i32> = v.split(',').filter_map(|c| c.parse().ok()).collect();
+                    <[i32; 3]>::try_from(n).ok()
+                });
                 current = Some(Target::Bearing(pos));
             }
             Some("t") if f.len() >= 3 => {
@@ -1436,7 +1441,8 @@ fn encode(game: &Game<'_>, s: &mut State, dimension: &str) -> Vec<u8> {
         out.push(c.facing as u8);
         push_f(&mut out, b.bearing.angle);
         let still = super::create_actor_glue::stalled(dimension, Mover::Bearing(**pos));
-        push_f(&mut out, if still { 0.0 } else { super::create_contraption::convert_to_angular(b.bearing.last_rpm) });
+        let speed = b.bearing.arm_speed.unwrap_or_else(|| super::create_contraption::convert_to_angular(b.bearing.last_rpm));
+        push_f(&mut out, if still { 0.0 } else { speed });
         let full = s.changed.contains(&(dimension.to_owned(), **pos)) || s.ticks % 100 == 0;
         if full {
             out.extend_from_slice(&(c.blocks.len() as u32).to_le_bytes());
@@ -2510,6 +2516,11 @@ pub(super) fn step_piston_mode(game: &Game<'_>, pos: Pos, up: bool) -> Option<&'
             1 => "Only Place near Initial Angle",
             _ => "Only Place when Anchor Destroyed",
         });
+    } else if name == "create:clockwork_bearing" {
+        // `ClockHands`.
+        let b = &mut s.bearings.entry(key).or_default().bearing;
+        b.mode = next(b.mode);
+        return Some(super::create_contraption::ClockHands::of(b.mode).label());
     } else if name == "create:rope_pulley" {
         let q = &mut s.pulleys.entry(key).or_default().pulley;
         q.mode = next(q.mode);
@@ -2693,6 +2704,11 @@ fn assemble_bearing(game: &mut Game<'_>, pos: Pos, facing: Dir, windmill: bool) 
             }
         }
     };
+    Some(take_out_turning(game, contraption))
+}
+
+/// `removeBlocksFromWorld` for what a bearing turns.
+fn take_out_turning(game: &mut Game<'_>, contraption: BearingContraption<BlockStateId>) -> Turning {
     let mut texts = Vec::with_capacity(contraption.blocks.len());
     let mut entities = Vec::with_capacity(contraption.blocks.len());
     let at: Vec<Pos> = contraption
@@ -2717,13 +2733,13 @@ fn assemble_bearing(game: &mut Game<'_>, pos: Pos, facing: Dir, windmill: bool) 
     let all = s.glue.entry(dimension).or_default();
     let glue: Vec<(Pos, Pos)> = contraption.glue.iter().filter_map(|&g| all.get(g).copied()).collect();
     all.retain(|g| !glue.contains(g));
-    Some(Turning {
+    Turning {
         contraption,
         texts,
         entities,
         ranges,
         glue,
-    })
+    }
 }
 
 /// `ControlledContraptionEntity.disassemble`: the blocks put back turned
@@ -2861,7 +2877,177 @@ fn carry_turn(game: &mut Game<'_>, dimension: Option<&str>, anchor: Pos, centres
 /// After the kinetics' tick of `dimension`: every bearing's tick
 /// (`MechanicalBearingBlockEntity.tick`); a windmill's generated speed set
 /// from its sails. Pistons' ticks come first.
+/// `ClockworkBearingBlockEntity.tick`: its hands, each kept as a turning entry
+/// beside the bearings (the minute hand's key the block before its anchor).
+fn clockworks_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
+    use super::create_contraption::{ClockHands, clock_hour_speed, clock_minute_speed};
+    let found: Vec<(Pos, Dir, f32)> = super::create_glue::with_kinetics(game, |k, level| {
+        k.positions()
+            .into_iter()
+            .filter_map(|p| match k.get(p).map(|e| e.kind) {
+                Some(Kind::ClockworkBearing(f)) => Some((p, f, k.speed_of(level, p))),
+                _ => None,
+            })
+            .collect()
+    });
+    let natural = dimension == "minecraft:overworld";
+    let day_time = game.world.day_time;
+    // A bearing gone or turned: its hands go back where they are.
+    let orphans: Vec<(Pos, Pos)> = {
+        let guard = state();
+        guard.as_ref().map_or_else(Vec::new, |s| {
+            s.bearings
+                .iter()
+                .filter(|((d, _), _)| d == dimension)
+                .filter_map(|((_, key), e)| {
+                    let owner = e.bearing.hand_of?;
+                    let t = e.turning.as_ref()?;
+                    let keep = found.iter().any(|(p, f, _)| *p == owner && *f == t.contraption.facing);
+                    (!keep && game.world.loaded(owner[0], owner[2])).then_some((*key, owner))
+                })
+                .collect()
+        })
+    };
+    for (key, _) in orphans {
+        take_hand_back(game, dimension, key, changed);
+    }
+    for (pos, facing, rpm) in found {
+        if !game.world.loaded(pos[0], pos[2]) {
+            continue;
+        }
+        let clicked = state().as_ref().is_some_and(|s| s.clicked.iter().any(|(d, p)| d == dimension && *p == pos));
+        let hands = hands_of(dimension, pos);
+        let key = (dimension.to_owned(), pos);
+        let (mut assemble, mut disassemble, running, mode) = {
+            let mut guard = state();
+            let s = guard.get_or_insert_with(State::default);
+            let e = s.bearings.entry(key.clone()).or_default();
+            e.bearing.hand_of = Some(pos);
+            let mut next = e.bearing.assemble_next_tick;
+            if rpm != e.bearing.last_rpm {
+                e.bearing.last_rpm = rpm;
+                next = true;
+            }
+            e.bearing.assemble_next_tick = false;
+            (next && !e.bearing.running, next && e.bearing.running && rpm == 0.0, e.bearing.running, e.bearing.mode)
+        };
+        if clicked {
+            if running {
+                disassemble = true;
+            } else {
+                assemble = true;
+            }
+        }
+        if disassemble {
+            stop_actors(game, Mover::Bearing(pos));
+            for key in hands {
+                take_hand_back(game, dimension, key, changed);
+            }
+            continue;
+        }
+        if assemble {
+            let contraptions = {
+                let scan = scan(game);
+                BearingContraption::assemble_clockwork(&scan, pos, facing)
+            };
+            match contraptions {
+                Ok((Some(hour), minute)) => {
+                    let t = take_out_turning(game, hour);
+                    let m = minute.map(|c| {
+                        let hand_key = [0, 1, 2].map(|k| c.anchor[k] - facing.normal()[k]);
+                        (hand_key, take_out_turning(game, c))
+                    });
+                    let mut guard = state();
+                    let s = guard.get_or_insert_with(State::default);
+                    let e = s.bearings.entry(key.clone()).or_default();
+                    e.turning = Some(t);
+                    e.bearing.running = true;
+                    e.bearing.angle = 0.0;
+                    changed.push(pos);
+                    if let Some((hand_key, t)) = m {
+                        let e = s.bearings.entry((dimension.to_owned(), hand_key)).or_default();
+                        e.turning = Some(t);
+                        e.bearing.running = true;
+                        e.bearing.angle = 0.0;
+                        e.bearing.hand_of = Some(pos);
+                        changed.push(hand_key);
+                    }
+                    drop(guard);
+                    sound(game, "contraption_assemble", pos);
+                }
+                Ok(_) => {}
+                Err(e) => log::debug!("Create: clockwork bearing at {pos:?} can't turn: {e:?}"),
+            }
+            continue;
+        }
+        if !running {
+            continue;
+        }
+        // getAngularSpeed: always the same way.
+        let angular = -(rpm * 3.0 / 10.0).abs();
+        let clock = ClockHands::of(mode);
+        let step = if facing.positive() { 1 } else { -1 };
+        for hand in hands {
+            let mut turned = None;
+            {
+                let mut guard = state();
+                let s = guard.get_or_insert_with(State::default);
+                let Some(e) = s.bearings.get_mut(&(dimension.to_owned(), hand)) else {
+                    continue;
+                };
+                let before = e.bearing.angle;
+                let speed = if hand == pos {
+                    clock_hour_speed(angular, before, clock, day_time, natural, step)
+                } else {
+                    clock_minute_speed(angular, before, clock, day_time, natural, step)
+                };
+                e.bearing.angle = (before + speed) % 360.0;
+                e.bearing.arm_speed = Some(speed);
+                if facing.axis() == super::create_kinetics::Axis::Y
+                    && let Some(t) = &e.turning
+                {
+                    let c = &t.contraption;
+                    let solid: Vec<Pos> = c.blocks.iter().filter(|b| b.solid).map(|b| b.local).collect();
+                    turned = Some((c.anchor, turned_centres(c.anchor, facing.axis(), before, &solid), speed));
+                }
+            }
+            if let Some((anchor, centres, speed)) = turned {
+                carry_turn(game, Some(dimension), anchor, &centres, speed);
+            }
+        }
+    }
+}
+
+/// The turning entries of the clockwork bearing at `pos`.
+fn hands_of(dimension: &str, pos: Pos) -> Vec<Pos> {
+    let guard = state();
+    guard.as_ref().map_or_else(Vec::new, |s| {
+        s.bearings
+            .iter()
+            .filter(|((d, _), e)| d == dimension && e.bearing.hand_of == Some(pos))
+            .map(|((_, key), _)| *key)
+            .collect()
+    })
+}
+
+/// `ClockworkBearingBlockEntity.disassemble`: a hand put back, at no angle.
+fn take_hand_back(game: &mut Game<'_>, dimension: &str, key: Pos, changed: &mut Vec<Pos>) {
+    let turning = state().as_mut().and_then(|s| {
+        let e = s.bearings.get_mut(&(dimension.to_owned(), key))?;
+        e.bearing.running = false;
+        e.bearing.angle = 0.0;
+        e.bearing.arm_speed = None;
+        e.turning.take()
+    });
+    if let Some(t) = turning {
+        disassemble_bearing(game, t, 0.0);
+        sound(game, "contraption_disassemble", key);
+        changed.push(key);
+    }
+}
+
 fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
+    clockworks_tick(game, dimension, changed);
     let found: Vec<(Pos, Dir, bool, f32)> = super::create_glue::with_kinetics(game, |k, level| {
         k.positions()
             .into_iter()
@@ -2990,7 +3176,11 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
     // Bearings that are gone put their structure back where it is.
     let gone: Vec<Pos> = taken
         .keys()
-        .filter(|p| !found.iter().any(|(q, ..)| q == *p) && game.world.loaded(p[0], p[2]))
+        .filter(|p| {
+            !found.iter().any(|(q, ..)| q == *p)
+                && game.world.loaded(p[0], p[2])
+                && taken.get(*p).is_none_or(|e| e.bearing.hand_of.is_none())
+        })
         .copied()
         .collect();
     for p in gone {
@@ -3022,7 +3212,7 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
 /// with an empty hand, not sneaking: true when it took the click.
 fn click_bearing(game: &mut Game<'_>, pos: Pos) -> bool {
     let name = &game.res.facts().get(game.world.block(pos[0], pos[1], pos[2])).name;
-    if name.as_ref() != "create:mechanical_bearing" && name.as_ref() != "create:windmill_bearing" {
+    if !matches!(name.as_ref(), "create:mechanical_bearing" | "create:windmill_bearing" | "create:clockwork_bearing") {
         return false;
     }
     if game.held().is_some() || game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
@@ -4144,5 +4334,5 @@ pub(super) fn is_piston(game: &Game<'_>, pos: Pos) -> bool {
         .assets
         .registry
         .state(game.world.block(pos[0], pos[1], pos[2]))
-        .is_some_and(|s| piston_of(&s.name).is_some() || s.name == "create:rope_pulley" || s.name == "create:mechanical_bearing")
+        .is_some_and(|s| piston_of(&s.name).is_some() || s.name == "create:rope_pulley" || s.name == "create:mechanical_bearing" || s.name == "create:clockwork_bearing")
 }

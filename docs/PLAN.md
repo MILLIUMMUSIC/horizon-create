@@ -543,6 +543,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
 
+   The clockwork bearing (`Kind::ClockworkBearing`, `contraption.rs`, `contraptions.rs::clockworks_tick`): what is before it turns as the hour hand and, past the first gap along it (`assembleClockworkAt`), a structure that doesn't touch it as the minute hand, each at most its speed (minute) or half (hour) toward the time of day, always going the short way; the wheel chooses `ClockHands`. A hand is a turning entry beside the bearings, the minute's keyed at the block before its anchor. A stop or a click puts them back as built. Not yet: actors on its hands (`tick_actors`), stalling, the sequenced limit doesn't apply in Create either.
+
    The sticker (`sticker_glue.rs`, `contraption.rs`): a redstone rising edge flips `EXTENDED`, the head chases it and takes hold with Create's sound; extended it brings the block before it in a structure, retracted it holds nothing. The wrench turns it. Not yet: glue's particles as it grips, its slime bounce (`updateEntityAfterFallOn`).
 
    The valve handles (`Kind::ValveHandle`, seventeen blocks): `HandCrankBlock`'s placement, 32 RPM and 8 su for as long as its angle takes (45 by default) with the context that limits a bearing (`SequenceContext`), a cooldown

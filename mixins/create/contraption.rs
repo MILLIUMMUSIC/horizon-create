@@ -1837,7 +1837,203 @@ pub struct BearingContraption<S> {
     pub glue: Vec<usize>,
 }
 
+/// `ClockworkContraption.moveBlock`: a world with the hour hand's blocks taken
+/// out of the search for the minute hand.
+struct WithoutBlocks<'a, W> {
+    world: &'a W,
+    ignored: HashSet<Pos>,
+}
+
+impl<W: StructureWorld> StructureWorld for WithoutBlocks<'_, W> {
+    type State = W::State;
+    fn loaded(&self, pos: Pos) -> bool {
+        self.world.loaded(pos)
+    }
+    fn outside_height(&self, pos: Pos) -> bool {
+        self.world.outside_height(pos)
+    }
+    fn facts(&self, pos: Pos) -> Facts {
+        let mut f = self.world.facts(pos);
+        if self.ignored.contains(&pos) {
+            f.necessary = false;
+        }
+        f
+    }
+    fn state(&self, pos: Pos) -> Self::State {
+        self.world.state(pos)
+    }
+    fn head(&self, facing: Dir, sticky: bool) -> Self::State {
+        self.world.head(facing, sticky)
+    }
+    fn pole(&self, facing: Dir) -> Self::State {
+        self.world.pole(facing)
+    }
+    fn glue(&self, pos: Pos, dir: Dir) -> Option<usize> {
+        self.world.glue(pos, dir)
+    }
+}
+
+/// `AngleHelper.getShortestAngleDiff`.
+pub fn shortest_angle_diff(current: f32, target: f32) -> f32 {
+    let (current, target) = (f64::from(current) % 360.0, f64::from(target) % 360.0);
+    ((((target - current) % 360.0 + 540.0) % 360.0) - 180.0) as f32
+}
+
+/// `ClockHands`: which hand is which, by the bearing's mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockHands {
+    HourFirst,
+    MinuteFirst,
+    HourFirst24,
+}
+
+impl ClockHands {
+    pub fn of(mode: u8) -> ClockHands {
+        match mode {
+            1 => ClockHands::MinuteFirst,
+            2 => ClockHands::HourFirst24,
+            _ => ClockHands::HourFirst,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            ClockHands::HourFirst => "Hour hand first",
+            ClockHands::MinuteFirst => "Minute hand first",
+            ClockHands::HourFirst24 => "24-Hour hand first",
+        }
+    }
+}
+
+/// `getHourTarget`, with `step` the facing's direction.
+pub fn clock_hour_target(day_time: i64, natural: bool, cycle24: bool, step: i32) -> f32 {
+    let day = (day_time * if natural { 1 } else { 24 }).rem_euclid(24000) as i32;
+    let hours = (day / 1000 + 6) % 24;
+    let (length, cycle) = if cycle24 { (24.0f32, 24) } else { (12.0, 12) };
+    (step as f32 * -360.0 / length) * (hours % cycle) as f32
+}
+
+/// `getMinuteTarget`.
+pub fn clock_minute_target(day_time: i64, natural: bool, step: i32) -> f32 {
+    let day = (day_time * if natural { 1 } else { 24 }).rem_euclid(24000) as i32;
+    let minutes = (day % 1000) * 60 / 1000;
+    (step as f32 * -360.0 / 60.0) * minutes as f32
+}
+
+fn toward(mut speed: f32, angle: f32, target: f32) -> f32 {
+    if speed != 0.0 {
+        let diff = shortest_angle_diff(angle, target);
+        speed = if diff < 0.0 {
+            speed.max(diff)
+        } else {
+            (-speed).min(diff)
+        };
+    }
+    speed
+}
+
+/// `getHourArmSpeed`, `angular` being `getAngularSpeed`.
+pub fn clock_hour_speed(
+    angular: f32,
+    angle: f32,
+    hands: ClockHands,
+    day_time: i64,
+    natural: bool,
+    step: i32,
+) -> f32 {
+    let target = match hands {
+        ClockHands::HourFirst => clock_hour_target(day_time, natural, false, step),
+        ClockHands::MinuteFirst => clock_minute_target(day_time, natural, step),
+        ClockHands::HourFirst24 => clock_hour_target(day_time, natural, true, step),
+    };
+    toward(angular / 2.0, angle, target)
+}
+
+/// `getMinuteArmSpeed`.
+pub fn clock_minute_speed(
+    angular: f32,
+    angle: f32,
+    hands: ClockHands,
+    day_time: i64,
+    natural: bool,
+    step: i32,
+) -> f32 {
+    let target = match hands {
+        ClockHands::MinuteFirst => clock_hour_target(day_time, natural, false, step),
+        _ => clock_minute_target(day_time, natural, step),
+    };
+    toward(angular, angle, target)
+}
+
 impl<S: Clone> BearingContraption<S> {
+    /// `ClockworkContraption.assembleClockworkAt`: the hour hand, and the
+    /// minute hand beyond it.
+    pub fn assemble_clockwork<W: StructureWorld<State = S>>(
+        world: &W,
+        pos: Pos,
+        facing: Dir,
+    ) -> Result<(Option<Self>, Option<Self>), AssemblyError> {
+        let Some(hour) = Self::assemble_hand(world, pos, facing, 0)? else {
+            return Ok((None, None));
+        };
+        let held: HashSet<Pos> = hour
+            .blocks
+            .iter()
+            .map(|b| [0, 1, 2].map(|k| b.local[k] + hour.anchor[k]))
+            .collect();
+        let arm = (0..16)
+            .find(|i| !held.contains(&step(hour.anchor, facing, *i)))
+            .unwrap_or(0);
+        if arm == 0 {
+            return Ok((Some(hour), None));
+        }
+        let minute = Self::assemble_hand(
+            &WithoutBlocks {
+                world,
+                ignored: held,
+            },
+            pos,
+            facing,
+            arm,
+        )?;
+        Ok((Some(hour), minute))
+    }
+
+    fn assemble_hand<W: StructureWorld<State = S>>(
+        world: &W,
+        pos: Pos,
+        facing: Dir,
+        offset: i32,
+    ) -> Result<Option<Self>, AssemblyError> {
+        let anchor = step(pos, facing, offset + 1);
+        let mut frontier = VecDeque::new();
+        if world.facts(anchor).necessary && !world.facts(anchor).brittle {
+            frontier.push_back(anchor);
+        }
+        let anchoring = HashSet::from([pos]);
+        let mut glue = Vec::new();
+        let found = search_structure(world, frontier, &anchoring, None, &mut glue, 0)?;
+        if found.is_empty() {
+            return Ok(None);
+        }
+        let blocks = found
+            .into_iter()
+            .map(|(p, f)| Moved {
+                local: sub(p, anchor),
+                state: world.state(p),
+                solid: f.solid,
+                brittle: f.brittle,
+                pole: false,
+            })
+            .collect();
+        Ok(Some(BearingContraption {
+            facing,
+            anchor,
+            blocks,
+            sails: 0,
+            glue,
+        }))
+    }
+
     /// `BearingContraption.assemble` for the bearing at `pos`: none when
     /// nothing stands in front of it.
     pub fn assemble<W: StructureWorld<State = S>>(
@@ -2106,6 +2302,10 @@ pub struct Bearing {
     pub mode: u8,
     /// `sequencedAngleLimit`: how far a sequenced gearshift lets it turn.
     pub limit: Option<f64>,
+    /// A clockwork bearing's hand: the bearing it belongs to.
+    pub hand_of: Option<Pos>,
+    /// A clockwork hand's degrees a tick.
+    pub arm_speed: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2350,6 +2550,8 @@ mod tests {
         ] {
             let mut b = Bearing {
                 limit: None,
+                hand_of: None,
+                arm_speed: None,
                 running: true,
                 angle,
                 assemble_next_tick: true,
@@ -3128,6 +3330,34 @@ mod tests {
         assert_eq!(sticker_state(true, true, false), (false, true));
         assert_eq!(sticker_state(false, true, true), (true, false));
         assert_eq!(sticker_state(true, true, true), (true, true));
+    }
+
+    #[test]
+    fn a_clock_tells_the_time() {
+        // Six in the morning at 0, noon at 6000.
+        assert_eq!(clock_hour_target(0, true, false, 1), -180.0);
+        assert_eq!(clock_hour_target(6000, true, false, 1), 0.0);
+        assert_eq!(clock_hour_target(0, true, true, 1), -90.0);
+        assert_eq!(clock_minute_target(500, true, 1), -180.0);
+        assert_eq!(shortest_angle_diff(350.0, 10.0), 20.0);
+        assert_eq!(shortest_angle_diff(10.0, 350.0), -20.0);
+        // Turning toward the hour at half the speed, stopping there.
+        assert_eq!(
+            clock_hour_speed(-4.8, 0.0, ClockHands::HourFirst, 7000, true, 1),
+            -2.4
+        );
+        assert_eq!(
+            clock_hour_speed(-4.8, -30.0, ClockHands::HourFirst, 7000, true, 1),
+            0.0
+        );
+        assert_eq!(
+            clock_minute_speed(-4.8, 0.0, ClockHands::HourFirst, 6500, true, 1),
+            -4.8
+        );
+        assert_eq!(
+            clock_hour_speed(0.0, 0.0, ClockHands::HourFirst, 7000, true, 1),
+            0.0
+        );
     }
 
     #[test]

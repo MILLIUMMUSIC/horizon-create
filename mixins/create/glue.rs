@@ -2671,7 +2671,7 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
         }
         // BearingRenderer: the shaft half behind, the top turned with the
         // structure (a windmill's wooden).
-        Kind::MechanicalBearing(f) | Kind::WindmillBearing(f) => {
+        Kind::MechanicalBearing(f) | Kind::WindmillBearing(f) | Kind::ClockworkBearing(f) => {
             want.push(("create:hz_part_shaft_half", None, rotate_to_face(f.opposite()), f.axis(), standard, 0.0));
             let top = if matches!(view.kind, Kind::WindmillBearing(_)) {
                 "create:hz_part_bearing_top_wooden"

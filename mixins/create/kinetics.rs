@@ -327,6 +327,7 @@ impl Kind {
             Kind::EncasedFan(f) => Kind::EncasedFan(turn_facing(f)),
             Kind::Drill(f) => Kind::Drill(turn_facing(f)),
             Kind::MechanicalBearing(f) => Kind::MechanicalBearing(turn_facing(f)),
+            Kind::ClockworkBearing(f) => Kind::ClockworkBearing(turn_facing(f)),
             Kind::WindmillBearing(f) => Kind::WindmillBearing(turn_facing(f)),
             // PumpBlock.getRotatedBlockState: turned round, whatever the face.
             Kind::MechanicalPump(f) => Kind::MechanicalPump(f.opposite()),
@@ -365,6 +366,7 @@ impl Kind {
             | Kind::MechanicalPump(f)
             | Kind::MechanicalCrafter(f)
             | Kind::MechanicalBearing(f)
+            | Kind::ClockworkBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => Some(("facing", f.name())),
             Kind::Deployer(f, _)
@@ -537,6 +539,8 @@ pub enum Kind {
     /// and whether it is sticky; its `STATE` is in the block, not the kind
     /// (contraption.rs).
     MechanicalPiston(Dir, bool, bool),
+    /// `ClockworkBearingBlock`: the way its top faces; its shaft is behind.
+    ClockworkBearing(Dir),
     /// `MechanicalBearingBlock`: the way its top faces; its shaft is behind
     /// (contraption.rs turns what is in front).
     MechanicalBearing(Dir),
@@ -668,6 +672,7 @@ impl Kind {
             "create:mechanical_mixer" => Some(Kind::MechanicalMixer),
             "create:mechanical_arm" => Some(Kind::MechanicalArm),
             "create:mechanical_bearing" => facing().map(Kind::MechanicalBearing),
+            "create:clockwork_bearing" => facing().map(Kind::ClockworkBearing),
             "create:mechanical_drill" => facing().map(Kind::Drill),
             "create:windmill_bearing" => facing().map(Kind::WindmillBearing),
             "create:rope_pulley" => axis().map(Kind::RopePulley),
@@ -732,6 +737,7 @@ impl Kind {
             Kind::Belt(b) => b.block().map_or("create:belt", |(name, _)| name),
             Kind::MechanicalArm => "create:mechanical_arm",
             Kind::MechanicalBearing(_) => "create:mechanical_bearing",
+            Kind::ClockworkBearing(_) => "create:clockwork_bearing",
             Kind::Drill(_) => "create:mechanical_drill",
             Kind::WindmillBearing(_) => "create:windmill_bearing",
             Kind::RopePulley(_) => "create:rope_pulley",
@@ -782,6 +788,7 @@ impl Kind {
             | Kind::MechanicalPump(f)
             | Kind::MechanicalCrafter(f)
             | Kind::MechanicalBearing(f)
+            | Kind::ClockworkBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => f.axis(),
             Kind::EncasedCog(_, _, a, ..) => a,
@@ -829,6 +836,7 @@ impl Kind {
             Kind::Millstone | Kind::Turntable => face == Dir::Down,
             Kind::EncasedFan(f)
             | Kind::MechanicalBearing(f)
+            | Kind::ClockworkBearing(f)
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => face == f.opposite(),
             Kind::MechanicalPump(_) | Kind::MechanicalCrafter(_) => false,
@@ -885,7 +893,7 @@ impl Kind {
             Kind::HosePulley(_) => 4.0,
             Kind::CuckooClock(..) => 1.0,
             Kind::MechanicalPiston(..) => 4.0,
-            Kind::MechanicalBearing(_) => 4.0,
+            Kind::MechanicalBearing(_) | Kind::ClockworkBearing(_) => 4.0,
             Kind::RopePulley(_) => 4.0,
             Kind::Drill(_) => 4.0,
             Kind::Saw(..) => 4.0,
@@ -2560,6 +2568,7 @@ fn kind_key(k: Kind) -> String {
         | Kind::MechanicalPump(f)
         | Kind::MechanicalCrafter(f)
         | Kind::MechanicalBearing(f)
+        | Kind::ClockworkBearing(f)
         | Kind::WindmillBearing(f)
         | Kind::Drill(f) => f.name(),
         Kind::EncasedCog(_, _, a, ..) => a.name(),
@@ -2843,6 +2852,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
             (15, dir(d) | u8::from(along) << 3 | u8::from(sticky) << 4)
         }
         Kind::MechanicalBearing(d) => (16, dir(d)),
+        Kind::ClockworkBearing(d) => (43, dir(d)),
         Kind::WindmillBearing(d) => (17, dir(d)),
         Kind::RopePulley(a) => (18, axis(a)),
         Kind::GantryShaft(d) => (19, dir(d)),
@@ -2921,6 +2931,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
             state & 16 != 0,
         ),
         16 => Kind::MechanicalBearing(dir?),
+        43 => Kind::ClockworkBearing(dir?),
         17 => Kind::WindmillBearing(dir?),
         18 => Kind::RopePulley(axis?),
         19 => Kind::GantryShaft(dir?),

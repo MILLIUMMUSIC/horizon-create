@@ -1131,3 +1131,8 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 
 - On a bearing, not extended: a turning structure took the sticker and left a block on it. Extended: both went and came back. A redstone block beside it set `extended=true`, with the head out in the frame.
   Not tried: the wrench, retracting, on a piston.
+
+## Clockwork bearing (macOS, offscreen)
+
+- Oak stairs and cobblestone stairs before it, at 13:00 of the game's clock, with a motor: both left the world, in the frame the far (minute) hand upright and the near (hour) tilted. Motor gone: both back as placed.
+  Not tried: `ClockHands` by the wheel, a click, a reload, other facings.

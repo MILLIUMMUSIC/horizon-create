@@ -429,6 +429,7 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         // DrillBlock, BearingBlock, WindmillBearingBlock: DirectionalKineticBlock's.
         Kind::Drill(_) => Kind::Drill(directional(ctx, around)),
         Kind::MechanicalBearing(_) => Kind::MechanicalBearing(directional(ctx, around)),
+        Kind::ClockworkBearing(_) => Kind::ClockworkBearing(directional(ctx, around)),
         Kind::WindmillBearing(_) => Kind::WindmillBearing(directional(ctx, around)),
         // PulleyBlock: HorizontalAxisKineticBlock's.
         Kind::RopePulley(_) => Kind::RopePulley(horizontal_axis(ctx, around)),

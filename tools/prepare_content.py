@@ -108,6 +108,7 @@ DIRECTIONAL = {
     # BearingBlock: the casing stays in the chunk mesh; its top turns with
     # the structure (a partial) and its shaft half with the kinetics.
     "mechanical_bearing": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
+    "clockwork_bearing": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
     "windmill_bearing": {"template": "minecraft:lightning_rod", "shape": box(0, 0, 0, 16, 16, 16)},
     # DrillBlock: AllShapes.CASING_12PX; the casing stays in the chunk mesh,
     # its head is a partial turning with the kinetics.
