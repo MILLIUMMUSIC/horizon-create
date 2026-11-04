@@ -968,6 +968,32 @@ impl ItemHandler for Inv {
     }
 }
 
+/// `getStackInSlot` and `getSlotLimit` of every slot, for what reads an
+/// inventory without taking from it.
+pub(super) fn stacks_of(game: &mut Game<'_>, inv: &Inv) -> Vec<(Option<ItemStack>, u32)> {
+    let of = |items: Option<Vec<Option<ItemStack>>>, limit: u32| -> Vec<(Option<ItemStack>, u32)> {
+        items.unwrap_or_default().into_iter().map(|s| (s, limit)).collect()
+    };
+    match inv {
+        Inv::Vault(blocks) => blocks.iter().flat_map(|b| of(mod_items(game, *b), 64)).collect(),
+        Inv::Depot(pos) | Inv::Basin(pos) | Inv::Chute(pos) | Inv::Mod(pos, _) => of(mod_items(game, *pos), 64),
+        Inv::Chest(pos) => of(chest_items(game, *pos), 64),
+        Inv::Psi(pos) => of(super::create_actor_glue::psi_items(game, *pos, true, |items| items.clone()), 64),
+        Inv::Deployer(pos) => {
+            let dim = game.dim.id().to_owned();
+            with_state(|s| {
+                s.deployers.get(&(dim, *pos)).map_or_else(Vec::new, |d| {
+                    d.overflow.iter().map(|o| (Some(o.clone()), 64)).chain([(d.held.clone(), 64)]).collect()
+                })
+            })
+        }
+        // ItemHandlerBeltSegment, a crafter's single-item slots.
+        Inv::Belt(_) => (0..inv.slots(game)).map(|i| (inv.extract(game, i, 64, true), 64)).collect(),
+        Inv::Crafter(_) => (0..inv.slots(game)).map(|i| (inv.extract(game, i, 64, true), 1)).collect(),
+        Inv::Burner(_) | Inv::Crusher(_) | Inv::Campfire(_) | Inv::Composter(_) | Inv::Anchor(_) => Vec::new(),
+    }
+}
+
 /// `ItemHandlerHelper.insertItem`: slot by slot.
 pub(super) fn insert_item(
     game: &mut Game<'_>,

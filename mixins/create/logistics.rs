@@ -2171,6 +2171,7 @@ pub(super) fn export_to_belt_funnel(game: &mut Game<'_>, funnel_pos: Pos, side: 
     let left = insert_into(game, behind, f.facing, stack.clone());
     if left.as_ref().is_none_or(|l| l.count != stack.count) {
         flap(game, funnel_pos, f.facing, true);
+        super::create_detector_glue::funnel_transfer(game, funnel_pos, &stack.item);
     }
     Some(left)
 }
@@ -2430,6 +2431,7 @@ fn extract(game: &mut Game<'_>, pos: Pos, f: FunnelState, behind: Pos, filter: O
         return false;
     };
     let (at, motion) = extracted_item(pos, f.facing);
+    super::create_detector_glue::funnel_transfer(game, pos, &stack.item);
     game.spawn_item(stack, at, motion, PICKUP_DELAY);
     flap(game, pos, f.facing, false);
     true
@@ -2504,6 +2506,7 @@ fn collect(game: &mut Game<'_>, pos: Pos, f: FunnelState, filter: Option<&Filter
             changed = true;
             // AbstractFunnelBlock.entityInside: the flap swings in.
             flap(game, pos, f.facing, true);
+            super::create_detector_glue::funnel_transfer(game, pos, &stack.item);
         }
     }
     if changed {
@@ -3604,6 +3607,57 @@ pub(super) fn has_belt_input(game: &Game<'_>, pos: Pos) -> bool {
     has_direct_input(game, pos)
 }
 
+/// `TransportedItemStackHandlerBehaviour.handleCenteredProcessingOnAllItems` as
+/// the smart observer uses it: the items within `max` of the middle of a belt
+/// segment or on a depot; none when it is neither.
+pub(super) fn centred_items(game: &Game<'_>, pos: Pos, max: f32) -> Option<Vec<ItemStack>> {
+    use horizon_client::containers::BlockEntity as B;
+    if belt_at(game, pos).is_some() {
+        let items = with_belt_segment(game, pos, |inv, _, index| {
+            let middle = index as f32 + 0.5;
+            inv.items.iter().filter(|t| (middle - t.belt_position).abs() < max).map(|t| t.stack.clone()).collect()
+        });
+        return Some(items.unwrap_or_default());
+    }
+    match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+        Some(B::Mod(m)) if m.id == super::create_machines::DEPOT || m.id == super::create_ejector_glue::EJECTOR => {
+            Some(m.items.first().cloned().flatten().into_iter().collect())
+        }
+        _ => None,
+    }
+}
+
+/// `InvManipulationBehaviour`'s inventory at `pos`, past sidedness: each slot's
+/// stack and its limit.
+pub(super) fn observed_stacks(game: &mut Game<'_>, pos: Pos) -> Option<Vec<(Option<ItemStack>, u32)>> {
+    use horizon_client::containers::BlockEntity as B;
+    if tunnel_at(game, pos).is_some() {
+        return observed_stacks(game, [pos[0], pos[1] - 1, pos[2]]);
+    }
+    if let Some(inv) = super::create_arms::handler_at(game, pos) {
+        return Some(super::create_arms::stacks_of(game, &inv));
+    }
+    let of = |slots: &[Option<ItemStack>]| slots.iter().map(|s| (s.clone(), 64)).collect();
+    match game.world.block_entities.get(&(pos[0], pos[1], pos[2]))? {
+        B::Furnace(f) => Some(of(&f.items)),
+        B::Brewing(b) => Some(of(&b.items)),
+        B::Crafter(c) => Some(c.items.iter().map(|s| (s.clone(), 1)).collect()),
+        _ => None,
+    }
+}
+
+/// `observedInventory.simulate().extract()` with a filter: something to take.
+pub(super) fn any_extractable(game: &mut Game<'_>, pos: Pos, test: &dyn Fn(&ItemStack) -> bool) -> bool {
+    use super::create_arms::ItemHandler;
+    if tunnel_at(game, pos).is_some() {
+        return any_extractable(game, [pos[0], pos[1] - 1, pos[2]], test);
+    }
+    if let Some(inv) = super::create_arms::handler_at(game, pos) {
+        return (0..inv.slots(game)).any(|i| inv.extract(game, i, 64, true).is_some_and(|s| test(&s)));
+    }
+    observed_stacks(game, pos).is_some_and(|slots| slots.iter().any(|(s, _)| s.as_ref().is_some_and(test)))
+}
+
 /// For the crafter: whether a funnel or chute would find an inventory at
 /// `pos`, and putting `stack` into it through `face`.
 pub(super) fn has_inventory_at(game: &Game<'_>, pos: Pos) -> bool {
@@ -3652,6 +3706,21 @@ pub(super) fn draw_filter_item(
     owner_block: &str,
     out: &mut Vec<horizon_client::mesher::Vertex>,
 ) {
+    draw_filter_item_turned(game, camera, pos, id, at, [y_rot, x_rot, 0.0], owner_block, out);
+}
+
+/// The same with a slot's turns about Y, X and Z (`ValueBoxTransform.rotate`).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_filter_item_turned(
+    game: &Game<'_>,
+    camera: glam::DVec3,
+    pos: Pos,
+    id: &str,
+    at: [f32; 3],
+    turns: [f32; 3],
+    owner_block: &str,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
     let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
     let light = neighbour_light(game, pos);
     // isGui3d: block items stand at full size, others lie flat at half.
@@ -3661,8 +3730,9 @@ pub(super) fn draw_filter_item(
     let stack = ItemStack::new(id, 1);
     let centre = corner + glam::DVec3::new(f64::from(at[0]), f64::from(at[1]), f64::from(at[2]));
     let m = glam::Mat4::from_translation((centre - camera).as_vec3())
-        * glam::Mat4::from_rotation_y(y_rot.to_radians())
-        * glam::Mat4::from_rotation_x(x_rot.to_radians())
+        * glam::Mat4::from_rotation_y(turns[0].to_radians())
+        * glam::Mat4::from_rotation_x(turns[1].to_radians())
+        * glam::Mat4::from_rotation_z(turns[2].to_radians())
         * glam::Mat4::from_scale(glam::Vec3::splat(0.5 * scale))
         * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z_offset));
     let owner = super::item_draw::owner_at(centre.to_array(), 0.0, owner_block);

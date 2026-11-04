@@ -745,6 +745,10 @@ pub(super) fn state_for_placement(
         }
         return;
     }
+    if super::create_detector_glue::is_ours(&s.name) {
+        *answer = Some(super::create_detector_glue::placement(level, state, pos, face, context.yaw, context.pitch, context.sneaking));
+        return;
+    }
     if s.name == super::create_crate_glue::HATCH {
         *answer = Some(super::create_crate_glue::hatch_placement(level, state, Dir::nearest(context.face.normal())));
         return;
@@ -991,6 +995,10 @@ pub(super) fn block_signal(
     let Some(s) = level.registry.state(state) else {
         return;
     };
+    if super::create_detector_glue::is_ours(&s.name) {
+        super::create_detector_glue::block_signal(level, state, Dir::nearest(face.normal()), _direct, signal);
+        return;
+    }
     if super::create_redstone_glue::is_ours(&s.name) {
         super::create_redstone_glue::block_signal(
             level,
@@ -1019,7 +1027,7 @@ pub(super) fn is_signal_source(level: &super::GameLevel<'_>, state: BlockStateId
     let Some(s) = level.registry.state(state) else {
         return;
     };
-    if super::create_redstone_glue::is_ours(&s.name) {
+    if super::create_redstone_glue::is_ours(&s.name) || super::create_detector_glue::is_ours(&s.name) {
         *source = true;
     }
     if s.name == super::create_machines::LINK {
@@ -1167,7 +1175,7 @@ fn right_click_hand(
     face: [i32; 3],
     canceled: &mut bool,
 ) {
-    if valve_handle_click(game, pos) || super::create_crate_glue::right_click(game, pos) {
+    if valve_handle_click(game, pos) || super::create_crate_glue::right_click(game, pos) || super::create_detector_glue::right_click(game, pos, face) {
         *canceled = true;
         return;
     }
@@ -1463,6 +1471,7 @@ pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
         super::create_ejector_glue::client_tick(game);
         super::create_whistle_glue::client_tick(game);
         super::create_sequencer_glue::client_tick(game);
+        super::create_detector_glue::client_tick(game);
         super::create_cuckoo_glue::client_tick(game);
         super::create_sticker_glue::client_tick(game);
         super::create_redstone_glue::bells_client_tick(game);
@@ -1718,6 +1727,10 @@ pub(super) fn from_client(game: &mut Game<'_>, player: u128, channel: &str, data
     }
     if block_name(game, pos) == super::create_sequencer_glue::BLOCK && value & super::create_sequencer::CONFIG_FLAG != 0 {
         super::create_sequencer_glue::configure(game, pos, value);
+        return;
+    }
+    if block_name(game, pos) == super::create_detector_glue::SWITCH && value & super::create_detector::CONFIG_FLAG != 0 {
+        super::create_detector_glue::configure(game, pos, value);
         return;
     }
     let max = super::create_kinetics::MAX_ROTATION_SPEED as i32;
@@ -2046,6 +2059,7 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
 pub(super) fn from_server(channel: &str, data: &[u8]) {
     if channel == super::create_sequencer_glue::CHANNEL {
         super::create_sequencer_glue::from_server(data);
+        super::create_detector_glue::from_server(data);
         return;
     }
     if channel == super::create_machines::DEPOTS {
@@ -2876,6 +2890,7 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_sticker_glue::draw(game, camera, render_time(), out);
     super::create_redstone_glue::draw_bells(game, camera, render_time(), out);
     super::create_crate_glue::draw(game, camera, out);
+    super::create_detector_glue::draw(game, camera, out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);

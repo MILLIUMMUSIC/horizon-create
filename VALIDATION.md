@@ -1144,3 +1144,12 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - Creative crate: an iron ingot clicked on its top filled its first slot with 64, and a hopper below took them to a chest.
 - Item hatch on a chest: 3 gold ingots in hand went in, `open=true` then `false`, the bar said `Held item deposited`.
   Not tried: comparators on lamps, the plunger's look, a hatch filter, sneak-depositing.
+
+## Smart observer and threshold switch (macOS, offscreen)
+
+- Observer placed by a click beside a chest with dirt: it faced the chest, `powered=true`, a wire beside it read 15; the chest emptied: both off. Stone as its filter (clicked on its top slot): off with dirt in the chest; dirt: on. The filter is drawn on its back and top.
+- Observer over a stationary belt with a dirt item at the segment's middle: on. Beside an extracting funnel on a chest: a pulse when the funnel took one out (the chest 3 to 2). Beside a tank: off empty, on after a water bucket.
+- Switch on a chest: 192 dirt (over the default 128) gave `level=1`, `powered=true`, wire 15. Its screen: inputs scrolled (127 then the off input), measure scrolled to stacks rounded them to 2 and 1 stacks; the flip button took the signal off and back and moved the highlight and torches. Confirm closes it.
+- Switch on a tank shows `1 Buckets`, `0 Buckets`, wider inputs, no measure; on a rope pulley at y 103 `103y`, `64y`, `level=5`.
+- After `horizon-ctl save` and `quit` and a new launch: the observers and switch still powered, the screen with its 2 and 1 stacks.
+  Not tried: fluid flows in pipes, inverted thresholds across a reload, the wrench on either, a LAN guest's screen.

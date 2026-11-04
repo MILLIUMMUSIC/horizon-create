@@ -1840,6 +1840,26 @@ def fit_small_blocks(content):
             {"facing": "north", "open": "false"},
             {"property": "facing", "values": {f: [box(*turned(b, opposite[f])) for b in hatch] for f in horizontals}})
     to_multipart("item_hatch")
+    # The smart observer and the threshold switch (DirectedDirectionalBlock);
+    # the switch's `powered` is its block entity's `poweredAfterDelay`, read by
+    # signals that have no block entity at hand, and no model looks at it.
+    aim = {"facing": {"type": "enum", "values": list(horizontals)},
+           "target": {"type": "enum", "values": ["floor", "wall", "ceiling"]},
+           "powered": boolean}
+    aim_default = {"facing": "north", "target": "wall", "powered": "false"}
+    whole = {"default": [box(0, 0, 0, 16, 16, 16)]}
+    declare("content_observer", aim, aim_default, whole)
+    to_multipart("content_observer")
+    declare("stockpile_switch", {**aim, "level": {"type": "enum", "values": ["0", "1", "2", "3", "4", "5"]}},
+            {**aim_default, "level": "0"}, whole)
+    to_multipart("stockpile_switch")
+    # ThresholdSwitchScreen's unlit torch: no such item, so a model of its own.
+    models = content / "assets" / "create" / "models" / "item"
+    items = content / "assets" / "create" / "items"
+    write_json(models / "hz_redstone_torch_off.json",
+               {"parent": "minecraft:item/generated", "textures": {"layer0": "minecraft:block/redstone_torch_off"}})
+    write_json(items / "hz_redstone_torch_off.json",
+               {"model": {"type": "minecraft:model", "model": "create:item/hz_redstone_torch_off"}})
 
 
 def fit_turntable(content):

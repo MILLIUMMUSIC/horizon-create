@@ -159,7 +159,7 @@ fn pending() -> MutexGuard<'static, Vec<(String, Pos, bool)>> {
 
 /// Blocks of ours outside the kinetics (the pump is a kinetic block).
 pub(super) fn is_ours(name: &str) -> bool {
-    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || name == super::create_whistle_glue::WHISTLE || name == super::create_whistle_glue::EXTENSION || name == super::create_sticker_glue::BLOCK || name == super::create_crate_glue::CRATE || name == super::create_crate_glue::HATCH || is_tank_block(name)
+    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || name == super::create_whistle_glue::WHISTLE || name == super::create_whistle_glue::EXTENSION || name == super::create_sticker_glue::BLOCK || name == super::create_crate_glue::CRATE || name == super::create_crate_glue::HATCH || super::create_detector_glue::is_ours(name) || is_tank_block(name)
 }
 
 pub(super) fn is_tank_block(name: &str) -> bool {
@@ -483,6 +483,9 @@ pub(super) fn wrench_pipe(game: &mut Game<'_>, pos: Pos, face: Dir) -> Option<bo
         return Some(done);
     }
     if let Some(done) = super::create_sticker_glue::wrench(game, pos, face) {
+        return Some(done);
+    }
+    if let Some(done) = super::create_detector_glue::wrench(game, pos, face) {
         return Some(done);
     }
     if let Some(done) = super::create_redstone_glue::wrench_lamp(game, pos) {
@@ -1546,6 +1549,52 @@ pub(super) fn tank_analog(dimension: &str, pos: Pos) -> i32 {
         0.0
     };
     (frac * 14.0 + if frac > 0.0 { 1.0 } else { 0.0 }).clamp(0.0, 15.0).floor() as i32
+}
+
+/// `FluidTransportBehaviour` at `pos`, for the smart observer: the fluids of its
+/// complete inbound flows.
+pub(super) fn inbound_flows(game: &Game<'_>, pos: Pos) -> Option<Vec<FluidStack>> {
+    let dimension = game.dim.id().to_owned();
+    let guard = state();
+    let t = guard.as_ref()?.dims.get(&dimension)?.transports.get(&pos)?;
+    Some(
+        Dir::ALL
+            .iter()
+            .filter_map(|d| t.connection(*d)?.flow.as_ref())
+            .filter(|f| f.inbound && f.complete)
+            .map(|f| f.fluid.clone())
+            .collect(),
+    )
+}
+
+/// What keeps a `FluidTransportBehaviour`, by its block's name.
+pub(super) fn is_pipe_block_name(name: &str) -> bool {
+    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == "create:mechanical_pump" || name == "create:fluid_valve"
+}
+
+/// A fluid handler at `pos` (`TankManipulationBehaviour`, past sidedness): each
+/// tank's fluid and capacity.
+pub(super) fn observed_tanks(game: &mut Game<'_>, pos: Pos) -> Option<Vec<(FluidStack, i32)>> {
+    let dimension = game.dim.id().to_owned();
+    let name = block_state(game, pos).map(|s| s.name.clone())?;
+    let mut guard = state();
+    let s = guard.get_or_insert_with(State::default);
+    let tanks = s.tanks.entry(dimension.clone()).or_default();
+    let access = Access { game: &mut *game, dimension: &dimension, tanks };
+    let side = Dir::ALL.into_iter().find(|d| access.has_handler(pos, *d))?;
+    let list = access.handler_tanks(pos, side);
+    let capacity = if is_tank_block(&name) {
+        access.tanks.controller_part(pos).map_or(0, |p| p.tank.capacity)
+    } else if name == super::create_spout_glue::SPOUT {
+        super::create_spout::SPOUT_CAPACITY
+    } else if name == super::create_spout_glue::DRAIN {
+        super::create_spout::DRAIN_CAPACITY
+    } else if name == super::create_hose_glue::BLOCK {
+        super::create_hose::TANK
+    } else {
+        1000
+    };
+    Some(list.into_iter().map(|f| (f, capacity)).collect())
 }
 
 /// `FluidTankBlock.onWrenched`: the wrench toggles the whole tank's windows

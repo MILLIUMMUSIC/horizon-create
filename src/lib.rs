@@ -28,6 +28,8 @@ pub mod create_ct;
 pub mod create_cuckoo;
 #[path = "../mixins/create/deployer.rs"]
 pub mod create_deployer;
+#[path = "../mixins/create/detector.rs"]
+pub mod create_detector;
 #[path = "../mixins/create/ejector.rs"]
 pub mod create_ejector;
 #[path = "../mixins/create/fan.rs"]

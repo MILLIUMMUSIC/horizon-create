@@ -178,6 +178,17 @@ struct BearingEntry {
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
+/// `PulleyBlockEntity`'s rope, for the threshold switch: none on other blocks.
+pub(super) fn rope_length(game: &Game<'_>, pos: Pos) -> Option<f32> {
+    let s = game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2]))?;
+    if s.name != "create:rope_pulley" {
+        return None;
+    }
+    let dimension = game.dim.id().to_owned();
+    let guard = state();
+    Some(guard.as_ref().and_then(|s| s.pulleys.get(&(dimension, pos))).map_or(0.0, |e| e.pulley.offset))
+}
+
 fn state() -> MutexGuard<'static, Option<State>> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
 }
