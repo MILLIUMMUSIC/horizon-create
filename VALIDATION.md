@@ -1121,3 +1121,8 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 ## Hose pulley (macOS, offscreen)
 
 - Over a 3 by 3 pool with its shaft to a motor and a pipe through a pump to a tank: the hose went down to the pool and in about 40 seconds the pool's blocks went, the tank filling. With the pump turned round the pool's nine blocks were all water again within 25 seconds, from the tank. Not tried: a large body, lava, the Nether, a reload, a tank's whole contents.
+
+## Valve handles (macOS, offscreen)
+
+- A copper handle on a shaft to a bearing with stairs: a click turned it and the structure and put it back turned. A red dye made it `create:red_valve_handle`, drawn red, as the copper one is drawn copper.
+  Not tried: the wheel on its value box, a sneak-click's other way, the exact angle at values other than 45.

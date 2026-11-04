@@ -33,6 +33,28 @@ pub const VALIDATION_FREQUENCY: i32 = 60;
 const MAX_FLICKER_SCORE: i32 = 128;
 /// `CreativeMotorBlockEntity.DEFAULT_SPEED`.
 pub const MOTOR_DEFAULT_SPEED: i32 = 16;
+/// `ValveHandleBlock.getRotationSpeed`.
+pub const VALVE_HANDLE_SPEED: i32 = 32;
+/// The valve handles' blocks, by colour.
+pub const VALVE_HANDLES: [&str; 17] = [
+    "create:copper_valve_handle",
+    "create:white_valve_handle",
+    "create:orange_valve_handle",
+    "create:magenta_valve_handle",
+    "create:light_blue_valve_handle",
+    "create:yellow_valve_handle",
+    "create:lime_valve_handle",
+    "create:pink_valve_handle",
+    "create:gray_valve_handle",
+    "create:light_gray_valve_handle",
+    "create:cyan_valve_handle",
+    "create:purple_valve_handle",
+    "create:blue_valve_handle",
+    "create:brown_valve_handle",
+    "create:green_valve_handle",
+    "create:red_valve_handle",
+    "create:black_valve_handle",
+];
 /// `HandCrankBlock.getRotationSpeed`.
 const CRANK_SPEED: i32 = 32;
 /// `HandCrankBlockEntity.turn`: ticks a click keeps the crank turning.
@@ -300,6 +322,7 @@ impl Kind {
             }
             Kind::CreativeMotor(f) => Kind::CreativeMotor(turn_facing(f)),
             Kind::HandCrank(f) => Kind::HandCrank(turn_facing(f)),
+            Kind::ValveHandle(f, c) => Kind::ValveHandle(turn_facing(f), c),
             Kind::WaterWheel(f) => Kind::WaterWheel(turn_facing(f)),
             Kind::EncasedFan(f) => Kind::EncasedFan(turn_facing(f)),
             Kind::Drill(f) => Kind::Drill(turn_facing(f)),
@@ -335,6 +358,7 @@ impl Kind {
             Kind::Turntable => None,
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
+            | Kind::ValveHandle(f, _)
             | Kind::MechanicalPress(f)
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
@@ -503,6 +527,9 @@ pub enum Kind {
     CuckooClock(Dir, bool),
     /// `HosePulleyBlock`: its horizontal facing; a shaft on one side.
     HosePulley(Dir),
+    /// `ValveHandleBlock`: its facing and colour (0 copper, else a `DYES` index
+    /// plus one); its angle is `motor_speed`.
+    ValveHandle(Dir, u8),
     /// `PoweredShaftBlock`: its axis, driven by a steam engine; its direction
     /// is `motor_speed`.
     PoweredShaft(Axis),
@@ -615,6 +642,15 @@ impl Kind {
             }
             "create:creative_motor" => facing().map(Kind::CreativeMotor),
             "create:hand_crank" => facing().map(Kind::HandCrank),
+            n if n.ends_with("_valve_handle") => {
+                let colour = n.strip_prefix("create:")?.strip_suffix("_valve_handle")?;
+                let code = if colour == "copper" {
+                    0
+                } else {
+                    super::create_belt::DYES.iter().position(|d| *d == colour)? as u8 + 1
+                };
+                facing().map(|f| Kind::ValveHandle(f, code))
+            }
             "create:mechanical_press" => facing().map(Kind::MechanicalPress),
             "create:millstone" => Some(Kind::Millstone),
             "create:water_wheel" => facing().map(Kind::WaterWheel),
@@ -679,6 +715,7 @@ impl Kind {
             Kind::SplitShaft(false, ..) => "create:clutch",
             Kind::CreativeMotor(_) => "create:creative_motor",
             Kind::HandCrank(_) => "create:hand_crank",
+            Kind::ValveHandle(_, c) => VALVE_HANDLES[usize::from(c).min(16)],
             Kind::MechanicalPress(_) => "create:mechanical_press",
             Kind::Millstone => "create:millstone",
             Kind::WaterWheel(_) => "create:water_wheel",
@@ -738,6 +775,7 @@ impl Kind {
             | Kind::RopePulley(a) => a,
             Kind::CreativeMotor(f)
             | Kind::HandCrank(f)
+            | Kind::ValveHandle(f, _)
             | Kind::MechanicalPress(f)
             | Kind::WaterWheel(f)
             | Kind::EncasedFan(f)
@@ -782,7 +820,7 @@ impl Kind {
             | Kind::RopePulley(a) => face.axis() == a,
             Kind::Gearbox(a) => face.axis() != a,
             Kind::CreativeMotor(f) => face == f,
-            Kind::HandCrank(f) => face == f.opposite(),
+            Kind::HandCrank(f) | Kind::ValveHandle(f, _) => face == f.opposite(),
             Kind::MechanicalPress(f) | Kind::WaterWheel(f) => face.axis() == f.axis(),
             Kind::EncasedCog(_, _, a, top, bottom) => {
                 face.axis() == a && if face.positive() { top } else { bottom }
@@ -859,7 +897,7 @@ impl Kind {
     pub fn stress_capacity(self) -> f32 {
         match self {
             Kind::CreativeMotor(_) => 16384.0,
-            Kind::HandCrank(_) => 8.0,
+            Kind::HandCrank(_) | Kind::ValveHandle(..) => 8.0,
             Kind::WaterWheel(_) => 32.0,
             Kind::LargeWaterWheel(_) => 128.0,
             Kind::WindmillBearing(_) => 512.0,
@@ -872,6 +910,7 @@ impl Kind {
             self,
             Kind::CreativeMotor(_)
                 | Kind::HandCrank(_)
+                | Kind::ValveHandle(..)
                 | Kind::WaterWheel(_)
                 | Kind::LargeWaterWheel(_)
                 | Kind::WindmillBearing(_)
@@ -935,6 +974,11 @@ pub struct Kinetic {
     /// `PoweredShaftBlockEntity.engineEfficiency` and `enginePos`.
     pub engine_efficiency: f32,
     pub engine: Option<Pos>,
+    /// `ValveHandleBlockEntity`'s `cooldown`, `startAngle` is always 0 on the
+    /// server, `targetAngle` and `totalUseTicks`.
+    pub valve_cooldown: i32,
+    pub valve_target: i32,
+    pub valve_total: i32,
     /// `HandCrankBlockEntity.inUse` and `backwards`.
     pub crank_in_use: i32,
     pub crank_backwards: bool,
@@ -1029,12 +1073,15 @@ impl Kinetic {
             last_stress_applied: 0.0,
             last_capacity_provided: 0.0,
             reactivate_source: false,
-            motor_speed: if matches!(kind, Kind::SequencedGearshift(..)) {
-                0
-            } else {
-                MOTOR_DEFAULT_SPEED
+            motor_speed: match kind {
+                Kind::SequencedGearshift(..) => 0,
+                Kind::ValveHandle(..) => 45,
+                _ => MOTOR_DEFAULT_SPEED,
             },
             chain_signal: 0,
+            valve_cooldown: 0,
+            valve_target: 0,
+            valve_total: 0,
             crank_in_use: 0,
             crank_backwards: false,
             flow_score: 0,
@@ -1070,6 +1117,17 @@ impl Kinetic {
             Kind::WaterWheel(_) => water_wheel_speed(self.flow_score),
             Kind::LargeWaterWheel(_) => water_wheel_speed_sized(self.flow_score, 2),
             Kind::WindmillBearing(_) => self.flow_score as f32,
+            // ValveHandleBlockEntity.clockwise: its angle's sign and sneaking.
+            Kind::ValveHandle(f, _) => {
+                let sign = if self.crank_in_use == 0 {
+                    0
+                } else if (self.motor_speed < 0) != self.crank_backwards {
+                    -1
+                } else {
+                    1
+                };
+                convert(sign * VALVE_HANDLE_SPEED, f)
+            }
             Kind::PoweredShaft(_) => {
                 super::create_boiler::shaft_speed(self.motor_speed, self.engine_efficiency)
             }
@@ -1163,6 +1221,17 @@ impl Kinetics {
                 Kind::CreativeMotor(_)
                 | Kind::SpeedController(_)
                 | Kind::SequencedGearshift(..) => e.motor_speed as i16,
+                // Where the handle goes, sneaking and how far along.
+                Kind::ValveHandle(..) => {
+                    let done = if e.valve_total > 0 {
+                        (e.valve_total - e.crank_in_use) * 255 / e.valve_total
+                    } else {
+                        255
+                    };
+                    ((e.valve_target / 90 + 2) << 9
+                        | i32::from(e.crank_backwards) << 8
+                        | done.clamp(0, 255)) as i16
+                }
                 // Its efficiency, for the goggles' capacity.
                 Kind::PoweredShaft(_) => (e.engine_efficiency * 10000.0) as i16,
                 // The wheel's wood, the belt's dye.
@@ -1270,7 +1339,10 @@ impl Kinetics {
         };
         self.set_network(level, pos, network);
         // copySequenceContextFrom (the sequenced gearshift keeps its own).
-        if !matches!(self.e(pos).kind, Kind::SequencedGearshift(..)) {
+        if !matches!(
+            self.e(pos).kind,
+            Kind::SequencedGearshift(..) | Kind::ValveHandle(..)
+        ) {
             let context = self.entities.get(&source).and_then(|s| s.sequence);
             self.em(pos).sequence = context;
         }
@@ -2059,16 +2131,73 @@ impl Kinetics {
                 e.reactivate_source = false;
             }
         }
+        // ValveHandleBlockEntity.tick.
+        if let Some(e) = self.entities.get_mut(&pos)
+            && matches!(e.kind, Kind::ValveHandle(..))
+        {
+            if e.crank_in_use == 0 && e.valve_cooldown > 0 {
+                e.valve_cooldown -= 1;
+            }
+            if e.crank_in_use > 0 {
+                self.dirty.insert(pos);
+            }
+        }
         // HandCrankBlockEntity.tick
         if let Some(e) = self.entities.get_mut(&pos)
-            && matches!(e.kind, Kind::HandCrank(_))
+            && matches!(e.kind, Kind::HandCrank(_) | Kind::ValveHandle(..))
             && e.crank_in_use > 0
         {
             e.crank_in_use -= 1;
             if e.crank_in_use == 0 {
+                e.sequence = None;
                 self.update_generated_rotation(level, pos);
             }
         }
+    }
+    /// `ValveHandleBlockEntity.activate`: a click on the handle at `pos`.
+    pub fn activate_valve_handle(&mut self, level: &mut dyn Level, pos: Pos, sneak: bool) -> bool {
+        let Some(e) = self.entities.get_mut(&pos) else {
+            return false;
+        };
+        if !matches!(e.kind, Kind::ValveHandle(..))
+            || e.speed != 0.0
+            || e.crank_in_use > 0
+            || e.valve_cooldown > 0
+        {
+            return false;
+        }
+        let value = e.motor_speed;
+        let target = value.abs();
+        let degrees_per_tick = f64::from(VALVE_HANDLE_SPEED) * 3.0 / 10.0;
+        e.crank_in_use = (f64::from(target) / degrees_per_tick).ceil() as i32 + 2;
+        e.valve_target =
+            ((f32::from(if target > 135 { 180i16 } else { 90 }) * value.signum() as f32) / 90.0)
+                .round() as i32
+                * 90;
+        e.valve_total = e.crank_in_use;
+        e.crank_backwards = sneak;
+        e.sequence = Some((true, f64::from(target) / f64::from(VALVE_HANDLE_SPEED)));
+        e.valve_cooldown = 4;
+        self.update_generated_rotation(level, pos);
+        true
+    }
+    /// `ValveHandleScrollValueBehaviour`'s value, stepped by the wheel from
+    /// -180 to 180, never 0.
+    pub fn step_valve_angle(&mut self, pos: Pos, up: bool) -> Option<i32> {
+        let e = self.entities.get_mut(&pos)?;
+        if !matches!(e.kind, Kind::ValveHandle(..)) || e.crank_in_use != 0 {
+            return None;
+        }
+        let step = if up { 5 } else { -5 };
+        let mut next = e.motor_speed + step;
+        if e.motor_speed.abs() == 1 && (next > 0) == (e.motor_speed > 0) {
+            next = e.motor_speed.signum() * 5;
+        }
+        if next == 0 {
+            next = if up { 1 } else { -1 };
+        }
+        e.motor_speed = next.clamp(-180, 180);
+        Some(e.motor_speed)
     }
     /// `HandCrankBlockEntity.turn`: a player turned the crank at `pos`
     /// (`back`: sneaking).
@@ -2424,6 +2553,7 @@ fn kind_key(k: Kind) -> String {
         | Kind::LargeWaterWheel(a) => a.name(),
         Kind::CreativeMotor(f)
         | Kind::HandCrank(f)
+        | Kind::ValveHandle(f, _)
         | Kind::MechanicalPress(f)
         | Kind::WaterWheel(f)
         | Kind::EncasedFan(f)
@@ -2688,6 +2818,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::Flywheel(a) => (31, axis(a)),
         Kind::SpeedController(a) => (35, axis(a)),
         Kind::PoweredShaft(a) => (37, axis(a)),
+        Kind::ValveHandle(d, c) => (42, dir(d) | c << 3),
         Kind::HosePulley(d) => (41, dir(d)),
         Kind::CuckooClock(d, m) => (40, dir(d) | u8::from(m) << 3),
         Kind::SequencedGearshift(a, v) => (39, axis(a) | u8::from(v) << 2),
@@ -2747,6 +2878,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         31 => Kind::Flywheel(axis?),
         35 => Kind::SpeedController(axis?),
         37 => Kind::PoweredShaft(axis?),
+        42 => Kind::ValveHandle(Dir::ALL.get(usize::from(state & 7)).copied()?, state >> 3),
         41 => Kind::HosePulley(dir?),
         40 => Kind::CuckooClock(
             Dir::ALL.get(usize::from(state & 7)).copied()?,
@@ -3889,6 +4021,28 @@ mod tests {
         assert!(!k.set_wheel_material([0, 0, 0], 2));
         let loaded = Kinetics::load(&k.save());
         assert_eq!(loaded.entities[&[0, 0, 0]].material, 2);
+    }
+
+    #[test]
+    fn a_valve_handle_turns_by_its_angle_and_stops() {
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::ValveHandle(Dir::Up, 0));
+        r.ticks(2);
+        assert_eq!(r.k.get([0, 64, 0]).map(|e| e.motor_speed), Some(45));
+        assert!(r.k.activate_valve_handle(&mut r.world, [0, 64, 0], false));
+        let e = r.k.get([0, 64, 0]).unwrap();
+        // 45 degrees at 9.6 a tick, and two more.
+        assert_eq!(e.crank_in_use, 7);
+        assert_eq!(e.valve_target, 90);
+        assert_eq!(e.generated_speed(), 32.0);
+        assert_eq!(e.sequence, Some((true, 45.0 / 32.0)));
+        assert!(!r.k.activate_valve_handle(&mut r.world, [0, 64, 0], false));
+        assert_eq!(r.k.step_valve_angle([0, 64, 0], true), None);
+        r.ticks(8);
+        assert_eq!(r.k.get([0, 64, 0]).unwrap().generated_speed(), 0.0);
+        for (up, want) in [(false, 40), (true, 45)] {
+            assert_eq!(r.k.step_valve_angle([0, 64, 0], up), Some(want));
+        }
     }
 
     #[test]

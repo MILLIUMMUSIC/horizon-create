@@ -59,6 +59,7 @@ struct Client {
     parts: HashMap<(&'static str, &'static str), Option<BlockStateId>>,
     /// The small water wheel's OBJ model, read once (none: it isn't there).
     wheel: Option<Option<Vec<super::create_obj::Quad>>>,
+    valve_handles: HashMap<u8, Option<Vec<super::create_obj::Quad>>>,
     /// The large water wheel's.
     large_wheel: Option<Option<Vec<super::create_obj::Quad>>>,
     large_wheel_extension: Option<Option<Vec<super::create_obj::Quad>>>,
@@ -1096,12 +1097,63 @@ pub(super) fn use_item(game: &mut Game<'_>, _stack: &horizon_client::items::Item
     }
 }
 
+/// `ValveHandleBlock.onBlockActivated`: a dye of another colour paints it, else
+/// it turns (not for a sneaking wrench, which goes on to take it).
+fn valve_handle_click(game: &mut Game<'_>, pos: Pos) -> bool {
+    let Some(Kind::ValveHandle(f, colour)) = kind_at(game, pos) else {
+        return false;
+    };
+    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    let held = game.held().map(|s| s.item.to_string());
+    if held.as_deref() == Some(WRENCH) && sneaking {
+        return false;
+    }
+    if game.native_acting_player().is_some_and(|p| p.game_mode == 2 || p.game_mode == 3) {
+        return false;
+    }
+    if let Some(dye) = held.as_deref().and_then(super::create_belt::belt_dye).filter(|d| *d != 0) {
+        if dye != colour {
+            set_kind(game, pos, Kind::ValveHandle(f, dye));
+        }
+        return true;
+    }
+    with_kinetics(game, |k, level| {
+        if k.get(pos).is_none() {
+            k.on_placed(pos, Kind::ValveHandle(f, colour));
+        }
+        k.activate_valve_handle(level, pos, sneaking)
+    });
+    true
+}
+
+/// A valve handle under the crosshair at its value box.
+fn valve_handle_box(game: &Game<'_>, pos: Pos, side: Dir, point: [f64; 3]) -> bool {
+    let Some(Kind::ValveHandle(f, _)) = kind_at(game, pos) else {
+        return false;
+    };
+    if side != f {
+        return false;
+    }
+    let at = super::create_funnel::rotate_centered_y([0.5, 0.5, 4.5 / 16.0], f.horizontal_angle());
+    let at = match f {
+        Dir::Up => [0.5, 1.0 - 4.5 / 16.0, 0.5],
+        Dir::Down => [0.5, 4.5 / 16.0, 0.5],
+        _ => at,
+    };
+    let local = [0, 1, 2].map(|k| (point[k] - f64::from(pos[k])) as f32);
+    (0..3).map(|k| (local[k] - at[k]).powi(2)).sum::<f32>().sqrt() < 0.4 / 1.5
+}
+
 fn right_click_hand(
     game: &mut Game<'_>,
     pos: [i32; 3],
     face: [i32; 3],
     canceled: &mut bool,
 ) {
+    if valve_handle_click(game, pos) {
+        *canceled = true;
+        return;
+    }
     if super::create_contraptions::right_click(game, pos, face)
         || super::create_arms::right_click(game, pos, face)
         || super::create_crafter_glue::right_click(game, pos, face)
@@ -1482,6 +1534,7 @@ pub(super) fn set_kind(game: &mut Game<'_>, pos: Pos, kind: Kind) {
         Kind::EncasedCog(_, _, a, top, bottom) => {
             game.with_props(base, &[("axis", a.name()), ("top_shaft", on(top)), ("bottom_shaft", on(bottom))])
         }
+        Kind::ValveHandle(f, _) => game.with_props(base, &[("facing", f.name())]),
         k => game.with_props(base, &[("axis", k.rotation_axis().name())]),
     };
     if let Some(id) = id {
@@ -1652,6 +1705,15 @@ pub(super) fn from_client(game: &mut Game<'_>, player: u128, channel: &str, data
     if value == 0 || value.abs() > max {
         return;
     }
+    if matches!(kind_at(game, pos), Some(Kind::ValveHandle(..))) && (value == TUNNEL_MODE_UP || value == TUNNEL_MODE_DOWN) {
+        let angle = with_kinetics(game, |k, _| k.step_valve_angle(pos, value == TUNNEL_MODE_UP));
+        if let Some(angle) = angle {
+            let turn = if angle < 0 { "\u{27f3}" } else { "\u{27f2}" };
+            let line = format!("Angle of Rotation: {}\u{b0} {turn}", angle.abs());
+            super::create_contraptions::tell_later(player, horizon_client::text::Text::literal(line));
+        }
+        return;
+    }
     if block_name(game, pos) == super::create_ejector_glue::EJECTOR
         && (value == PISTON_MODE_UP || value == TUNNEL_MODE_UP || value == TUNNEL_MODE_DOWN)
     {
@@ -1811,6 +1873,17 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         let step = if steps > 0.0 { PISTON_MODE_UP } else { PISTON_MODE_DOWN };
         if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
             log::debug!("Create: piston mode: {e}");
+        }
+        return;
+    }
+    // A valve handle's angle, likewise.
+    if let Some(hit) = game.pick()
+        && valve_handle_box(game, hit.pos, Dir::nearest(hit.face), hit.point)
+    {
+        *claimed = true;
+        let step = if steps > 0.0 { TUNNEL_MODE_UP } else { TUNNEL_MODE_DOWN };
+        if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
+            log::debug!("Create: valve handle angle: {e}");
         }
         return;
     }
@@ -2292,7 +2365,7 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             want.push(("create:hz_part_millstone_inner", None, id, Axis::Y, standard, 0.0));
         }
         // WaterWheelRenderer: its OBJ wheel, drawn by `draw_wheel`.
-        Kind::WaterWheel(_) | Kind::LargeWaterWheel(_) => {}
+        Kind::WaterWheel(_) | Kind::LargeWaterWheel(_) | Kind::ValveHandle(..) => {}
         Kind::EncasedFan(f) => {
             // EncasedFanRenderer: the shaft half behind, the propeller
             // spinning faster in front.
@@ -2677,6 +2750,24 @@ pub(super) fn draw(
                 * glam::Mat4::from_translation(-half);
             draw_wheel(game, c, m, packed, view.aux.max(0) as u8, false, false, out);
         }
+        // ValveHandleBlockEntity.getIndependentAngle, on HandCrankRenderer.
+        if let Kind::ValveHandle(f, colour) = view.kind {
+            let a = f.axis();
+            let aux = i32::from(view.aux) & 0xFFFF;
+            let target = ((aux >> 9) - 2) * 90;
+            let back = aux & 256 != 0;
+            let done = (aux & 255) as f32 / 255.0;
+            let angle = if view.speed != 0.0 && view.source.is_some() {
+                render_angle(view.kind, pos, view.speed, time)
+            } else {
+                target as f32 * done * if back { -1.0 } else { 1.0 } * if f.positive() { 1.0 } else { -1.0 }
+            };
+            let m = glam::Mat4::from_translation(origin + half)
+                * glam::Mat4::from_axis_angle(unit(a), angle.to_radians())
+                * rotate_to_face_vertical(f)
+                * glam::Mat4::from_translation(-half);
+            draw_valve_handle(game, c, m, packed, colour, out);
+        }
         if let Kind::LargeWaterWheel(a) = view.kind {
             let angle = render_angle(view.kind, pos, view.speed, time);
             let m = glam::Mat4::from_translation(origin + half)
@@ -2967,6 +3058,61 @@ fn load_wheel(game: &Game<'_>, id: &str) -> Option<Vec<super::create_obj::Quad>>
 
 /// The water wheel's OBJ quads through `m`, shaded by the way each faces
 /// (as `block_model_vertices` shades a block's faces), lit with `light`.
+/// `valve_handle`'s OBJ quads through `m`, in its colour's texture.
+fn draw_valve_handle(game: &Game<'_>, c: &mut Client, m: glam::Mat4, light: u32, colour: u8, out: &mut Vec<horizon_client::mesher::Vertex>) {
+    let name = super::create_kinetics::VALVE_HANDLES[usize::from(colour).min(16)].trim_start_matches("create:");
+    let quads = c.valve_handles.entry(colour).or_insert_with(|| {
+        let loaded = load_wheel(game, &format!("create:block/{name}"));
+        if loaded.is_none() {
+            log::warn!("Create: no valve handle model for {name}");
+        }
+        loaded
+    });
+    let Some(quads) = quads else {
+        return;
+    };
+    draw_quads(game, quads, m, light, |s| s.to_owned(), out);
+}
+
+/// OBJ quads through `m`, shaded by the way each faces, `sprite` naming each's
+/// sprite.
+fn draw_quads(
+    game: &Game<'_>,
+    quads: &[super::create_obj::Quad],
+    m: glam::Mat4,
+    light: u32,
+    sprite: impl Fn(&str) -> String,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    for q in quads {
+        let Some(s) = game.gui.atlas.sprites.get(&sprite(&q.sprite)) else {
+            continue;
+        };
+        let n = m.transform_vector3(glam::Vec3::from_array(q.normal));
+        let (ax, ay, az) = (n.x.abs(), n.y.abs(), n.z.abs());
+        let shade: u32 = if ay >= ax && ay >= az {
+            if n.y >= 0.0 { 255 } else { 127 }
+        } else if az >= ax {
+            204
+        } else {
+            153
+        };
+        let color = 0xFF00_0000 | shade << 16 | shade << 8 | shade;
+        for k in 0..4 {
+            let uv = q.uvs[k];
+            out.push(horizon_client::mesher::Vertex {
+                normal: [0; 4],
+                pos: m.transform_point3(glam::Vec3::from_array(q.positions[k])).to_array(),
+                uv: [s.u0 + uv[0] * (s.u1 - s.u0), s.v0 + uv[1] * (s.v1 - s.v0)],
+                layer: 0,
+                color,
+                light,
+                glint_uv: [0.0, 0.0],
+            });
+        }
+    }
+}
+
 fn draw_wheel(
     game: &Game<'_>,
     c: &mut Client,
@@ -2994,35 +3140,8 @@ fn draw_wheel(
     let Some(quads) = quads else {
         return;
     };
-    for q in quads.iter() {
-        let sprite = super::create_kinetics::wheel_sprite(&q.sprite, material);
-        let Some(s) = game.gui.atlas.sprites.get(&sprite) else {
-            continue;
-        };
-        let n = m.transform_vector3(glam::Vec3::from_array(q.normal));
-        // The shade of the nearest face: up, down, north/south, west/east.
-        let (ax, ay, az) = (n.x.abs(), n.y.abs(), n.z.abs());
-        let shade: u32 = if ay >= ax && ay >= az {
-            if n.y >= 0.0 { 255 } else { 127 }
-        } else if az >= ax {
-            204
-        } else {
-            153
-        };
-        let color = 0xFF00_0000 | shade << 16 | shade << 8 | shade;
-        for k in 0..4 {
-            let uv = q.uvs[k];
-            out.push(horizon_client::mesher::Vertex {
-                normal: [0; 4],
-                pos: m.transform_point3(glam::Vec3::from_array(q.positions[k])).to_array(),
-                uv: [s.u0 + uv[0] * (s.u1 - s.u0), s.v0 + uv[1] * (s.v1 - s.v0)],
-                layer: 0,
-                color,
-                light,
-                glint_uv: [0.0, 0.0],
-            });
-        }
-    }
+    let sprite = |s: &str| super::create_kinetics::wheel_sprite(s, material);
+    draw_quads(game, quads, m, light, sprite, out);
 }
 
 // ---- Engineer's goggles -------------------------------------------------

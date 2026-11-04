@@ -368,6 +368,13 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
             Some(p) if !ctx.sneaking => p.opposite(),
             _ => ctx.face,
         }),
+        Kind::ValveHandle(_, c) => Kind::ValveHandle(
+            match preferred_side(around, &Dir::ALL) {
+                Some(p) if !ctx.sneaking => p.opposite(),
+                _ => ctx.face,
+            },
+            c,
+        ),
         // MechanicalPressBlock: towards a shaft beside it, else
         // HorizontalKineticBlock's facing the placer.
         // HosePulleyBlock.getStateForPlacement: its shaft to a shaft beside it,

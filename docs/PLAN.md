@@ -543,6 +543,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
 
+   The valve handles (`Kind::ValveHandle`, seventeen blocks): `HandCrankBlock`'s placement, 32 RPM and 8 su for as long as its angle takes (45 by default) with the context that limits a bearing (`SequenceContext`), a cooldown
+   of four ticks, a sneak-click the other way; a dye paints it. Its OBJ model is drawn turning by the native mod (`draw_quads`, as the water wheel). Decision: the value is stepped by the wheel in fives (Create's value board isn't here, as for the motor), from -180 to 180 without 0.
+   Not yet: `startAngle`'s rest position on a client (handles rest at a quarter turn in Create too), the handle's item icon (an OBJ model: engine gap, no OBJ in item models), the `BRITTLE` tag's breaking.
+
    The hose pulley (`hose.rs`, `hose_glue.rs`, `Kind::HosePulley`): its hose goes down by its speed to what can't be replaced, and with it still a pipe on its
    one pipe side draws a pool from the top and far side in, or fills from the bottom and near side out, through `FluidDrainingBehaviour`, `FluidFillingBehaviour` and
    `HosePulleyFluidHandler`: a 1500 mB tank, 1000 mB a block, sources only, what flows lost, water and lava (`create:bottomless/allow`) bottomless over 10000 blocks and

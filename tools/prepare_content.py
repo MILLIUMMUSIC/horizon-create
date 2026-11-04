@@ -426,7 +426,12 @@ OBJ_FILES = [
     "assets/create/models/block/water_wheel/water_wheel.obj",
     "assets/create/models/block/water_wheel/water_wheel.mtl",
     "assets/create/models/block/large_wheels.json",
-]
+    "assets/create/models/block/valve_handle.json",
+    "assets/create/models/block/valve_handle/valve_handle.obj",
+    "assets/create/models/block/valve_handle/valve_handle.mtl",
+] + [f"assets/create/models/block/{c}_valve_handle.json" for c in (
+    "copper", "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray", "cyan",
+    "purple", "blue", "brown", "green", "red", "black")]
 
 
 def read_json(path):
@@ -762,6 +767,7 @@ def fit_logistics(content, names):
     fit_sequenced_gearshift(content)
     fit_cuckoo_clocks(content)
     fit_hose_pulley(content)
+    fit_valve_handles(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1744,6 +1750,26 @@ def fit_hose_pulley(content):
     decl["shapes"] = {"default": [box(0, 0, 0, 16, 16, 16)]}
     decl.setdefault("properties", {})["light"] = 0
     write_json(blocks / "hose_pulley.json", decl)
+
+
+# The valve handles (ValveHandleBlock): a lightning rod's facings, AllShapes.VALVE_HANDLE;
+# blank, as their OBJ model turns and is drawn by the native mod.
+def fit_valve_handles(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    models = content / "assets" / "create" / "models" / "block"
+    write_json(models / "hz_blank_valve_handle.json", {"textures": {"particle": "block/copper_block"}})
+    for colour in ("copper", "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray",
+                   "cyan", "purple", "blue", "brown", "green", "red", "black"):
+        name = f"{colour}_valve_handle"
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:lightning_rod"
+        decl["shapes"] = {"property": "facing", "values": {
+            f: [facing_box(f, box(5, 0, 5, 11, 4, 11)), facing_box(f, box(1, 3, 1, 15, 8, 15))] for f in FACINGS}}
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+        write_json(states / f"{name}.json", {"variants": {
+            f"facing={f}": {"model": "create:block/hz_blank_valve_handle"} for f in FACINGS}})
 
 
 def fit_turntable(content):
