@@ -296,6 +296,8 @@ PARTIALS = {
     # StickerRenderer's head.
     "sticker_head": "create:block/sticker/head",
     # DeskBellRenderer's.
+    "peculiar_bell": "create:block/peculiar_bell",
+    "haunted_bell": "create:block/haunted_bell",
     "desk_bell_plunger": "create:block/desk_bell/plunger",
     "desk_bell_bell": "create:block/desk_bell/bell",
     # FluidValveRenderer's pointer.
@@ -1840,6 +1842,26 @@ def fit_small_blocks(content):
             {"facing": "north", "open": "false"},
             {"property": "facing", "values": {f: [box(*turned(b, opposite[f])) for b in hatch] for f in horizontals}})
     to_multipart("item_hatch")
+    # The peculiar and haunted bells (AbstractBellBlock), their shapes by facing
+    # and attachment; the bell itself is a part the native mod swings.
+    bell_body = (3, 1, 3, 13, 13, 13)
+    bell_shapes = {"floor": (0, 0, 5, 16, 11, 11), "single_wall": (5, 5, 8, 11, 11, 16),
+                   "double_wall": (5, 5, 0, 11, 11, 16), "ceiling": (0, 5, 5, 16, 16, 11)}
+    for name in ("peculiar_bell", "haunted_bell"):
+        declare(name, {"facing": {"type": "enum", "values": list(horizontals)},
+                       "attachment": {"type": "enum", "values": list(bell_shapes)}, "powered": boolean},
+                {"facing": "north", "attachment": "floor", "powered": "false"},
+                {"properties": ["attachment", "facing"],
+                 "values": {f"{a},{f}": [box(*turned(b, opposite[f])) for b in (shape, bell_body)]
+                            for a, shape in bell_shapes.items() for f in horizontals}})
+        to_multipart(name)
+    # SoulParticle's look, as far as a sprite set's behaviour goes: still, half a
+    # block, its 53 frames at 2 ticks each.
+    soul = content / "assets" / "create" / "particles" / "soul.json"
+    soul_data = read_json(soul)
+    soul_data["horizon:behaviour"] = {"velocity": [0, 0, 0], "gravity": 0, "friction": 0, "lifetime": 106,
+                                      "animation": "age", "size": [0.5, 0.5]}
+    write_json(soul, soul_data)
     # The smart observer and the threshold switch (DirectedDirectionalBlock);
     # the switch's `powered` is its block entity's `poweredAfterDelay`, read by
     # signals that have no block entity at hand, and no model looks at it.

@@ -1149,7 +1149,15 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 
 - Observer placed by a click beside a chest with dirt: it faced the chest, `powered=true`, a wire beside it read 15; the chest emptied: both off. Stone as its filter (clicked on its top slot): off with dirt in the chest; dirt: on. The filter is drawn on its back and top.
 - Observer over a stationary belt with a dirt item at the segment's middle: on. Beside an extracting funnel on a chest: a pulse when the funnel took one out (the chest 3 to 2). Beside a tank: off empty, on after a water bucket.
-- Switch on a chest: 192 dirt (over the default 128) gave `level=1`, `powered=true`, wire 15. Its screen: inputs scrolled (127 then the off input), measure scrolled to stacks rounded them to 2 and 1 stacks; the flip button took the signal off and back and moved the highlight and torches. Confirm closes it.
+- Switch on a chest: 192 dirt (over the default 128) gave `level=1`, `powered=true`, wire 15. Its screen: the on and off inputs and the measure scrolled, stacks rounding them to 2 and 1 stacks; the flip button took the signal off and back and moved the highlight and torches. Confirm closes it.
 - Switch on a tank shows `1 Buckets`, `0 Buckets`, wider inputs, no measure; on a rope pulley at y 103 `103y`, `64y`, `level=5`.
 - After `horizon-ctl save` and `quit` and a new launch: the observers and switch still powered, the screen with its 2 and 1 stacks.
   Not tried: fluid flows in pipes, inverted thresholds across a reload, the wrench on either, a LAN guest's screen.
+
+## Peculiar and haunted bells (macOS, offscreen)
+
+- Peculiar bell placed on the floor: `attachment=floor`, facing the placer's way. A click on its side and a redstone block beside it each played `block.bell.use`, the signal setting `powered=true`.
+- A wall bell with a soul campfire set below turned `create:haunted_bell`, attachment and facing kept, `create:haunted_bell_convert` heard.
+- A floor bell whose floor was replaced with the campfire broke, as Create's rule says (a campfire's top isn't sturdy).
+- Holding a haunted bell in a dark stone room: `create:soul` sprites appeared along the floor at the pulse's distance, faint because they aren't full-bright.
+  Not tried: looking at the swing frame by frame, a double wall bell losing a wall, ringing a haunted bell in the dark, a reload.

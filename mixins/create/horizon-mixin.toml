@@ -244,6 +244,18 @@ name = "create_sequencer"
 source = "sequencer.rs"
 
 [[module]]
+id = "bell"
+file = "crates/horizon-client/src/game.rs"
+name = "create_bell"
+source = "bell.rs"
+
+[[module]]
+id = "bell_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_bell_glue"
+source = "bell_glue.rs"
+
+[[module]]
 id = "detector"
 file = "crates/horizon-client/src/game.rs"
 name = "create_detector"

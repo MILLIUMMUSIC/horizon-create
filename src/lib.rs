@@ -6,6 +6,8 @@
 pub mod create_actors;
 #[path = "../mixins/create/arm.rs"]
 pub mod create_arm;
+#[path = "../mixins/create/bell.rs"]
+pub mod create_bell;
 #[path = "../mixins/create/belt.rs"]
 pub mod create_belt;
 #[path = "../mixins/create/blaze.rs"]

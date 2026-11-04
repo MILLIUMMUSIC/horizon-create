@@ -111,7 +111,7 @@ fn dim_code(id: &str) -> u8 {
     }
 }
 
-fn level_dimension_id(d: horizon_world::level::Dimension) -> &'static str {
+pub(super) fn level_dimension_id(d: horizon_world::level::Dimension) -> &'static str {
     match d {
         horizon_world::level::Dimension::Overworld => "minecraft:overworld",
         horizon_world::level::Dimension::Nether => "minecraft:the_nether",
@@ -487,6 +487,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_crafter_glue::level_tick(game, dimension);
     super::create_crusher_glue::level_tick(game, dimension, &crushing_wheels);
     chain_gearshifts_tick(game, dimension, &chain_gearshifts);
+    super::create_bell_glue::level_tick(game, dimension);
     turntables_tick(game, dimension, &turntables);
     for (p, speed) in valves {
         super::create_fluid_glue::valve_tick(game, p, speed);
@@ -745,6 +746,10 @@ pub(super) fn state_for_placement(
         }
         return;
     }
+    if super::create_bell_glue::is_ours(&s.name) {
+        *answer = Some(super::create_bell_glue::placement(level, state, pos, face, context.yaw));
+        return;
+    }
     if super::create_detector_glue::is_ours(&s.name) {
         *answer = Some(super::create_detector_glue::placement(level, state, pos, face, context.yaw, context.pitch, context.sneaking));
         return;
@@ -918,6 +923,9 @@ pub(super) fn update_shape(
     if let Some(next) = super::create_fluid_glue::pipe_update_shape(level, state, pos, d) {
         *new = Some(next);
     }
+    if let Some(next) = super::create_bell_glue::update_shape(level, state, pos, d) {
+        *new = Some(next);
+    }
     if let Some(next) = super::create_whistle_glue::update_shape(level, state, pos, d) {
         *new = next.or_else(|| level.registry.default_state("minecraft:air"));
     }
@@ -970,6 +978,10 @@ pub(super) fn can_survive(level: &super::GameLevel<'_>, pos: Pos, state: BlockSt
         && let Some(axis) = s.properties.get("axis").and_then(|a| Axis::parse(a))
     {
         *survives = Some(super::create_crusher_glue::wheel_survives(level, pos, axis));
+        return;
+    }
+    if level.registry.state(state).is_some_and(|s| super::create_bell_glue::is_ours(&s.name)) {
+        *survives = super::create_bell_glue::can_survive(level, pos, state);
         return;
     }
     if let Some(facing) = link_facing(level, state) {
@@ -1175,7 +1187,7 @@ fn right_click_hand(
     face: [i32; 3],
     canceled: &mut bool,
 ) {
-    if valve_handle_click(game, pos) || super::create_crate_glue::right_click(game, pos) || super::create_detector_glue::right_click(game, pos, face) {
+    if valve_handle_click(game, pos) || super::create_crate_glue::right_click(game, pos) || super::create_detector_glue::right_click(game, pos, face) || super::create_bell_glue::right_click(game, pos, face) {
         *canceled = true;
         return;
     }
@@ -1472,6 +1484,7 @@ pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
         super::create_whistle_glue::client_tick(game);
         super::create_sequencer_glue::client_tick(game);
         super::create_detector_glue::client_tick(game);
+        super::create_bell_glue::client_tick(game);
         super::create_cuckoo_glue::client_tick(game);
         super::create_sticker_glue::client_tick(game);
         super::create_redstone_glue::bells_client_tick(game);
@@ -2034,6 +2047,7 @@ pub(super) fn send_scrolled_values(game: &mut Game<'_>) {
 /// `native_world_lifecycle`: a world's kinetics start empty and are saved
 /// when it closes.
 pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
+    super::create_bell_glue::reset();
     use super::native_lifecycle::WorldPhase;
     super::create_machines::reset();
     let closing = matches!(phase, WorldPhase::WorldCloseFinal | WorldPhase::WorldCloseFailed);
@@ -2891,6 +2905,7 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_redstone_glue::draw_bells(game, camera, render_time(), out);
     super::create_crate_glue::draw(game, camera, out);
     super::create_detector_glue::draw(game, camera, out);
+    super::create_bell_glue::draw(game, camera, render_time(), out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);
