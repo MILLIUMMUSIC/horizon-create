@@ -202,6 +202,12 @@ name = "create_crusher_glue"
 source = "crusher_glue.rs"
 
 [[module]]
+id = "crate_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_crate_glue"
+source = "crate_glue.rs"
+
+[[module]]
 id = "sticker_glue"
 file = "crates/horizon-client/src/game.rs"
 name = "create_sticker_glue"

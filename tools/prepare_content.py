@@ -295,6 +295,9 @@ PARTIALS = {
     "hose_half_magnet": "create:block/hose_pulley/rope_half_magnet",
     # StickerRenderer's head.
     "sticker_head": "create:block/sticker/head",
+    # DeskBellRenderer's.
+    "desk_bell_plunger": "create:block/desk_bell/plunger",
+    "desk_bell_bell": "create:block/desk_bell/bell",
     # FluidValveRenderer's pointer.
     "fluid_valve_pointer": "create:block/fluid_valve/pointer",
     # ArmRenderer's and DeployerRenderer's partials.
@@ -772,6 +775,7 @@ def fit_logistics(content, names):
     fit_hose_pulley(content)
     fit_valve_handles(content)
     fit_sticker(content)
+    fit_small_blocks(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1788,6 +1792,54 @@ def fit_sticker(content):
     decl["shapes"] = {"default": [box(0, 0, 0, 16, 16, 16)]}
     decl.setdefault("properties", {})["light"] = 0
     write_json(blocks / "sticker.json", decl)
+
+
+# The rose quartz lamp, desk bell, creative crate and item hatch: a chain's template
+# with their own properties; a template's `powered` could give off a signal.
+def fit_small_blocks(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    def to_multipart(name):
+        original = read_json(states / f"{name}.json")
+        parts = []
+        for key, apply in original["variants"].items():
+            when = dict(kv.split("=") for kv in key.split(",")) if key else {}
+            if when.pop("waterlogged", "false") == "true":
+                continue
+            parts.append({"when": when, "apply": apply} if when else {"apply": apply})
+        write_json(states / f"{name}.json", {"multipart": parts})
+    def declare(name, props, default, shapes):
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:iron_chain"
+        if props:
+            decl["state_properties"] = props
+            decl["default_state"] = default
+        decl["shapes"] = shapes
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
+    boolean = {"type": "boolean"}
+    declare("rose_quartz_lamp", {"powered": boolean, "powering": boolean, "activate": boolean},
+            {"powered": "false", "powering": "false", "activate": "false"}, {"default": [box(0, 0, 0, 16, 16, 16)]})
+    to_multipart("rose_quartz_lamp")
+    bell = [box(3, 0, 3, 13, 3, 13), box(4, 0, 4, 12, 9, 12)]
+    declare("desk_bell", {"facing": {"type": "enum", "values": list(FACINGS)}, "powered": boolean},
+            {"facing": "up", "powered": "false"},
+            {"property": "facing", "values": {f: [facing_box(f, b) for b in bell] for f in FACINGS}})
+    to_multipart("desk_bell")
+    declare("creative_crate", None, None, {"default": [box(1, 0, 1, 15, 14, 15)]})
+    hatch = [(1, 0, 0, 15, 16, 2), (2, 2, 0, 14, 13, 3.8), (2, 4, 0, 14, 11, 5.8), (2, 6, 0, 14, 9, 7.8)]
+    def turned(b, facing):
+        x0, y0, z0, x1, y1, z1 = b
+        return {"south": (x0, y0, z0, x1, y1, z1),
+                "north": (16 - x1, y0, 16 - z1, 16 - x0, y1, 16 - z0),
+                "west": (16 - z1, y0, x0, 16 - z0, y1, x1),
+                "east": (z0, y0, 16 - x1, z1, y1, 16 - x0)}[facing]
+    opposite = {"north": "south", "south": "north", "west": "east", "east": "west"}
+    horizontals = ("north", "south", "west", "east")
+    declare("item_hatch", {"facing": {"type": "enum", "values": list(horizontals)}, "open": boolean},
+            {"facing": "north", "open": "false"},
+            {"property": "facing", "values": {f: [box(*turned(b, opposite[f])) for b in hatch] for f in horizontals}})
+    to_multipart("item_hatch")
 
 
 def fit_turntable(content):

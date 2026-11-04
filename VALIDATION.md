@@ -1136,3 +1136,11 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 
 - Oak stairs and cobblestone stairs before it, at 13:00 of the game's clock, with a motor: both left the world, in the frame the far (minute) hand upright and the near (hour) tilted. Motor gone: both back as placed.
   Not tried: `ClockHands` by the wheel, a click, a reload, other facings.
+
+## Lamp, desk bell, creative crate, item hatch (macOS, offscreen)
+
+- Three lamps in a row: a redstone block by the first made it the one powered and powering; by the third, it took over and its wire read 15, the first no longer powering.
+- Desk bell clicked: `powered=true`, the wire 15, off again in under 2 seconds.
+- Creative crate: an iron ingot clicked on its top filled its first slot with 64, and a hopper below took them to a chest.
+- Item hatch on a chest: 3 gold ingots in hand went in, `open=true` then `false`, the bar said `Held item deposited`.
+  Not tried: comparators on lamps, the plunger's look, a hatch filter, sneak-depositing.

@@ -745,6 +745,17 @@ pub(super) fn state_for_placement(
         }
         return;
     }
+    if s.name == super::create_crate_glue::HATCH {
+        *answer = Some(super::create_crate_glue::hatch_placement(level, state, Dir::nearest(context.face.normal())));
+        return;
+    }
+    if s.name == super::create_redstone_glue::BELL {
+        // DeskBellBlock.getStateForPlacement: on the clicked face.
+        if let Some(next) = level.native_state_with_property(state, "facing", Dir::nearest(context.face.normal()).name()) {
+            *answer = Some(Some(next));
+        }
+        return;
+    }
     if s.name == super::create_sticker_glue::BLOCK {
         if let Some(next) = super::create_sticker_glue::placement(level, state, context.yaw, context.pitch, context.sneaking) {
             *answer = Some(Some(next));
@@ -1156,7 +1167,7 @@ fn right_click_hand(
     face: [i32; 3],
     canceled: &mut bool,
 ) {
-    if valve_handle_click(game, pos) {
+    if valve_handle_click(game, pos) || super::create_crate_glue::right_click(game, pos) {
         *canceled = true;
         return;
     }
@@ -1454,6 +1465,7 @@ pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
         super::create_sequencer_glue::client_tick(game);
         super::create_cuckoo_glue::client_tick(game);
         super::create_sticker_glue::client_tick(game);
+        super::create_redstone_glue::bells_client_tick(game);
     }
     let Some(p) = game.player.as_ref() else {
         return;
@@ -2862,6 +2874,8 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_whistle_glue::draw(game, camera, render_time(), out);
     super::create_cuckoo_glue::draw(game, camera, render_time(), out);
     super::create_sticker_glue::draw(game, camera, render_time(), out);
+    super::create_redstone_glue::draw_bells(game, camera, render_time(), out);
+    super::create_crate_glue::draw(game, camera, out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);

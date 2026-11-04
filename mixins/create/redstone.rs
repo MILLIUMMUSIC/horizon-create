@@ -148,6 +148,30 @@ pub fn interval_label(value: i32) -> String {
     }
 }
 
+/// `RoseQuartzLampBlock.getDistanceToPowered`: along a column of lamps from the
+/// reader's (each `Some(powering)`, `None` once it isn't a lamp).
+pub fn lamp_distance(column: &[Option<bool>]) -> i32 {
+    for (i, lamp) in column.iter().enumerate() {
+        match lamp {
+            None => return 0,
+            Some(true) => return 15 - i as i32,
+            Some(false) => {}
+        }
+    }
+    0
+}
+
+/// `DeskBellRenderer`: the plunger's move and the bell's swing (degrees) at
+/// `animation` value `p`.
+pub fn bell_motion(p: f32) -> (f32, f32) {
+    let f = 1.0 - 4.0 * ((p - 0.5).max(0.0) - 0.5).powi(2);
+    let f2 = p.powf(1.25);
+    (
+        f * -0.75 / 16.0,
+        f2 * 8.0 * (p * std::f32::consts::PI * 4.0).sin(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +228,15 @@ mod tests {
         // At once, then every 20 ticks.
         assert_eq!(ons, 3);
         assert_eq!(brass_tick(Brass::Timer, 5, 20, true, false), (0, None));
+    }
+
+    #[test]
+    fn lamps_and_bells() {
+        assert_eq!(lamp_distance(&[Some(true)]), 15);
+        assert_eq!(lamp_distance(&[Some(false), Some(false), Some(true)]), 13);
+        assert_eq!(lamp_distance(&[Some(false), None, Some(true)]), 0);
+        assert_eq!(bell_motion(0.0), (0.0, 0.0));
+        assert_eq!(bell_motion(1.0).0, -0.75 / 16.0);
     }
 
     #[test]

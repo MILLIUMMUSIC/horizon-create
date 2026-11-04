@@ -10,7 +10,7 @@ use super::create_redstone::{Brass, brass_output, brass_tick};
 use horizon_client::containers::ModBlockEntity;
 use horizon_world::nbt::{JavaString, Tag};
 use horizon_world::registry::BlockStateId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 pub(super) const LEVER: &str = "create:analog_lever";
@@ -39,7 +39,178 @@ pub(super) fn is_diode(name: &str) -> bool {
 
 /// Block entities of this module.
 pub(super) fn is_ours(name: &str) -> bool {
-    name == LEVER || is_diode(name)
+    name == LEVER || name == LAMP || name == BELL || is_diode(name)
+}
+
+pub(super) const LAMP: &str = "create:rose_quartz_lamp";
+pub(super) const BELL: &str = "create:desk_bell";
+
+/// `scheduleActivation`: lamps with a tick coming.
+static LAMP_TICKS: Mutex<Option<HashSet<(String, Pos)>>> = Mutex::new(None);
+
+fn lamp_on(game: &Game<'_>, pos: Pos, key: &str) -> bool {
+    prop(game, pos, key).as_deref() == Some("true")
+}
+
+fn name_is(game: &Game<'_>, pos: Pos, name: &str) -> bool {
+    game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2])).is_some_and(|s| s.name == name)
+}
+
+/// `forEachInCluster`: the lamps joined to `pos`, within 16 blocks.
+fn lamp_cluster(game: &Game<'_>, pos: Pos) -> Vec<Pos> {
+    let mut frontier = vec![pos];
+    let mut visited = HashSet::from([pos]);
+    let mut out = Vec::new();
+    while let Some(p) = (!frontier.is_empty()).then(|| frontier.remove(0)) {
+        for d in Dir::ALL {
+            let n = d.normal();
+            let c = [p[0] + n[0], p[1] + n[1], p[2] + n[2]];
+            if (0..3).map(|k| (c[k] - pos[k]).abs()).sum::<i32>() > 16 || !visited.insert(c) || !name_is(game, c, LAMP) {
+                continue;
+            }
+            out.push(c);
+            frontier.push(c);
+        }
+    }
+    out
+}
+
+/// `RoseQuartzLampBlock.tick` when one is due, then `neighborChanged`: a rising
+/// edge takes the power from the others in its cluster to itself.
+fn lamp_tick(game: &mut Game<'_>, pos: Pos) {
+    let key = (game.dim.id().to_owned(), pos);
+    let due = LAMP_TICKS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashSet::new).remove(&key);
+    if due {
+        let activate = lamp_on(game, pos, "activate");
+        if lamp_on(game, pos, "powering") || activate {
+            game.native_set_block_property(pos, "activate", "false");
+            game.native_set_block_property(pos, "powering", if activate { "true" } else { "false" });
+        }
+    }
+    let signal = super::create_glue::signal(game, pos);
+    let powered = lamp_on(game, pos, "powered");
+    if powered == signal {
+        return;
+    }
+    if powered {
+        game.native_set_block_property(pos, "powered", "false");
+        return;
+    }
+    let mut guard = LAMP_TICKS.lock().unwrap_or_else(|e| e.into_inner());
+    let due = guard.get_or_insert_with(HashSet::new);
+    let others = lamp_cluster(game, pos);
+    for &c in &others {
+        due.insert((key.0.clone(), c));
+    }
+    due.insert(key);
+    drop(guard);
+    for c in others {
+        game.native_set_block_property(c, "powering", "false");
+    }
+    game.native_set_block_property(pos, "powered", "true");
+    game.native_set_block_property(pos, "powering", "true");
+    game.native_set_block_property(pos, "activate", "true");
+}
+
+/// `getRotatedBlockState`: the wrench switches a lamp.
+pub(super) fn wrench_lamp(game: &mut Game<'_>, pos: Pos) -> Option<bool> {
+    if !name_is(game, pos, LAMP) {
+        return None;
+    }
+    let next = if lamp_on(game, pos, "powering") { "false" } else { "true" };
+    game.native_set_block_property(pos, "powering", next);
+    let pitch = horizon_core::random::RandomSource::next_float(&mut game.world.random) + 0.5;
+    super::create_glue::play_create_sound(game, "wrench_rotate", pos.map(|v| f64::from(v) + 0.5), 1.0, pitch);
+    Some(true)
+}
+
+/// `DeskBellBlock.useWithoutItem`.
+fn bell_click(game: &mut Game<'_>, pos: Pos) -> bool {
+    if game.held().is_some() {
+        return false;
+    }
+    let at = pos.map(|v| f64::from(v) + 0.5);
+    super::create_glue::play_create_sound(game, "desk_bell", at, 1.0, 1.0);
+    game.native_set_block_property(pos, "powered", "true");
+    game.native_with_mod_block_entity(pos, |be| {
+        be.nbt.insert(JavaString::from("Timer"), Tag::Int(20));
+        let dings = match be.nbt.get(&JavaString::from("Dings")) {
+            Some(Tag::Int(v)) => *v,
+            _ => 0,
+        };
+        be.nbt.insert(JavaString::from("Dings"), Tag::Int((dings + 1) % 250));
+    });
+    true
+}
+
+/// `DeskBellBlockEntity.tick`: let go twenty ticks on; each ding told to clients.
+fn bell_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
+    let int = |k: &str| match entity.nbt.get(&JavaString::from(k)) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    };
+    let (timer, dings) = (int("Timer"), int("Dings"));
+    if timer > 0 {
+        entity.nbt.insert(JavaString::from("Timer"), Tag::Int(timer - 1));
+        if timer == 1 {
+            game.native_set_block_property(pos, "powered", "false");
+        }
+    }
+    super::create_machines::note_view(game, pos, vec![(String::new(), dings as u32 + 1)]);
+}
+
+/// Clients' bells: the dings seen and where `animation` is, now and before.
+static BELLS: Mutex<Option<HashMap<Pos, (u32, f32, f32)>>> = Mutex::new(None);
+
+/// The bells' animation a tick on, on the window's client.
+pub(super) fn bells_client_tick(game: &Game<'_>) {
+    for pos in super::create_machines::client_positions() {
+        if !name_is(game, pos, BELL) {
+            continue;
+        }
+        let dings = super::create_machines::client_slots(pos).and_then(|s| s.first().map(|v| v.1)).unwrap_or(0);
+        let mut guard = BELLS.lock().unwrap_or_else(|e| e.into_inner());
+        let e = guard.get_or_insert_with(HashMap::new).entry(pos).or_insert((dings, 0.0, 0.0));
+        e.2 = e.1;
+        if e.0 != dings {
+            e.0 = dings;
+            e.1 = 1.0;
+            e.2 = 1.0;
+        } else {
+            e.1 = (e.1 - 0.05).max(0.0);
+        }
+    }
+}
+
+/// `DeskBellRenderer`.
+pub(super) fn draw_bells(game: &Game<'_>, camera: glam::DVec3, time: f32, out: &mut Vec<horizon_client::mesher::Vertex>) {
+    for pos in super::create_machines::client_positions() {
+        if !name_is(game, pos, BELL) {
+            continue;
+        }
+        let Some(facing) = prop(game, pos, "facing").and_then(|f| Dir::parse(&f)) else {
+            continue;
+        };
+        let (now, last) = BELLS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&pos).map(|e| (e.1, e.2))).unwrap_or((0.0, 0.0));
+        let p = last + (now - last) * time.fract();
+        let (push, swing) = super::create_redstone::bell_motion(p);
+        let corner = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
+        let centre = glam::Vec3::splat(0.5);
+        let base = glam::Mat4::from_translation((corner - camera).as_vec3())
+            * glam::Mat4::from_translation(centre)
+            * glam::Mat4::from_rotation_y(facing.horizontal_angle().to_radians())
+            * glam::Mat4::from_rotation_x((facing.vertical_angle() + 90.0).to_radians());
+        let plunger = base * glam::Mat4::from_translation(-centre) * glam::Mat4::from_translation(glam::Vec3::new(0.0, push, 0.0));
+        let bell = base * glam::Mat4::from_rotation_x(swing.to_radians()) * glam::Mat4::from_translation(-centre);
+        let light = super::create_logistics::neighbour_light(game, pos);
+        let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+        let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]));
+        for (holder, m) in [("create:hz_part_desk_bell_plunger", plunger), ("create:hz_part_desk_bell_bell", bell)] {
+            if let Some(state) = game.pack.assets.registry.default_state(holder) {
+                game.block_model_vertices(state, seed, m, packed, false, out);
+            }
+        }
+    }
 }
 
 /// The levers' strengths, for `native_block_signal`, which can't read the
@@ -119,6 +290,14 @@ fn tell_front(game: &mut Game<'_>, pos: Pos, facing: Dir) {
 
 /// `native_block_entity_tick`.
 pub(super) fn tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
+    if entity.id == LAMP {
+        lamp_tick(game, pos);
+        return;
+    }
+    if entity.id == BELL {
+        bell_tick(game, pos, entity);
+        return;
+    }
     if entity.id == LEVER {
         lever_tick(game, pos, entity);
         return;
@@ -214,6 +393,9 @@ fn connected(game: &Game<'_>, pos: Pos) -> Option<Dir> {
 /// `AnalogLeverBlock.useWithoutItem` and the diodes' `useItemOn` (`activated`,
 /// `toggle`). True when it took the click.
 pub(super) fn right_click(game: &mut Game<'_>, pos: Pos) -> bool {
+    if name_is(game, pos, BELL) {
+        return bell_click(game, pos);
+    }
     let name = {
         let Some(s) = game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2])) else {
             return false;
@@ -296,6 +478,38 @@ pub(super) fn block_signal(
         return;
     };
     let on = |k: &str| s.properties.get(k).map(String::as_str) == Some("true");
+    // DeskBellBlock.getSignal and getDirectSignal.
+    if s.name == BELL {
+        let facing = s.properties.get("facing").and_then(|f| Dir::parse(f));
+        *signal = if on("powered") && (!direct || facing == Some(face.opposite())) { 15 } else { 0 };
+        return;
+    }
+    // RoseQuartzLampBlock.getSignal: none to another lamp, to a comparator how
+    // far along this column the powering one is.
+    if s.name == LAMP {
+        if direct {
+            *signal = 0;
+            return;
+        }
+        let n = face.normal();
+        let reader = level.registry.state(level.world.block(pos[0] + n[0], pos[1] + n[1], pos[2] + n[2])).map(|r| r.name.as_str());
+        *signal = match reader {
+            Some(LAMP) => 0,
+            Some("minecraft:comparator") => {
+                let powering: Vec<Option<bool>> = (0..15)
+                    .map(|i| {
+                        let c = [pos[0] - n[0] * i, pos[1] - n[1] * i, pos[2] - n[2] * i];
+                        let b = level.registry.state(level.world.block(c[0], c[1], c[2])).filter(|b| b.name == LAMP)?;
+                        Some(b.properties.get("powering").is_some_and(|v| v == "true"))
+                    })
+                    .collect();
+                super::create_redstone::lamp_distance(&powering)
+            }
+            _ if on("powering") => 15,
+            _ => 0,
+        };
+        return;
+    }
     if s.name == LEVER {
         let connected = match s.properties.get("face").map(String::as_str) {
             Some("ceiling") => Some(Dir::Down),

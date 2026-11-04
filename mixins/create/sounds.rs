@@ -28,6 +28,7 @@ pub fn entry(name: &str) -> Option<(usize, &'static [(f32, f32)])> {
         "saw_activate_stone" => (BLOCKS, &[(0.125, 1.25)]),
         "crafter_click" => (BLOCKS, &[(0.25, 1.0), (0.125, 1.0)]),
         "crafter_craft" => (BLOCKS, &[(0.125, 0.75)]),
+        "desk_bell" => (BLOCKS, &[(1.0, 1.0)]),
         "scroll_value" => (PLAYERS, &[(0.124, 1.0)]),
         "confirm" => (PLAYERS, &[(0.5, 0.8)]),
         "deny" => (PLAYERS, &[(1.0, 0.5)]),
