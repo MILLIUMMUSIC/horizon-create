@@ -279,6 +279,13 @@ PARTIALS = {
     "whistle_mouth_small": "create:block/steam_whistle/small_mouth",
     "whistle_mouth_medium": "create:block/steam_whistle/medium_mouth",
     "whistle_mouth_large": "create:block/steam_whistle/large_mouth",
+    # CuckooClockRenderer's.
+    "cuckoo_hour_hand": "create:block/cuckoo_clock/hour_hand",
+    "cuckoo_minute_hand": "create:block/cuckoo_clock/minute_hand",
+    "cuckoo_left_door": "create:block/cuckoo_clock/left_door",
+    "cuckoo_right_door": "create:block/cuckoo_clock/right_door",
+    "cuckoo_pig": "create:block/cuckoo_clock/pig",
+    "cuckoo_creeper": "create:block/cuckoo_clock/creeper",
     # FluidValveRenderer's pointer.
     "fluid_valve_pointer": "create:block/fluid_valve/pointer",
     # ArmRenderer's and DeployerRenderer's partials.
@@ -747,6 +754,7 @@ def fit_logistics(content, names):
     fit_weighted_ejector(content)
     fit_steam_whistle(content)
     fit_sequenced_gearshift(content)
+    fit_cuckoo_clocks(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1703,6 +1711,20 @@ def fit_sequenced_gearshift(content):
     parts = [{"when": dict(kv.split("=") for kv in key.split(",")), "apply": apply}
              for key, apply in original["variants"].items()]
     write_json(states / "sequenced_gearshift.json", {"multipart": parts})
+
+
+# The cuckoo clocks: a chain's template with their own `facing`,
+# AllShapes.CUCKOO_CLOCK; hands, doors and figures drawn by the native mod.
+def fit_cuckoo_clocks(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    for name in ("cuckoo_clock", "mysterious_cuckoo_clock"):
+        decl = read_json(blocks / f"{name}.json") if (blocks / f"{name}.json").exists() else {}
+        decl["template"] = "minecraft:iron_chain"
+        decl["state_properties"] = {"facing": {"type": "enum", "values": ["north", "south", "west", "east"]}}
+        decl["default_state"] = {"facing": "north"}
+        decl["shapes"] = {"default": [box(1, 0, 1, 15, 19, 15)]}
+        decl.setdefault("properties", {})["light"] = 0
+        write_json(blocks / f"{name}.json", decl)
 
 
 def fit_turntable(content):

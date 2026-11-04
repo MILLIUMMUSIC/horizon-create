@@ -370,6 +370,13 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         }),
         // MechanicalPressBlock: towards a shaft beside it, else
         // HorizontalKineticBlock's facing the placer.
+        // CuckooClockBlock.getStateForPlacement: its back to a shaft beside it.
+        Kind::CuckooClock(_, m) => Kind::CuckooClock(
+            preferred_side(around, &HORIZONTALS)
+                .unwrap_or(horizontal(ctx.yaw))
+                .opposite(),
+            m,
+        ),
         // HorizontalKineticBlock; a chosen target turns it once placed.
         Kind::WeightedEjector(_) => Kind::WeightedEjector(
             preferred_side(around, &HORIZONTALS).unwrap_or_else(|| horizontal(ctx.yaw).opposite()),

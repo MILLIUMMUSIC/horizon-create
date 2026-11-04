@@ -544,6 +544,10 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
 
+   The cuckoo clocks (`cuckoo.rs`, `cuckoo_glue.rs`, `Kind::CuckooClock`): driven through its back, 1 su of stress, hands following the day (running
+   wild where there is no day), a tick-tock, and at noon a pig, at dusk a creeper, out of the doors, with Create's sounds. The mysterious one goes off at its fiftieth
+   tick of it: the block gone and a blast of 3 (`Cuckoo Clock Surprise` damage isn't told apart: `native_explode` has no damage source). Not yet: the large smoke while it is about to go off, the `CUCKOO_CLOCK` advancement, display sources.
+
    The sequenced gearshift (`sequencer.rs`, `sequencer_glue.rs`, `Kind::SequencedGearshift`): up to five instructions (turn an angle, turn for a
    distance, delay, await a pulse, end) at four speeds; a pulse runs them, `STATE` is the row and what comparators read,
    the kinetics are detached and attached again with each row's modifier, a change of speed retimes the row and a stop ends it. The

@@ -24,6 +24,8 @@ pub mod create_crafter;
 pub mod create_crusher;
 #[path = "../mixins/create/ct.rs"]
 pub mod create_ct;
+#[path = "../mixins/create/cuckoo.rs"]
+pub mod create_cuckoo;
 #[path = "../mixins/create/deployer.rs"]
 pub mod create_deployer;
 #[path = "../mixins/create/ejector.rs"]

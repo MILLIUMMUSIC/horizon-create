@@ -1394,6 +1394,7 @@ pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
         super::create_ejector_glue::client_tick(game);
         super::create_whistle_glue::client_tick(game);
         super::create_sequencer_glue::client_tick(game);
+        super::create_cuckoo_glue::client_tick(game);
     }
     let Some(p) = game.player.as_ref() else {
         return;
@@ -2194,6 +2195,10 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
     let mut scrolls: Vec<Option<(&'static str, String, f32)>> = Vec::new();
     match view.kind {
         Kind::Shaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
+        // CuckooClockRenderer: a shaft half at its back (the rest: create_cuckoo_glue).
+        Kind::CuckooClock(f, _) => {
+            want.push(("create:hz_part_shaft_half", None, rotate_to_face(f.opposite()), f.axis(), standard, 0.0));
+        }
         // EjectorRenderer's ShaftRenderer (its lid: create_ejector_glue).
         Kind::WeightedEjector(_) => {
             let a = view.kind.rotation_axis();
@@ -2739,6 +2744,7 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_engine_glue::draw(game, camera, render_time(), out);
     super::create_ejector_glue::draw(game, camera, render_time(), out);
     super::create_whistle_glue::draw(game, camera, render_time(), out);
+    super::create_cuckoo_glue::draw(game, camera, render_time(), out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);

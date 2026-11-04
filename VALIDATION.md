@@ -1112,3 +1112,8 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - A click opens its screen, drawn with Create's textures. The wheel changed the angle (93, then 180 with 90 steps), the direction to `<-` and a row to Delay with an End after it; tooltips listed the options. Confirm and Escape closed it. Reopened, it showed what was sent.
 - A motor under it, a bearing on it, oak stairs on top: with Turn 180 a pulse ran `state=1` for about 1.5 seconds (the expected 37 ticks at 16 RPM plus attaching) and the stairs came back `facing=west` from `east`, a half turn exactly.
   Not tried: delays and await in a real sequence, a piston's distance, comparators, the speeds other than `->` turning things, a guest's screen.
+
+## Cuckoo clocks (macOS, offscreen)
+
+- Driven by a motor through a shaft at its back, its hands turned to 12 o'clock from another hour on `time set`. At noon the status counted chimes, pig sounds, chests opening and closing and the hat's ticking. The mysterious clock, at noon: the block and the shaft behind it gone 3 to 4 seconds later.
+  Not tried: dusk's creeper, a dimension with no day.

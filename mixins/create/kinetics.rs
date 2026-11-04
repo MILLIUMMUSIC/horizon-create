@@ -287,6 +287,9 @@ impl Kind {
             Kind::RopePulley(a) if face.axis() == Axis::Y => {
                 Kind::RopePulley(if a == Axis::X { Axis::Z } else { Axis::X })
             }
+            Kind::CuckooClock(f, m) if face.axis() == Axis::Y => {
+                Kind::CuckooClock(f.clockwise(Axis::Y), m)
+            }
             Kind::WeightedEjector(f) if face.axis() == Axis::Y => {
                 Kind::WeightedEjector(f.clockwise(Axis::Y))
             }
@@ -342,6 +345,7 @@ impl Kind {
             Kind::Deployer(f, _)
             | Kind::FluidValve(f, _)
             | Kind::WeightedEjector(f)
+            | Kind::CuckooClock(f, _)
             | Kind::MechanicalPiston(f, ..)
             | Kind::Saw(f, _)
             | Kind::Gauge(_, f, _) => Some(("facing", f.name())),
@@ -492,6 +496,9 @@ pub enum Kind {
     /// `SequencedGearshiftBlock`: `HORIZONTAL_AXIS` and `VERTICAL`; its modifier
     /// is `motor_speed`.
     SequencedGearshift(Axis, bool),
+    /// `CuckooClockBlock`: its horizontal facing, and whether it is the
+    /// mysterious one.
+    CuckooClock(Dir, bool),
     /// `PoweredShaftBlock`: its axis, driven by a steam engine; its direction
     /// is `motor_speed`.
     PoweredShaft(Axis),
@@ -610,6 +617,8 @@ impl Kind {
             "create:large_water_wheel" => axis().map(Kind::LargeWaterWheel),
             "create:encased_fan" => facing().map(Kind::EncasedFan),
             "create:mechanical_pump" => facing().map(Kind::MechanicalPump),
+            "create:cuckoo_clock" => facing().map(|f| Kind::CuckooClock(f, false)),
+            "create:mysterious_cuckoo_clock" => facing().map(|f| Kind::CuckooClock(f, true)),
             "create:weighted_ejector" => facing().map(Kind::WeightedEjector),
             "create:fluid_valve" => {
                 facing().map(|f| Kind::FluidValve(f, prop("axis_along_first") == Some("true")))
@@ -671,6 +680,8 @@ impl Kind {
             Kind::LargeWaterWheel(_) => "create:large_water_wheel",
             Kind::EncasedFan(_) => "create:encased_fan",
             Kind::MechanicalPump(_) => "create:mechanical_pump",
+            Kind::CuckooClock(_, false) => "create:cuckoo_clock",
+            Kind::CuckooClock(_, true) => "create:mysterious_cuckoo_clock",
             Kind::WeightedEjector(_) => "create:weighted_ejector",
             Kind::FluidValve(..) => "create:fluid_valve",
             Kind::MechanicalCrafter(_) => "create:mechanical_crafter",
@@ -732,6 +743,7 @@ impl Kind {
             Kind::EncasedCog(_, _, a, ..) => a,
             Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => c.axis,
             Kind::Turntable => Axis::Y,
+            Kind::CuckooClock(f, _) => f.axis(),
             Kind::SequencedGearshift(_, true) => Axis::Y,
             Kind::SequencedGearshift(a, false) => a,
             Kind::WeightedEjector(f) => f.clockwise(Axis::Y).axis(),
@@ -775,6 +787,7 @@ impl Kind {
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => face == f.opposite(),
             Kind::MechanicalPump(_) | Kind::MechanicalCrafter(_) => false,
+            Kind::CuckooClock(f, _) => face == f.opposite(),
             Kind::SequencedGearshift(_, true) => face.axis() == Axis::Y,
             Kind::SequencedGearshift(a, false) => face.axis() == a,
             Kind::WeightedEjector(f) => face.axis() == f.clockwise(Axis::Y).axis(),
@@ -823,6 +836,7 @@ impl Kind {
             Kind::MechanicalArm => 2.0,
             Kind::Deployer(..) => 4.0,
             Kind::WeightedEjector(_) => 2.0,
+            Kind::CuckooClock(..) => 1.0,
             Kind::MechanicalPiston(..) => 4.0,
             Kind::MechanicalBearing(_) => 4.0,
             Kind::RopePulley(_) => 4.0,
@@ -2415,6 +2429,7 @@ fn kind_key(k: Kind) -> String {
         Kind::Deployer(f, _)
         | Kind::FluidValve(f, _)
         | Kind::WeightedEjector(f)
+        | Kind::CuckooClock(f, _)
         | Kind::MechanicalPiston(f, ..)
         | Kind::Saw(f, _)
         | Kind::Gauge(_, f, _) => f.name(),
@@ -2663,6 +2678,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::Flywheel(a) => (31, axis(a)),
         Kind::SpeedController(a) => (35, axis(a)),
         Kind::PoweredShaft(a) => (37, axis(a)),
+        Kind::CuckooClock(d, m) => (40, dir(d) | u8::from(m) << 3),
         Kind::SequencedGearshift(a, v) => (39, axis(a) | u8::from(v) << 2),
         Kind::WeightedEjector(d) => (38, dir(d)),
         Kind::FluidValve(d, along) => (36, dir(d) | u8::from(along) << 3),
@@ -2720,6 +2736,10 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         31 => Kind::Flywheel(axis?),
         35 => Kind::SpeedController(axis?),
         37 => Kind::PoweredShaft(axis?),
+        40 => Kind::CuckooClock(
+            Dir::ALL.get(usize::from(state & 7)).copied()?,
+            state & 8 != 0,
+        ),
         39 => Kind::SequencedGearshift(axis?, state & 4 != 0),
         38 => Kind::WeightedEjector(dir?),
         36 => Kind::FluidValve(
