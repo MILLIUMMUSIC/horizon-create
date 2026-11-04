@@ -694,7 +694,7 @@ fn has_direct_input(game: &Game<'_>, pos: Pos) -> bool {
         return true;
     }
     match block_name(game, pos).as_deref() {
-        Some(super::create_machines::DEPOT | super::create_spout_glue::DRAIN | super::create_crusher_glue::CONTROLLER) => true,
+        Some(super::create_machines::DEPOT | super::create_ejector_glue::EJECTOR | super::create_spout_glue::DRAIN | super::create_crusher_glue::CONTROLLER) => true,
         Some(name) if super::create_machines::is_saw(name) => prop(game, pos, "facing").as_deref() == Some("up"),
         // canDirectlyInsert: an open chute not under one facing down.
         Some(name) if is_chute_block(name) => {
@@ -714,6 +714,7 @@ fn direct_insert(game: &mut Game<'_>, pos: Pos, stack: ItemStack, side: Dir) -> 
             let left = super::create_crusher_glue::insert(game, pos, stack.clone(), false);
             (left.as_ref().map(|l| l.count) != Some(stack.count)).then_some(left)
         }
+        Some(super::create_ejector_glue::EJECTOR) => super::create_ejector_glue::insert(game, pos, stack),
         Some(super::create_machines::DEPOT) => {
             // DepotBehaviour.tryInsertingFromSide: an empty depot only.
             let max = stack.max_stack();
@@ -2139,7 +2140,7 @@ fn belt_funnel_shape(game: &Game<'_>, pos: Pos, f: FunnelState) -> &'static str 
     // A DirectBeltInputBehaviour that `canSupportBeltFunnels`: the depot,
     // the item drain, a saw facing up (`canProcess`).
     match block_name(game, below).as_deref() {
-        Some(super::create_machines::DEPOT | super::create_spout_glue::DRAIN) => return perpendicular,
+        Some(super::create_machines::DEPOT | super::create_ejector_glue::EJECTOR | super::create_spout_glue::DRAIN) => return perpendicular,
         Some(n) if super::create_machines::is_saw(n) && prop(game, below, "facing").as_deref() == Some("up") => {
             return perpendicular;
         }
@@ -2850,6 +2851,7 @@ fn side_insert(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack, simul
     if simulate {
         let free = match block_name(game, pos).as_deref() {
             Some(name) if is_chute_block(name) => chute_accepts(game, pos, &stack),
+            Some(super::create_ejector_glue::EJECTOR) => super::create_ejector_glue::can_accept(game, pos, &stack),
             Some(name) if name == super::create_machines::DEPOT || super::create_machines::is_saw(name) => {
                 use horizon_client::containers::BlockEntity as B;
                 match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
@@ -3614,6 +3616,11 @@ pub(super) fn inventory_insert(game: &mut Game<'_>, pos: Pos, face: Dir, stack: 
 
 pub(super) fn can_insert_side(game: &Game<'_>, pos: Pos, side: Dir) -> bool {
     can_insert_from_side(game, pos, side)
+}
+
+/// `handleInsertion` simulated from `side`.
+pub(super) fn side_insert_simulated(game: &mut Game<'_>, pos: Pos, side: Dir, stack: ItemStack) -> Option<ItemStack> {
+    side_insert(game, pos, side, stack, true)
 }
 
 /// `handleInsertion` from `side`: what is left of `stack`.

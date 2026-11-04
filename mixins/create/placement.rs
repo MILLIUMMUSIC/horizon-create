@@ -370,6 +370,10 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         }),
         // MechanicalPressBlock: towards a shaft beside it, else
         // HorizontalKineticBlock's facing the placer.
+        // HorizontalKineticBlock; a chosen target turns it once placed.
+        Kind::WeightedEjector(_) => Kind::WeightedEjector(
+            preferred_side(around, &HORIZONTALS).unwrap_or_else(|| horizontal(ctx.yaw).opposite()),
+        ),
         Kind::MechanicalPress(_) => Kind::MechanicalPress(
             preferred_side(around, &HORIZONTALS).unwrap_or_else(|| horizontal(ctx.yaw).opposite()),
         ),

@@ -35,7 +35,7 @@ pub(super) const BASIN: &str = "create:basin";
 pub(super) const BLAZE: &str = "create:blaze_burner";
 pub(super) const LINK: &str = "create:redstone_link";
 /// DepotBehaviour: the held item, then `processingOutputBuffer`.
-const DEPOT_SLOTS: usize = 9;
+pub(super) const DEPOT_SLOTS: usize = 9;
 /// MillstoneBlockEntity: `inputInv`, then `outputInv`.
 const MILLSTONE_SLOTS: usize = 10;
 const SAW_SLOTS: usize = 32;
@@ -153,7 +153,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || block == super::create_fluid_glue::SMART || block == super::create_engine_glue::ENGINE) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || block == super::create_fluid_glue::SMART || block == super::create_engine_glue::ENGINE || block == super::create_ejector_glue::EJECTOR) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -163,7 +163,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || super::create_logistics::is_chute_block(block) || block == super::create_fluid_glue::SMART || block == super::create_engine_glue::ENGINE {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || super::create_logistics::is_chute_block(block) || block == super::create_fluid_glue::SMART || block == super::create_engine_glue::ENGINE || block == super::create_ejector_glue::EJECTOR {
         *ticks = true;
     }
 }
@@ -178,7 +178,7 @@ pub(super) fn block_entity_container(block: &str, container: &mut Option<ModCont
     // Every chute's block has the chute's block entity.
     let block = if super::create_logistics::is_chute_block(block) { super::create_logistics::CHUTE } else { block };
     let (slots, inputs, outputs): (usize, Vec<usize>, Vec<usize>) = match block {
-        DEPOT => (DEPOT_SLOTS, vec![0], (0..DEPOT_SLOTS).collect()),
+        DEPOT | super::create_ejector_glue::EJECTOR => (DEPOT_SLOTS, vec![0], (0..DEPOT_SLOTS).collect()),
         MILLSTONE => (MILLSTONE_SLOTS, vec![0], (1..MILLSTONE_SLOTS).collect()),
         // ProcessingInventory: 32 slots, input in the first, nothing taken.
         b if is_saw(b) => (SAW_SLOTS, vec![0], Vec::new()),
@@ -231,7 +231,7 @@ fn put_int(nbt: &mut Compound, key: &str, v: i32) {
     nbt.insert(JavaString::from(key), Tag::Int(v));
 }
 
-fn max_stack(game: &Game<'_>, stack: &ItemStack) -> u32 {
+pub(super) fn max_stack(game: &Game<'_>, stack: &ItemStack) -> u32 {
     game.items().get(&stack.item).map_or(64, |i| i.max_stack)
 }
 
@@ -813,6 +813,7 @@ pub(super) fn burner_insert(game: &mut Game<'_>, pos: Pos, stack: &ItemStack, si
 pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     match entity.id.as_str() {
         DEPOT => depot_tick(game, pos, entity),
+        super::create_ejector_glue::EJECTOR => super::create_ejector_glue::tick(game, pos, entity),
         MILLSTONE => millstone_tick(game, pos, entity),
         b if is_saw(b) => saw_tick(game, pos, entity),
         BLAZE => blaze_tick(game, pos, entity),
@@ -949,6 +950,43 @@ pub(super) fn press_held(game: &Game<'_>, press_pos: Pos, held: &ItemStack) -> O
         l
     });
     Some((true, Some((results, left))))
+}
+
+/// `SharedDepotBlockMethods.onLanded` on an ejector: up to its stack size.
+pub(super) fn take_landed_depot(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity, stack_size: i32) {
+    let limit = if stack_size == 0 { 64 } else { stack_size as u32 };
+    take_landed(game, pos, 13.0 / 16.0, |game, stack| {
+        let items = &mut entity.items;
+        let present: u32 = items.iter().flatten().map(|s| s.count).sum();
+        match &mut items[0] {
+            Some(held) if !held.same_item_same_components(&stack) => Some(stack),
+            slot => {
+                let room = limit.min(max_stack(game, &stack)).saturating_sub(present).min(stack.count);
+                if room == 0 {
+                    return Some(stack);
+                }
+                match slot {
+                    Some(held) => held.count += room,
+                    None => {
+                        let mut s = stack.clone();
+                        s.count = room;
+                        *slot = Some(s);
+                    }
+                }
+                let mut left = stack;
+                left.count -= room;
+                (left.count > 0).then_some(left)
+            }
+        }
+    });
+}
+
+pub(super) fn process_on_depot_of(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
+    process_on_depot(game, pos, entity);
+}
+
+pub(super) fn set_locked(entity: &mut ModBlockEntity, v: bool) {
+    put_bool(&mut entity.nbt, "Locked", v);
 }
 
 fn process_on_depot(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
@@ -1592,6 +1630,15 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
         Some(n) if is_saw(n) => saw_filter_click(game, pos, face),
         Some(BLAZE) => blaze_click(game, pos),
         Some(super::create_fluid_glue::SMART) => super::create_fluid_glue::smart_click(game, pos),
+        // EjectorBlock.useItemOn: a depot's, the wrench passing.
+        Some(super::create_ejector_glue::EJECTOR) => {
+            if game.held().is_none_or(|s| &*s.item != super::create_glue::WRENCH) && face == [0, 1, 0] {
+                use_depot(game, pos);
+                true
+            } else {
+                false
+            }
+        }
         Some(super::create_engine_glue::ENGINE) => {
             let (yaw, pitch) = (game.yaw, game.pitch);
             super::create_engine_glue::click(game, pos, yaw, pitch)
@@ -1695,6 +1742,7 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                             && s.name != super::create_crafter_glue::CRAFTER
                             && s.name != super::create_fluid_glue::SMART
                             && s.name != super::create_engine_glue::ENGINE
+                            && s.name != super::create_ejector_glue::EJECTOR
                             && !super::create_logistics::is_chute_block(&s.name)
                             && !super::create_funnel::is_funnel(&s.name)
                     })
@@ -1822,8 +1870,8 @@ pub(super) fn draw_depots(
         if super::create_crafter_glue::crafter_at(game, *pos).is_some() {
             continue;
         }
-        // The engine draws itself, once this lock is let go.
-        if super::create_engine_glue::engine_at(game, *pos).is_some() {
+        // These draw themselves, once this lock is let go.
+        if super::create_engine_glue::engine_at(game, *pos).is_some() || super::create_ejector_glue::is_ejector(game, *pos) {
             continue;
         }
         if game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2])).is_some_and(|s| s.name == super::create_fluid_glue::SMART) {

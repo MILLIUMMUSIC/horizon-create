@@ -26,6 +26,8 @@ pub mod create_crusher;
 pub mod create_ct;
 #[path = "../mixins/create/deployer.rs"]
 pub mod create_deployer;
+#[path = "../mixins/create/ejector.rs"]
+pub mod create_ejector;
 #[path = "../mixins/create/fan.rs"]
 pub mod create_fan;
 #[path = "../mixins/create/fluids.rs"]

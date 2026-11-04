@@ -544,6 +544,19 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
 
+   The weighted ejector (`ejector.rs`, `ejector_glue.rs`, `Kind::WeightedEjector`): `EntityLauncher`'s arc; a depot that takes
+   items only while charged and up to its stack size (the wheel on `EjectorSlot`, 0 being any), merging the same item; the
+   lid flies up and winds down by its speed and distance; it fires when its stack is reached, unless powered or the
+   target has no room, and at once under a mob or player who steps on it. Items fly (saved) and land in what is at
+   their target (`DirectBeltInputBehaviour`), or drop there; the tracked item scans for an obstacle every 120 ticks
+   (`earlyTarget`); a belt funnel above facing back takes the stack instead. Sneak-click with one in hand picks the target,
+   and placing one takes it and turns to it (`EjectorTargetHandler`, here kept by the server per player). Funnels, arms,
+   comparators treat it as a depot. Decisions: a launched mob is pushed from where it stands, as Horizon has no way to set a mob's
+   position other than `/tp` by selector; the funnel's export is not simulated first. Engine gap: hoppers into an ejector past
+   its `canAcceptItems` (no slot limit hook). Not yet: the outline and arc while choosing (`drawOutline`, `drawArc`), the elytra
+   launch, its observers' update, advancements, packages, items in the air dropped when it is broken (`dropFlyingItems`), the
+   value box drawn, friction while launching (`getFriction`), its fall-damage rule (`fallOn`).
+
    The boiler and steam engine (`boiler.rs`, `engine_glue.rs`, `fluid_glue.rs`, `Kind::PoweredShaft`): a tank with an engine
    on it is a boiler (`BoilerData`): it takes water only and counts it as its supply, sampled every 5 ticks with the best of
    the last ten, gives nothing back, keeps its windows shut, heat from a blaze burner (1, seething 2, smouldering passive)

@@ -277,6 +277,9 @@ impl Kind {
             Kind::RopePulley(a) if face.axis() == Axis::Y => {
                 Kind::RopePulley(if a == Axis::X { Axis::Z } else { Axis::X })
             }
+            Kind::WeightedEjector(f) if face.axis() == Axis::Y => {
+                Kind::WeightedEjector(f.clockwise(Axis::Y))
+            }
             // HorizontalKineticBlock.HORIZONTAL_FACING: only from above or below.
             Kind::MechanicalPress(f) if face.axis() == Axis::Y => {
                 Kind::MechanicalPress(f.clockwise(Axis::Y))
@@ -328,6 +331,7 @@ impl Kind {
             | Kind::Drill(f) => Some(("facing", f.name())),
             Kind::Deployer(f, _)
             | Kind::FluidValve(f, _)
+            | Kind::WeightedEjector(f)
             | Kind::MechanicalPiston(f, ..)
             | Kind::Saw(f, _)
             | Kind::Gauge(_, f, _) => Some(("facing", f.name())),
@@ -472,6 +476,8 @@ pub enum Kind {
     Deployer(Dir, bool),
     /// `FluidValveBlock`: its facing and `AXIS_ALONG_FIRST_COORDINATE`.
     FluidValve(Dir, bool),
+    /// `EjectorBlock`: its horizontal facing; the shaft runs across it.
+    WeightedEjector(Dir),
     /// `PoweredShaftBlock`: its axis, driven by a steam engine; its direction
     /// is `motor_speed`.
     PoweredShaft(Axis),
@@ -587,6 +593,7 @@ impl Kind {
             "create:large_water_wheel" => axis().map(Kind::LargeWaterWheel),
             "create:encased_fan" => facing().map(Kind::EncasedFan),
             "create:mechanical_pump" => facing().map(Kind::MechanicalPump),
+            "create:weighted_ejector" => facing().map(Kind::WeightedEjector),
             "create:fluid_valve" => {
                 facing().map(|f| Kind::FluidValve(f, prop("axis_along_first") == Some("true")))
             }
@@ -646,6 +653,7 @@ impl Kind {
             Kind::LargeWaterWheel(_) => "create:large_water_wheel",
             Kind::EncasedFan(_) => "create:encased_fan",
             Kind::MechanicalPump(_) => "create:mechanical_pump",
+            Kind::WeightedEjector(_) => "create:weighted_ejector",
             Kind::FluidValve(..) => "create:fluid_valve",
             Kind::MechanicalCrafter(_) => "create:mechanical_crafter",
             Kind::MechanicalMixer => "create:mechanical_mixer",
@@ -706,6 +714,7 @@ impl Kind {
             Kind::EncasedCog(_, _, a, ..) => a,
             Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => c.axis,
             Kind::Turntable => Axis::Y,
+            Kind::WeightedEjector(f) => f.clockwise(Axis::Y).axis(),
             Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
             Kind::Deployer(f, along)
@@ -746,6 +755,7 @@ impl Kind {
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => face == f.opposite(),
             Kind::MechanicalPump(_) | Kind::MechanicalCrafter(_) => false,
+            Kind::WeightedEjector(f) => face.axis() == f.clockwise(Axis::Y).axis(),
             Kind::MechanicalMixer | Kind::MechanicalArm => false,
             Kind::Belt(b) => b.has_shaft_towards(face),
             Kind::Deployer(f, along)
@@ -790,6 +800,7 @@ impl Kind {
             Kind::MechanicalMixer => 4.0,
             Kind::MechanicalArm => 2.0,
             Kind::Deployer(..) => 4.0,
+            Kind::WeightedEjector(_) => 2.0,
             Kind::MechanicalPiston(..) => 4.0,
             Kind::MechanicalBearing(_) => 4.0,
             Kind::RopePulley(_) => 4.0,
@@ -2334,6 +2345,7 @@ fn kind_key(k: Kind) -> String {
         Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm | Kind::Turntable => "",
         Kind::Deployer(f, _)
         | Kind::FluidValve(f, _)
+        | Kind::WeightedEjector(f)
         | Kind::MechanicalPiston(f, ..)
         | Kind::Saw(f, _)
         | Kind::Gauge(_, f, _) => f.name(),
@@ -2582,6 +2594,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::Flywheel(a) => (31, axis(a)),
         Kind::SpeedController(a) => (35, axis(a)),
         Kind::PoweredShaft(a) => (37, axis(a)),
+        Kind::WeightedEjector(d) => (38, dir(d)),
         Kind::FluidValve(d, along) => (36, dir(d) | u8::from(along) << 3),
         Kind::Turntable => (32, 0),
         Kind::ChainDrive(c) => (33, chain_code(c)),
@@ -2637,6 +2650,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         31 => Kind::Flywheel(axis?),
         35 => Kind::SpeedController(axis?),
         37 => Kind::PoweredShaft(axis?),
+        38 => Kind::WeightedEjector(dir?),
         36 => Kind::FluidValve(
             Dir::ALL.get(usize::from(state & 7)).copied()?,
             state & 8 != 0,

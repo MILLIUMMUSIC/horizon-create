@@ -104,6 +104,9 @@ mod, basins' tanks in their block entity's data). Pipes and pumps tick from
 Boiler and steam engine: rules in `boiler.rs`, Horizon's side in `engine_glue.rs`; a boiler lives in its tank's
 `TankPart`, ticks from `fluid_glue::level_tick`, and its engine drives a `Kind::PoweredShaft`.
 
+Weighted ejector: rules in `ejector.rs`, Horizon's side in `ejector_glue.rs`; its depot slots, state and flying items
+are in its block entity, sent in `create:depots` with its lid (`client_view`).
+
 Recipes: `prepare_content.py` flattens subfolders (`pressing/x` →
 `pressing.x`, Horizon reads only the top folder); `machines.rs` reads
 `game.recipes()` directly (`find_recipe`), because Horizon's recipe helpers

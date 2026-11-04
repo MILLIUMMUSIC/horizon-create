@@ -1090,3 +1090,12 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - Removing the engine turned its shaft back to `create:shaft`. The wheel on its value box said `Rotation Direction: Counter-Clockwise`.
   Not tried: placing on a wall by the ceiling, the wrench on an engine or powered shaft, the shaft with another source turning the
   direction round, a blaze burner seething, water running out while it turns, a multiblock boiler wider than one block.
+
+## Weighted ejector (macOS, offscreen)
+
+- Sneak-click on a depot 6 blocks east, then placing one: `facing=east`, `Ejecting to [116,102,65]`. With a motor on its shaft, 32 iron ingots
+  clicked onto it were all in the depot a few seconds later; the lid opened and wound down, the items seen in the air.
+- The player stepping on it charged was thrown along x with velocity 0.5, 0.72 and came down on the depot at x 116.6. A pig was thrown too.
+- The wheel on its value box said `Ejected Stack Size: 4`.
+  Not tried: a stack size holding it back, redstone holding it, funnels and arms on it, comparators, a reload with items in the air, a target
+  with no room, the funnel above. With a wall in the way one stack of gold came down as an item, but where it landed wasn't read.

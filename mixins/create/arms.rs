@@ -558,7 +558,7 @@ pub(super) fn handler_at(game: &Game<'_>, pos: Pos) -> Option<Inv> {
     match game.world.block_entities.get(&(pos[0], pos[1], pos[2]))? {
         B::Mod(m) => Some(match m.id.as_str() {
             VAULT => Inv::Vault(vault_members(game, pos)),
-            super::create_machines::DEPOT => Inv::Depot(pos),
+            super::create_machines::DEPOT | super::create_ejector_glue::EJECTOR => Inv::Depot(pos),
             super::create_machines::BASIN => Inv::Basin(pos),
             super::create_logistics::CHUTE => Inv::Chute(pos),
             ARM => return None,
@@ -1089,7 +1089,7 @@ fn point_type_at(game: &Game<'_>, pos: Pos) -> Option<PointType> {
     let name = block_name(game, pos)?;
     match name.as_str() {
         super::create_machines::BASIN => Some(PointType::Basin),
-        super::create_machines::DEPOT => Some(PointType::Depot),
+        super::create_machines::DEPOT | super::create_ejector_glue::EJECTOR => Some(PointType::Depot),
         name if super::create_logistics::is_chute_block(name) => Some(PointType::Chute),
         "create:millstone" => Some(PointType::Millstone),
         super::create_machines::BLAZE => Some(PointType::BlazeBurner),

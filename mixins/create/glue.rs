@@ -216,6 +216,7 @@ pub(super) fn placed(game: &mut Game<'_>, pos: [i32; 3]) {
     super::create_contraptions::glue_in_off_hand(game, pos);
     super::create_logistics::placed(game, pos);
     super::create_arms::placed(game, pos);
+    super::create_ejector_glue::placed(game, pos);
     if kind_at(game, pos).is_none() {
         return;
     }
@@ -1003,6 +1004,7 @@ pub(super) fn has_analog_output(level: &super::GameLevel<'_>, state: BlockStateI
     if super::create_fluid_glue::is_tank_block(name)
         || name == super::create_arms::VAULT
         || name == super::create_machines::DEPOT
+        || name == super::create_ejector_glue::EJECTOR
         || name == super::create_machines::BASIN
         || name == super::create_spout_glue::SPOUT
         || name == super::create_spout_glue::DRAIN
@@ -1030,7 +1032,7 @@ pub(super) fn analog_output(
         *output = super::create_fluid_glue::tank_analog(level_dimension_id(dimension), pos);
     } else if name == super::create_arms::VAULT {
         *output = super::create_arms::vault_analog(level, pos, &max_stack);
-    } else if name == super::create_machines::DEPOT || name == super::create_machines::BASIN {
+    } else if name == super::create_machines::DEPOT || name == super::create_machines::BASIN || name == super::create_ejector_glue::EJECTOR {
         *output = super::create_machines::container_analog(level, pos, name, &max_stack);
     } else if name == super::create_spout_glue::SPOUT || name == super::create_spout_glue::DRAIN {
         *output = super::create_spout_glue::tank_analog(level, pos, name);
@@ -1088,7 +1090,8 @@ fn right_click_hand(
         *canceled = true;
         return;
     }
-    if try_encase(game, pos)
+    if super::create_ejector_glue::select_target(game, pos)
+        || try_encase(game, pos)
         || super::create_fluid_glue::try_encase(game, pos)
         || super::create_redstone_glue::right_click(game, pos)
     {
@@ -1368,6 +1371,7 @@ fn turntables_tick(game: &mut Game<'_>, dimension: &str, tables: &[(Pos, f32)]) 
 pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
     super::create_fluid_glue::valves_client_tick();
     super::create_fluid_glue::gauges_client_tick();
+    super::create_ejector_glue::client_tick(game);
     let Some(p) = game.player.as_ref() else {
         return;
     };
@@ -1614,6 +1618,16 @@ pub(super) fn from_client(game: &mut Game<'_>, player: u128, channel: &str, data
     if value == 0 || value.abs() > max {
         return;
     }
+    if block_name(game, pos) == super::create_ejector_glue::EJECTOR
+        && (value == PISTON_MODE_UP || value == TUNNEL_MODE_UP || value == TUNNEL_MODE_DOWN)
+    {
+        if value == PISTON_MODE_UP {
+            super::create_ejector_glue::trigger(game, pos);
+        } else if let Some(line) = super::create_ejector_glue::step_stack_size(game, pos, value == TUNNEL_MODE_UP) {
+            super::create_contraptions::tell_later(player, horizon_client::text::Text::literal(line));
+        }
+        return;
+    }
     if value == PISTON_MODE_UP || value == PISTON_MODE_DOWN {
         if let Some(label) = super::create_contraptions::step_piston_mode(game, pos, value == PISTON_MODE_UP) {
             let line = format!("Movement Mode: {label}");
@@ -1763,6 +1777,17 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         let step = if steps > 0.0 { PISTON_MODE_UP } else { PISTON_MODE_DOWN };
         if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
             log::debug!("Create: piston mode: {e}");
+        }
+        return;
+    }
+    // A weighted ejector's stack size, likewise.
+    if let Some(hit) = game.pick()
+        && super::create_ejector_glue::hits_value_box(game, hit.pos, Dir::nearest(hit.face), hit.point)
+    {
+        *claimed = true;
+        let step = if steps > 0.0 { TUNNEL_MODE_UP } else { TUNNEL_MODE_DOWN };
+        if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
+            log::debug!("Create: ejector stack size: {e}");
         }
         return;
     }
@@ -1924,6 +1949,13 @@ pub(super) fn from_server(channel: &str, data: &[u8]) {
     let c = guard.get_or_insert_with(Client::default);
     if !c.view.apply(data) {
         log::debug!("Create: a bad kinetics message");
+    }
+}
+
+/// A player's client stepped on the weighted ejector at `pos`.
+pub(super) fn send_ejector_trigger(game: &mut Game<'_>, pos: Pos) {
+    if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(pos, PISTON_MODE_UP)) {
+        log::debug!("Create: ejector trigger: {e}");
     }
 }
 
@@ -2093,6 +2125,11 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
     let mut scrolls: Vec<Option<(&'static str, String, f32)>> = Vec::new();
     match view.kind {
         Kind::Shaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
+        // EjectorRenderer's ShaftRenderer (its lid: create_ejector_glue).
+        Kind::WeightedEjector(_) => {
+            let a = view.kind.rotation_axis();
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+        }
         Kind::PoweredShaft(a) => {
             want.push(("create:hz_powered_shaft", Some(("axis", a.name())), id, a, standard, 0.0))
         }
@@ -2621,6 +2658,7 @@ fn shift_uv(
 fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
     super::create_machines::draw_depots(game, camera, out);
     super::create_engine_glue::draw(game, camera, render_time(), out);
+    super::create_ejector_glue::draw(game, camera, render_time(), out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);

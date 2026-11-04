@@ -273,6 +273,8 @@ PARTIALS = {
     "engine_connector": "create:block/steam_engine/shaft_connector",
     "boiler_gauge": "create:block/steam_engine/gauge",
     "boiler_gauge_dial": "create:block/steam_engine/gauge_dial",
+    # EjectorRenderer's lid.
+    "ejector_top": "create:block/weighted_ejector/top",
     # FluidValveRenderer's pointer.
     "fluid_valve_pointer": "create:block/fluid_valve/pointer",
     # ArmRenderer's and DeployerRenderer's partials.
@@ -738,6 +740,7 @@ def fit_logistics(content, names):
     fit_straight_pipes(content)
     fit_smart_pipe(content)
     fit_steam_engine(content)
+    fit_weighted_ejector(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1598,6 +1601,28 @@ def fit_steam_engine(content):
             continue
         parts.append({"when": when, "apply": apply})
     write_json(states / "steam_engine.json", {"multipart": parts})
+
+
+# The weighted ejector (EjectorBlock): a chain's template with its own `facing`,
+# AllShapes.CASING_13PX; a block entity for its depot, a shaft and lid drawn.
+def fit_weighted_ejector(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    decl = read_json(blocks / "weighted_ejector.json") if (blocks / "weighted_ejector.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["state_properties"] = {"facing": {"type": "enum", "values": ["north", "south", "west", "east"]}}
+    decl["default_state"] = {"facing": "north"}
+    decl["shapes"] = {"default": [box(0, 0, 0, 16, 13, 16)]}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "weighted_ejector.json", decl)
+    original = read_json(states / "weighted_ejector.json")
+    parts = []
+    for key, apply in original["variants"].items():
+        when = dict(kv.split("=") for kv in key.split(","))
+        if when.pop("waterlogged", "false") == "true":
+            continue
+        parts.append({"when": when, "apply": apply})
+    write_json(states / "weighted_ejector.json", {"multipart": parts})
 
 
 def fit_turntable(content):
