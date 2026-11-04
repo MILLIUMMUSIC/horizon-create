@@ -1099,3 +1099,10 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 - The wheel on its value box said `Ejected Stack Size: 4`.
   Not tried: a stack size holding it back, redstone holding it, funnels and arms on it, comparators, a reload with items in the air, a target
   with no room, the funnel above. With a wall in the way one stack of gold came down as an item, but where it landed wasn't read.
+
+## Steam whistle (macOS, offscreen)
+
+- Placed by hand on a tank's side over magma: `wall=true`, `facing=south`. Three clicks with a whistle in hand made the extension `double_connected` then `single`
+  above it; goggles said `Pitch: D#`. A redstone block beside it: `powered=true`, the mouth open in the frame, `create:whistle` heard.
+  Removed: closed. The wrench made it and the extension `large`. Taking the tank away took all three.
+  Not tried: by ear (offscreen), its top half taken off by a sneaking wrench, a floor whistle, an unheated boiler keeping it silent.

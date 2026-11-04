@@ -544,6 +544,14 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
 
+   The steam whistle (`whistle.rs`, `whistle_glue.rs`): placed only on a tank, it makes it a boiler; `POWERED` by redstone; with a
+   heated boiler its mouth opens and wiggles and it sounds, at the pitch its extensions give. A whistle in hand on it adds to it
+   (single, then double, up to six blocks), the wrench cycles its size from it or an extension, sneaking takes the top half off a
+   double one in its upper half. It and its extensions go with what holds them (`updateShape`). The goggles show its note.
+   Engine gaps: no sound instance to hold looping and retune (no issue found), so the 3 second sound starts again as it ends
+   and stops only there, with no fade; steam jets need a particle with its own behaviour (#7465), for the engine too.
+   Not yet: the `PIPE_ORGAN` and `STEAM_WHISTLE` advancements, moving it on a contraption.
+
    The weighted ejector (`ejector.rs`, `ejector_glue.rs`, `Kind::WeightedEjector`): `EntityLauncher`'s arc; a depot that takes
    items only while charged and up to its stack size (the wheel on `EjectorSlot`, 0 being any), merging the same item; the
    lid flies up and winds down by its speed and distance; it fires when its stack is reached, unless powered or the
@@ -570,8 +578,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    tick rather than on `needsHeatLevelUpdate` (same result, as every change under it is seen the next tick); the engine makes
    its shaft powered in its tick rather than `onPlace` and `pickCorrectShaftType`, covering both; `initialTicks`'s warm-up is
    left out because the shaft's engine is saved, and it only guards against claiming a shaft before that is loaded. Not yet:
-   steam jets and sounds (`spawnParticles`, `SoundPool`), the value box drawn, bars in their several colours, the steam
-   whistle (a boiler counts `attached_whistles`, none yet), the `canSurvive` check on a wrenched powered shaft beyond the next
+   the engine's sounds (`SoundPool`), the value box drawn, bars in their several colours, the `canSurvive` check on a wrenched powered shaft beyond the next
    tick's `stillValid`, advancements.
 
    The smart fluid pipe (`fluids.rs`, `fluid_glue.rs`): placed as `SmartFluidPipeBlock.getStateForPlacement` has it,

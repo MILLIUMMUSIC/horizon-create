@@ -60,3 +60,5 @@ pub mod create_tank;
 pub mod create_tunnel;
 #[path = "../mixins/create/vault.rs"]
 pub mod create_vault;
+#[path = "../mixins/create/whistle.rs"]
+pub mod create_whistle;

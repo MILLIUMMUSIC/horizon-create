@@ -202,6 +202,18 @@ name = "create_crusher_glue"
 source = "crusher_glue.rs"
 
 [[module]]
+id = "whistle"
+file = "crates/horizon-client/src/game.rs"
+name = "create_whistle"
+source = "whistle.rs"
+
+[[module]]
+id = "whistle_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_whistle_glue"
+source = "whistle_glue.rs"
+
+[[module]]
 id = "ejector"
 file = "crates/horizon-client/src/game.rs"
 name = "create_ejector"

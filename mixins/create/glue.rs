@@ -744,6 +744,11 @@ pub(super) fn state_for_placement(
         }
         return;
     }
+    if s.name == super::create_whistle_glue::WHISTLE {
+        let clicked = Dir::nearest(context.face.normal());
+        *answer = Some(super::create_whistle_glue::placement(level, state, pos, clicked, context.yaw));
+        return;
+    }
     if s.name == super::create_engine_glue::ENGINE {
         let clicked = Dir::nearest(context.face.normal());
         *answer = Some(super::create_engine_glue::placement(level, state, pos, clicked, context.yaw, context.pitch));
@@ -883,6 +888,9 @@ pub(super) fn update_shape(
     let d = Dir::nearest(direction.normal());
     if let Some(next) = super::create_fluid_glue::pipe_update_shape(level, state, pos, d) {
         *new = Some(next);
+    }
+    if let Some(next) = super::create_whistle_glue::update_shape(level, state, pos, d) {
+        *new = next.or_else(|| level.registry.default_state("minecraft:air"));
     }
     // ChainDriveBlock.updateShape.
     if let Some(s) = level.registry.state(state)
@@ -1372,6 +1380,7 @@ pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
     super::create_fluid_glue::valves_client_tick();
     super::create_fluid_glue::gauges_client_tick();
     super::create_ejector_glue::client_tick(game);
+    super::create_whistle_glue::client_tick(game);
     let Some(p) = game.player.as_ref() else {
         return;
     };
@@ -1476,6 +1485,9 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     let kind = kind_at(game, pos);
     // EncasedShaftBlock / EncasedCogwheelBlock.onSneakWrenched: back to the
     // bare block, the casing gone with no drop.
+    if sneaking && super::create_whistle_glue::sneak_wrench(game, pos) {
+        return true;
+    }
     if sneaking {
         let bare = match kind {
             Some(Kind::EncasedShaft(_, a)) => Some(Kind::Shaft(a)),
@@ -1957,6 +1969,11 @@ pub(super) fn send_ejector_trigger(game: &mut Game<'_>, pos: Pos) {
     if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(pos, PISTON_MODE_UP)) {
         log::debug!("Create: ejector trigger: {e}");
     }
+}
+
+/// This game's dimension, as clients' messages code it.
+pub(super) fn dim_code_of(game: &Game<'_>) -> u8 {
+    dim_code(game.dim.id())
 }
 
 /// The kinetic block at `pos` as a client sees it.
@@ -2659,6 +2676,7 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_machines::draw_depots(game, camera, out);
     super::create_engine_glue::draw(game, camera, render_time(), out);
     super::create_ejector_glue::draw(game, camera, render_time(), out);
+    super::create_whistle_glue::draw(game, camera, render_time(), out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);
@@ -2958,7 +2976,10 @@ pub(super) fn hud(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
     if block_name(game, hit.pos) == super::create_engine_glue::POWERED_SHAFT {
         return;
     }
+    // WhistleBlockEntity.addToGoggleTooltip.
+    let note = super::create_whistle_glue::goggle_note(game, hit.pos);
     let lines = match view {
+        _ if note.is_some() => vec![(format!("Pitch: {}", note.unwrap_or_default()), WHITE)],
         Some(view) => {
             let mut lines = super::create_arms::deployer_goggle_lines(game, hit.pos).unwrap_or_default();
             let kinetic = goggle_lines(&view);

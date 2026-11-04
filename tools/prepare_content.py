@@ -275,6 +275,10 @@ PARTIALS = {
     "boiler_gauge_dial": "create:block/steam_engine/gauge_dial",
     # EjectorRenderer's lid.
     "ejector_top": "create:block/weighted_ejector/top",
+    # WhistleRenderer's mouths.
+    "whistle_mouth_small": "create:block/steam_whistle/small_mouth",
+    "whistle_mouth_medium": "create:block/steam_whistle/medium_mouth",
+    "whistle_mouth_large": "create:block/steam_whistle/large_mouth",
     # FluidValveRenderer's pointer.
     "fluid_valve_pointer": "create:block/fluid_valve/pointer",
     # ArmRenderer's and DeployerRenderer's partials.
@@ -741,6 +745,7 @@ def fit_logistics(content, names):
     fit_smart_pipe(content)
     fit_steam_engine(content)
     fit_weighted_ejector(content)
+    fit_steam_whistle(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1623,6 +1628,61 @@ def fit_weighted_ejector(content):
             continue
         parts.append({"when": when, "apply": apply})
     write_json(states / "weighted_ejector.json", {"multipart": parts})
+
+
+# The steam whistle and its extension: a chain's template with their own
+# properties, AllShapes.WHISTLE_*.
+def fit_steam_whistle(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    def to_multipart(name):
+        original = read_json(states / f"{name}.json")
+        parts = []
+        for key, apply in original["variants"].items():
+            when = dict(kv.split("=") for kv in key.split(","))
+            if when.pop("waterlogged", "false") == "true":
+                continue
+            parts.append({"when": when, "apply": apply})
+        write_json(states / f"{name}.json", {"multipart": parts})
+    sizes = ("small", "medium", "large")
+    size_values = {"type": "enum", "values": list(sizes)}
+    bodies = {"small": (4, 3, 4, 12, 16, 12), "medium": (3, 3, 3, 13, 16, 13), "large": (2, 3, 2, 14, 16, 14)}
+    def turned(b, facing):
+        x0, y0, z0, x1, y1, z1 = b
+        return {"south": (x0, y0, z0, x1, y1, z1),
+                "north": (16 - x1, y0, 16 - z1, 16 - x0, y1, 16 - z0),
+                "west": (16 - z1, y0, x0, 16 - z0, y1, x1),
+                "east": (z0, y0, 16 - x1, z1, y1, 16 - x0)}[facing]
+    base = [box(1, 0, 1, 15, 3, 15), box(5, 0, 5, 11, 8, 11)]
+    facings = ("north", "south", "west", "east")
+    values = {}
+    for size in sizes:
+        for facing in facings:
+            values[f"{size},false,{facing}"] = [box(*bodies[size])] + base
+            # WHISTLE_BASE.get(NORTH), made for south, then turned.
+            plate = [[v * 16 for v in facing_box("north", b)] for b in base]
+            values[f"{size},true,{facing}"] = [box(*turned(b, facing)) for b in [bodies[size]] + plate]
+    decl = read_json(blocks / "steam_whistle.json") if (blocks / "steam_whistle.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["state_properties"] = {"facing": {"type": "enum", "values": list(facings)}, "wall": {"type": "boolean"},
+                                "powered": {"type": "boolean"}, "size": size_values}
+    decl["default_state"] = {"facing": "north", "wall": "false", "powered": "false", "size": "medium"}
+    decl["shapes"] = {"properties": ["size", "wall", "facing"], "values": values}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "steam_whistle.json", decl)
+    to_multipart("steam_whistle")
+    widths = {"small": (4, 12), "medium": (3, 13), "large": (2, 14)}
+    tops = {"single": 10, "double": 18, "double_connected": 16}
+    decl = read_json(blocks / "steam_whistle_extension.json") if (blocks / "steam_whistle_extension.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["item"] = False
+    decl["state_properties"] = {"shape": {"type": "enum", "values": list(tops)}, "size": size_values}
+    decl["default_state"] = {"shape": "single", "size": "medium"}
+    decl["shapes"] = {"properties": ["shape", "size"], "values": {
+        f"{shape},{size}": [box(widths[size][0], 0, widths[size][0], widths[size][1], top, widths[size][1])]
+        for shape, top in tops.items() for size in sizes}}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "steam_whistle_extension.json", decl)
 
 
 def fit_turntable(content):

@@ -159,7 +159,7 @@ fn pending() -> MutexGuard<'static, Vec<(String, Pos, bool)>> {
 
 /// Blocks of ours outside the kinetics (the pump is a kinetic block).
 pub(super) fn is_ours(name: &str) -> bool {
-    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || is_tank_block(name)
+    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || name == super::create_whistle_glue::WHISTLE || name == super::create_whistle_glue::EXTENSION || is_tank_block(name)
 }
 
 pub(super) fn is_tank_block(name: &str) -> bool {
@@ -477,6 +477,9 @@ pub(super) fn valves_client_tick() {
 /// clicked along its axis passes.
 pub(super) fn wrench_pipe(game: &mut Game<'_>, pos: Pos, face: Dir) -> Option<bool> {
     if let Some(done) = super::create_engine_glue::wrench(game, pos, face) {
+        return Some(done);
+    }
+    if let Some(done) = super::create_whistle_glue::wrench(game, pos) {
         return Some(done);
     }
     if let Some(done) = wrench_smart(game, pos, face) {
@@ -1094,7 +1097,7 @@ fn evaluate_boilers(game: &Game<'_>, tanks: &mut Tanks) {
             continue;
         };
         let (width, height) = (part.width, part.height);
-        let mut engines = 0;
+        let (mut engines, mut whistles) = (0, 0);
         for x in 0..width {
             for y in 0..height {
                 for z in 0..width {
@@ -1108,6 +1111,9 @@ fn evaluate_boilers(game: &Game<'_>, tanks: &mut Tanks) {
                         if super::create_engine_glue::engine_connected(game, at) == Some(d) {
                             engines += 1;
                         }
+                        if super::create_whistle_glue::attached_at(game, at) == Some(d.opposite()) {
+                            whistles += 1;
+                        }
                     }
                 }
             }
@@ -1117,6 +1123,7 @@ fn evaluate_boilers(game: &Game<'_>, tanks: &mut Tanks) {
         };
         let was = part.boiler.is_active();
         part.boiler.attached_engines = engines;
+        part.boiler.attached_whistles = whistles;
         if !was && part.boiler.is_active() {
             part.window = false;
         }
