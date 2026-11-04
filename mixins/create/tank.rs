@@ -90,7 +90,7 @@ pub fn window_shape(window: bool, width: i32, x: i32, z: i32) -> Shape {
 }
 
 /// One tank block's `FluidTankBlockEntity` fields.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TankPart {
     /// `controller`: none when this block is its own controller.
     pub controller: Option<Pos>,
@@ -105,6 +105,8 @@ pub struct TankPart {
     pub creative: bool,
     /// `updateConnectivity`: look for a multiblock on the next tick.
     pub update_connectivity: bool,
+    /// `boiler`: a controller's.
+    pub boiler: super::create_boiler::Boiler,
 }
 
 impl TankPart {
@@ -117,7 +119,12 @@ impl TankPart {
             tank: FluidTank::new(TANK_CAPACITY),
             creative,
             update_connectivity: false,
+            boiler: Default::default(),
         }
+    }
+    /// `getTotalTankSize`.
+    pub fn total_size(&self) -> i32 {
+        self.width * self.width * self.height
     }
     /// `isController`.
     pub fn is_controller(&self, pos: Pos) -> bool {
@@ -167,10 +174,20 @@ impl TankPart {
 pub struct TankHandler<'a> {
     pub tank: &'a mut FluidTank,
     pub creative: bool,
+    /// `handlerForCapability`: a boiler's `BoilerFluidHandler` instead, when
+    /// it is active.
+    pub boiler: Option<&'a mut super::create_boiler::Boiler>,
 }
 
 impl FluidHandler for TankHandler<'_> {
     fn fill(&mut self, resource: &FluidStack, simulate: bool) -> i32 {
+        if let Some(b) = self.boiler.as_mut() {
+            return if resource.fluid == super::create_fluids::WATER && !resource.is_empty() {
+                b.fill(resource.amount, simulate)
+            } else {
+                0
+            };
+        }
         if self.creative {
             return if resource.is_empty() {
                 0
@@ -181,9 +198,15 @@ impl FluidHandler for TankHandler<'_> {
         self.tank.fill(resource, simulate)
     }
     fn drain(&mut self, resource: &FluidStack, simulate: bool) -> FluidStack {
+        if self.boiler.is_some() {
+            return FluidStack::empty();
+        }
         self.tank.drain(resource, simulate || self.creative)
     }
     fn drain_any(&mut self, max: i32, simulate: bool) -> FluidStack {
+        if self.boiler.is_some() {
+            return FluidStack::empty();
+        }
         self.tank.drain_any(max, simulate || self.creative)
     }
 }
@@ -237,9 +260,11 @@ impl Tanks {
         if creative && !part.tank.fluid.is_empty() {
             part.tank.fluid.amount = part.tank.capacity;
         }
+        let active = part.boiler.is_active();
         Some(TankHandler {
             tank: &mut part.tank,
             creative,
+            boiler: active.then_some(&mut part.boiler),
         })
     }
 
@@ -320,6 +345,9 @@ impl Tanks {
             return;
         };
         if let Some(part) = self.parts.get_mut(&c) {
+            if part.boiler.is_active() {
+                return;
+            }
             part.window = !part.window;
         }
         self.mark(c);
@@ -620,6 +648,7 @@ impl Tanks {
             p.controller = None;
             p.width = 1;
             p.height = 1;
+            p.boiler.clear();
             self.changed.insert(pos);
         }
     }
@@ -654,6 +683,25 @@ impl Tanks {
                 )
             })
             .collect();
+        // BoilerData.write.
+        lines.extend(
+            self.parts
+                .iter()
+                .filter(|(_, t)| t.boiler.is_active())
+                .map(|(p, t)| {
+                    format!(
+                        "boiler {} {} {} {} {} {} {} {}",
+                        p[0],
+                        p[1],
+                        p[2],
+                        t.boiler.water_supply,
+                        t.boiler.active_heat,
+                        u8::from(t.boiler.passive_heat),
+                        t.boiler.attached_engines,
+                        t.boiler.attached_whistles
+                    )
+                }),
+        );
         lines.sort();
         lines.join("\n")
     }
@@ -697,6 +745,25 @@ impl Tanks {
                     tanks.parts.insert(pos, t);
                 }
                 _ => {}
+            }
+        }
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let ["boiler", x, y, z, supply, heat, passive, engines, whistles] = parts.as_slice()
+            else {
+                continue;
+            };
+            let (Ok(x), Ok(y), Ok(z)) = (x.parse(), y.parse(), z.parse()) else {
+                continue;
+            };
+            if let Some(t) = tanks.parts.get_mut(&[x, y, z]) {
+                t.boiler = super::create_boiler::Boiler::restored(
+                    supply.parse().unwrap_or(0.0),
+                    heat.parse().unwrap_or(0),
+                    *passive == "1",
+                    engines.parse().unwrap_or(0),
+                    whistles.parse().unwrap_or(0),
+                );
             }
         }
         tanks
@@ -836,6 +903,34 @@ mod tests {
         t.toggle_windows([0, 1, 0]);
         assert_eq!(t.look([0, 1, 0]).unwrap().shape, Shape::Plain);
         assert_eq!(t.look([0, 0, 0]).unwrap().model(), "bottom");
+    }
+
+    #[test]
+    fn a_boiler_takes_water_for_its_supply_and_gives_nothing() {
+        let mut tanks = Tanks::default();
+        tanks.place([0, 0, 0], false);
+        use super::super::create_fluids::WATER;
+        tanks.parts.get_mut(&[0, 0, 0]).unwrap().tank.fluid = FluidStack::new(WATER, 500);
+        tanks
+            .parts
+            .get_mut(&[0, 0, 0])
+            .unwrap()
+            .boiler
+            .attached_engines = 1;
+        let mut h = tanks.handler([0, 0, 0]).unwrap();
+        assert_eq!(h.fill(&FluidStack::new(WATER, 100), true), 100);
+        assert_eq!(h.fill(&FluidStack::new(WATER, 100), false), 100);
+        assert_eq!(h.fill(&FluidStack::new("minecraft:lava", 100), false), 0);
+        assert!(h.drain_any(100, false).is_empty());
+        let part = &tanks.parts[&[0, 0, 0]];
+        assert_eq!(part.boiler.gathered_supply, 100);
+        assert_eq!(part.tank.fluid.amount, 500);
+        // The wrench leaves its windows alone, and a save keeps it.
+        let before = part.window;
+        tanks.toggle_windows([0, 0, 0]);
+        assert_eq!(tanks.parts[&[0, 0, 0]].window, before);
+        let loaded = Tanks::load(&tanks.save());
+        assert_eq!(loaded.parts[&[0, 0, 0]].boiler.attached_engines, 1);
     }
 
     #[test]

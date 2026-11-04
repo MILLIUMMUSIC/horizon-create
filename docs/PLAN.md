@@ -174,7 +174,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      none with windows shut), tiled a block at a time. The wrench toggles the whole tank's windows. Buckets only in
      creative, as `FluidTankBlock.useItemOn`. The creative fluid tank (`CreativeSmartFluidTank`): a bucket sets its
      fluid, pipes drain it endlessly and fills are voided; in survival an empty bucket takes it out and clears it.
-     Not yet: the boiler (milestone 7, with the steam engine), tanks on moving structures (`FluidTankMovementBehavior`),
+     Not yet: tanks on moving structures (`FluidTankMovementBehavior`),
      light from glowing fluids
      (`luminosity`: engine gap, a template's light is fixed), the fluid level's easing (`LerpedFloat`), sounds and particles on buckets.
    - Basin fluids: two input and two output tanks of 1000 mB (`SmartFluidTankBehaviour`, inputs keeping their
@@ -543,6 +543,23 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    tag only differs for a valve left turning); a guest's wrench on a corner pipe counts as a click in the middle, as the
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
+
+   The boiler and steam engine (`boiler.rs`, `engine_glue.rs`, `fluid_glue.rs`, `Kind::PoweredShaft`): a tank with an engine
+   on it is a boiler (`BoilerData`): it takes water only and counts it as its supply, sampled every 5 ticks with the best of
+   the last ten, gives nothing back, keeps its windows shut, heat from a blaze burner (1, seething 2, smouldering passive)
+   or the passive heaters (magma, lava, fire, lit campfires), levels from size, water and heat, passive at 1/8 efficiency.
+   The engine is placed only on a tank (`canSurvive`), makes a shaft two blocks out a powered one, and that shaft goes back to
+   a shaft when no engine is left (`stillValid`); speed 16 to 64 and capacity as `PoweredShaftBlockEntity`. The wheel on its
+   value box steps its rotation direction unless the shaft has another source, which turns it to agree. A shaft item on
+   the engine goes to its place. Drawn: piston, linkage, crank connector, and a gauge with its dial on each uncovered side of the
+   boiler. Goggles: the boiler's status and bars on the tank, the generator's numbers on the engine. Saved: `boiler` lines
+   beside the tanks, and the shaft's efficiency and engine in its kinetics line. Decisions: `updateTemperature` runs every
+   tick rather than on `needsHeatLevelUpdate` (same result, as every change under it is seen the next tick); the engine makes
+   its shaft powered in its tick rather than `onPlace` and `pickCorrectShaftType`, covering both; `initialTicks`'s warm-up is
+   left out because the shaft's engine is saved, and it only guards against claiming a shaft before that is loaded. Not yet:
+   steam jets and sounds (`spawnParticles`, `SoundPool`), the value box drawn, bars in their several colours, the steam
+   whistle (a boiler counts `attached_whistles`, none yet), the `canSurvive` check on a wrenched powered shaft beyond the next
+   tick's `stillValid`, advancements.
 
    The smart fluid pipe (`fluids.rs`, `fluid_glue.rs`): placed as `SmartFluidPipeBlock.getStateForPlacement` has it,
    `FACING` turned by the wrench from above or below, open along `getPipeAxis`, its filter in a block entity's data and on

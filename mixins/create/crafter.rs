@@ -26,6 +26,27 @@ impl Pointing {
         Pointing::Right,
     ];
 
+    /// `Pointing.getCombinedDirection`.
+    pub fn combined_direction(self, direction: Dir) -> Dir {
+        let axis = direction.axis();
+        let mut top = if axis == Axis::Y { Dir::South } else { Dir::Up };
+        let index = match self {
+            Pointing::Up => 0,
+            Pointing::Left => 1,
+            Pointing::Down => 2,
+            Pointing::Right => 3,
+        };
+        let rotations = if direction.positive() {
+            index
+        } else {
+            (4 - index) % 4
+        };
+        for _ in 0..rotations {
+            top = top.clockwise(axis);
+        }
+        top
+    }
+
     pub fn x_rotation(self) -> f32 {
         match self {
             Pointing::Up => 0.0,

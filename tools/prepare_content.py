@@ -87,6 +87,8 @@ ROTATING = {
     "flywheel": {"shapes": [POLE, LARGE_GEAR], "particle": "block/stripped_spruce_log_top"},
     # CrushingWheelBlock: ENTITYBLOCK_ANIMATED, AllShapes' full collision.
     "crushing_wheel": {"shapes": [box(0, 0, 0, 16, 16, 16)], "particle": "create:block/palettes/stone_types/cut/andesite_cut"},
+    # PoweredShaftBlock: AllShapes.EIGHT_VOXEL_POLE, made from a shaft.
+    "powered_shaft": {"shapes": [box(4, 0, 4, 12, 16, 12)], "particle": "create:block/axis"},
 }
 
 # Directional kinetic blocks: a template with all six facings and nothing
@@ -265,6 +267,12 @@ PARTIALS = {
     "smart_chute_powered": "create:block/smart_chute/block_powered",
     # PumpRenderer's cog.
     "mechanical_pump_cog": "create:block/mechanical_pump/cog",
+    # SteamEngineRenderer's and FluidTankRenderer.renderAsBoiler's partials.
+    "engine_piston": "create:block/steam_engine/piston",
+    "engine_linkage": "create:block/steam_engine/linkage",
+    "engine_connector": "create:block/steam_engine/shaft_connector",
+    "boiler_gauge": "create:block/steam_engine/gauge",
+    "boiler_gauge_dial": "create:block/steam_engine/gauge_dial",
     # FluidValveRenderer's pointer.
     "fluid_valve_pointer": "create:block/fluid_valve/pointer",
     # ArmRenderer's and DeployerRenderer's partials.
@@ -729,6 +737,7 @@ def fit_logistics(content, names):
     fit_turntable(content)
     fit_straight_pipes(content)
     fit_smart_pipe(content)
+    fit_steam_engine(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1551,6 +1560,44 @@ def fit_smart_pipe(content):
                     parts.append({"when": {"face": face, "facing": facing, prop: value},
                                   "apply": {"model": f"create:block/fluid_pipe/{value}/{side}"}})
     write_json(states / "smart_fluid_pipe.json", {"multipart": parts})
+
+
+# The steam engine (SteamEngineBlock): a chain's template with its own `face` and
+# `facing`, AllShapes.STEAM_ENGINE*; a block entity for its rotation direction.
+def fit_steam_engine(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    decl = read_json(blocks / "steam_engine.json") if (blocks / "steam_engine.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["state_properties"] = {"face": {"type": "enum", "values": ["floor", "wall", "ceiling"]},
+                                "facing": {"type": "enum", "values": ["north", "south", "west", "east"]}}
+    decl["default_state"] = {"face": "floor", "facing": "north"}
+    floor = [(1, 0, 1, 15, 3, 15), (3, 0, 3, 13, 15, 13), (1, 5, 4, 15, 13, 12)]
+    ceiling = [(1, 13, 1, 15, 16, 15), (3, 1, 3, 13, 16, 13), (1, 3, 4, 15, 11, 12)]
+    wall = [(1, 1, 0, 15, 15, 3), (3, 3, 0, 13, 13, 15), (1, 4, 5, 15, 12, 13)]
+    def turned(b, facing):
+        x0, y0, z0, x1, y1, z1 = b
+        return {"south": (x0, y0, z0, x1, y1, z1),
+                "north": (16 - x1, y0, 16 - z1, 16 - x0, y1, 16 - z0),
+                "west": (16 - z1, y0, x0, 16 - z0, y1, x1),
+                "east": (z0, y0, 16 - x1, z1, y1, 16 - x0)}[facing]
+    values = {}
+    for facing in ("north", "south", "west", "east"):
+        axis_facing = "south" if facing in ("north", "south") else "east"
+        values[f"floor,{facing}"] = [box(*turned(b, axis_facing)) for b in floor]
+        values[f"ceiling,{facing}"] = [box(*turned(b, axis_facing)) for b in ceiling]
+        values[f"wall,{facing}"] = [box(*turned(b, facing)) for b in wall]
+    decl["shapes"] = {"properties": ["face", "facing"], "values": values}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "steam_engine.json", decl)
+    original = read_json(states / "steam_engine.json")
+    parts = []
+    for key, apply in original["variants"].items():
+        when = dict(kv.split("=") for kv in key.split(","))
+        if when.pop("waterlogged", "false") == "true":
+            continue
+        parts.append({"when": when, "apply": apply})
+    write_json(states / "steam_engine.json", {"multipart": parts})
 
 
 def fit_turntable(content):

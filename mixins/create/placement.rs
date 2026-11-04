@@ -33,6 +33,52 @@ pub trait Around {
     }
 }
 
+/// `Direction.orderedByNearest(entity)`.
+pub fn ordered_by_nearest(yaw: f32, pitch: f32) -> [Dir; 6] {
+    let f = pitch.to_radians();
+    let g = -yaw.to_radians();
+    let (h, i) = (f.sin(), f.cos());
+    let (j, k) = (g.sin(), g.cos());
+    let east = j > 0.0;
+    let up = h < 0.0;
+    let south = k > 0.0;
+    let l = if east { j } else { -j };
+    let m = if up { -h } else { h };
+    let n = if south { k } else { -k };
+    let o = l * i;
+    let p = n * i;
+    let dx = if east { Dir::East } else { Dir::West };
+    let dy = if up { Dir::Up } else { Dir::Down };
+    let dz = if south { Dir::South } else { Dir::North };
+    let order = |a: Dir, b: Dir, c: Dir| [a, b, c, c.opposite(), b.opposite(), a.opposite()];
+    if l > n {
+        if m > o {
+            order(dy, dx, dz)
+        } else if p > m {
+            order(dx, dz, dy)
+        } else {
+            order(dx, dy, dz)
+        }
+    } else if m > p {
+        order(dy, dz, dx)
+    } else if o > m {
+        order(dz, dx, dy)
+    } else {
+        order(dz, dy, dx)
+    }
+}
+
+/// `BlockPlaceContext.getNearestLookingDirections`: the opposite of the
+/// clicked face first, then in the order the placer looks.
+pub fn nearest_looking_directions(clicked: Dir, yaw: f32, pitch: f32) -> Vec<Dir> {
+    let mut looks = ordered_by_nearest(yaw, pitch).to_vec();
+    if let Some(i) = looks.iter().position(|d| *d == clicked.opposite()) {
+        let d = looks.remove(i);
+        looks.insert(0, d);
+    }
+    looks
+}
+
 /// `Direction.orderedByNearest(entity)[0]`: the direction the placer looks
 /// nearest to (`getNearestLookingDirection`).
 pub fn nearest_looking(yaw: f32, pitch: f32) -> Dir {

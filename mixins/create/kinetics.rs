@@ -225,6 +225,7 @@ impl Kind {
         match self {
             // RotatedPillarKineticBlock.AXIS
             Kind::Shaft(a) => Kind::Shaft(turn_axis(a)),
+            Kind::PoweredShaft(a) => Kind::PoweredShaft(turn_axis(a)),
             Kind::CrushingWheel(a) => Kind::CrushingWheel(turn_axis(a)),
             Kind::EncasedShaft(b, a) => Kind::EncasedShaft(b, turn_axis(a)),
             Kind::Flywheel(a) => Kind::Flywheel(turn_axis(a)),
@@ -302,6 +303,7 @@ impl Kind {
     pub fn state_property(self) -> Option<(&'static str, &'static str)> {
         match self {
             Kind::Shaft(a)
+            | Kind::PoweredShaft(a)
             | Kind::CrushingWheel(a)
             | Kind::Flywheel(a)
             | Kind::SpeedController(a)
@@ -470,6 +472,9 @@ pub enum Kind {
     Deployer(Dir, bool),
     /// `FluidValveBlock`: its facing and `AXIS_ALONG_FIRST_COORDINATE`.
     FluidValve(Dir, bool),
+    /// `PoweredShaftBlock`: its axis, driven by a steam engine; its direction
+    /// is `motor_speed`.
+    PoweredShaft(Axis),
     /// `MechanicalPistonBlock`: its facing, `AXIS_ALONG_FIRST_COORDINATE`
     /// and whether it is sticky; its `STATE` is in the block, not the kind
     /// (contraption.rs).
@@ -534,6 +539,7 @@ impl Kind {
         }
         match name {
             "create:shaft" => axis().map(Kind::Shaft),
+            "create:powered_shaft" => axis().map(Kind::PoweredShaft),
             "create:crushing_wheel" => axis().map(Kind::CrushingWheel),
             "create:flywheel" => axis().map(Kind::Flywheel),
             "create:rotation_speed_controller" => axis().map(Kind::SpeedController),
@@ -614,6 +620,7 @@ impl Kind {
     pub fn block(self) -> &'static str {
         match self {
             Kind::Shaft(_) => "create:shaft",
+            Kind::PoweredShaft(_) => "create:powered_shaft",
             Kind::CrushingWheel(_) => "create:crushing_wheel",
             Kind::Flywheel(_) => "create:flywheel",
             Kind::SpeedController(_) => "create:rotation_speed_controller",
@@ -676,6 +683,7 @@ impl Kind {
     pub fn rotation_axis(self) -> Axis {
         match self {
             Kind::Shaft(a)
+            | Kind::PoweredShaft(a)
             | Kind::CrushingWheel(a)
             | Kind::Flywheel(a)
             | Kind::SpeedController(a)
@@ -715,6 +723,7 @@ impl Kind {
     pub fn has_shaft_towards(self, face: Dir) -> bool {
         match self {
             Kind::Shaft(a)
+            | Kind::PoweredShaft(a)
             | Kind::CrushingWheel(a)
             | Kind::Flywheel(a)
             | Kind::SpeedController(a)
@@ -810,6 +819,7 @@ impl Kind {
                 | Kind::WaterWheel(_)
                 | Kind::LargeWaterWheel(_)
                 | Kind::WindmillBearing(_)
+                | Kind::PoweredShaft(_)
         )
     }
     /// `KineticBlock.areStatesKineticallyEquivalent`: same block, same axis.
@@ -863,6 +873,9 @@ pub struct Kinetic {
     pub motor_speed: i32,
     /// `ChainGearshiftBlockEntity.signal`.
     pub chain_signal: i32,
+    /// `PoweredShaftBlockEntity.engineEfficiency` and `enginePos`.
+    pub engine_efficiency: f32,
+    pub engine: Option<Pos>,
     /// `HandCrankBlockEntity.inUse` and `backwards`.
     pub crank_in_use: i32,
     pub crank_backwards: bool,
@@ -962,6 +975,8 @@ impl Kinetic {
             crank_in_use: 0,
             crank_backwards: false,
             flow_score: 0,
+            engine_efficiency: 0.0,
+            engine: None,
             pressing: Pressing::default(),
             mixing: Mixing::new(),
             material: 0,
@@ -991,6 +1006,9 @@ impl Kinetic {
             Kind::WaterWheel(_) => water_wheel_speed(self.flow_score),
             Kind::LargeWaterWheel(_) => water_wheel_speed_sized(self.flow_score, 2),
             Kind::WindmillBearing(_) => self.flow_score as f32,
+            Kind::PoweredShaft(_) => {
+                super::create_boiler::shaft_speed(self.motor_speed, self.engine_efficiency)
+            }
             _ => 0.0,
         }
     }
@@ -1079,6 +1097,8 @@ impl Kinetics {
                 }
                 // The scroll value box shows the motor's setting.
                 Kind::CreativeMotor(_) | Kind::SpeedController(_) => e.motor_speed as i16,
+                // Its efficiency, for the goggles' capacity.
+                Kind::PoweredShaft(_) => (e.engine_efficiency * 10000.0) as i16,
                 // The wheel's wood, the belt's dye.
                 Kind::WaterWheel(_) | Kind::LargeWaterWheel(_) | Kind::Belt(_) => {
                     i16::from(e.material)
@@ -1138,7 +1158,11 @@ impl Kinetics {
     }
     fn calculate_added_stress_capacity(&mut self, pos: Pos) -> f32 {
         let e = self.em(pos);
-        let capacity = e.kind.stress_capacity();
+        let capacity = if matches!(e.kind, Kind::PoweredShaft(_)) {
+            super::create_boiler::shaft_capacity(e.engine_efficiency)
+        } else {
+            e.kind.stress_capacity()
+        };
         e.last_capacity_provided = capacity;
         capacity
     }
@@ -2079,6 +2103,38 @@ impl Kinetics {
         e.flow_score = score;
         self.update_generated_rotation(level, pos);
     }
+    /// `PoweredShaftBlockEntity.update`: the engine at `engine` drives the
+    /// shaft at `pos`.
+    pub fn update_engine(
+        &mut self,
+        level: &mut dyn Level,
+        pos: Pos,
+        engine: Pos,
+        direction: i32,
+        efficiency: f32,
+    ) {
+        let Some(e) = self.entities.get_mut(&pos) else {
+            return;
+        };
+        e.engine = Some(engine);
+        let previous = e.engine_efficiency;
+        e.engine_efficiency = efficiency;
+        if (efficiency - previous).abs() < 1.0e-5 && e.motor_speed == direction {
+            return;
+        }
+        e.motor_speed = direction;
+        self.update_generated_rotation(level, pos);
+    }
+    /// `PoweredShaftBlockEntity.remove`: the engine is gone.
+    pub fn remove_engine(&mut self, level: &mut dyn Level, pos: Pos) {
+        let Some(e) = self.entities.get_mut(&pos) else {
+            return;
+        };
+        e.engine = None;
+        e.engine_efficiency = 0.0;
+        e.motor_speed = 0;
+        self.update_generated_rotation(level, pos);
+    }
     /// `applyMaterialIfValid`: the wheel at `pos` is made of `material`
     /// (or the belt segment dyed so); false when it already was.
     pub fn set_wheel_material(&mut self, pos: Pos, material: u8) -> bool {
@@ -2152,7 +2208,7 @@ impl Kinetics {
                 .map_or("-".to_owned(), |s| format!("{},{},{}", s[0], s[1], s[2]));
             let network = e.network.map_or("-".to_owned(), |n| n.to_string());
             out.push_str(&format!(
-                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
+                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
                 pos[0],
                 pos[1],
                 pos[2],
@@ -2175,6 +2231,9 @@ impl Kinetics {
                 e.mixing.running_ticks,
                 e.material,
                 e.chain_signal,
+                e.engine_efficiency,
+                e.engine
+                    .map_or_else(|| "-".to_owned(), |p| format!("{},{},{}", p[0], p[1], p[2])),
             ));
         }
         out
@@ -2191,8 +2250,8 @@ impl Kinetics {
             let f: Vec<&str> = line.split(' ').collect();
             // 14 fields before the water wheel and the press, 18 before the
             // mixer, 20 before the wheel's wood, 21 before the chain gearshift's
-            // signal, 22 since.
-            if ![14, 18, 20, 21, 22].contains(&f.len()) {
+            // signal, 22 before the powered shaft's engine, 24 since.
+            if ![14, 18, 20, 21, 22, 24].contains(&f.len()) {
                 continue;
             }
             let num = |i: usize| f[i].parse::<f32>().ok();
@@ -2215,6 +2274,8 @@ impl Kinetics {
             e.motor_speed = int(12).unwrap_or(MOTOR_DEFAULT_SPEED);
             e.crank_backwards = f[13] == "1";
             e.chain_signal = f.get(21).and_then(|v| v.parse().ok()).unwrap_or(0);
+            e.engine_efficiency = f.get(22).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+            e.engine = f.get(23).and_then(|v| parse_pos(v));
             if f.len() >= 18 {
                 e.flow_score = int(14).unwrap_or(0);
                 e.pressing.running = f[15] == "1";
@@ -2247,6 +2308,7 @@ impl Kinetics {
 fn kind_key(k: Kind) -> String {
     let state = match k {
         Kind::Shaft(a)
+        | Kind::PoweredShaft(a)
         | Kind::CrushingWheel(a)
         | Kind::Flywheel(a)
         | Kind::SpeedController(a)
@@ -2481,6 +2543,14 @@ pub struct View {
 }
 
 impl View {
+    /// `calculateAddedStressCapacity`, for the goggles.
+    pub fn generator_capacity(&self) -> f32 {
+        if matches!(self.kind, Kind::PoweredShaft(_)) {
+            super::create_boiler::shaft_capacity(f32::from(self.aux) / 10000.0)
+        } else {
+            self.kind.stress_capacity()
+        }
+    }
     pub fn over_stressed(&self) -> bool {
         self.capacity < self.stress
     }
@@ -2511,6 +2581,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::EncasedShaft(b, a) => (29, axis(a) | u8::from(b) << 2),
         Kind::Flywheel(a) => (31, axis(a)),
         Kind::SpeedController(a) => (35, axis(a)),
+        Kind::PoweredShaft(a) => (37, axis(a)),
         Kind::FluidValve(d, along) => (36, dir(d) | u8::from(along) << 3),
         Kind::Turntable => (32, 0),
         Kind::ChainDrive(c) => (33, chain_code(c)),
@@ -2565,6 +2636,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         28 => Kind::CrushingWheel(axis?),
         31 => Kind::Flywheel(axis?),
         35 => Kind::SpeedController(axis?),
+        37 => Kind::PoweredShaft(axis?),
         36 => Kind::FluidValve(
             Dir::ALL.get(usize::from(state & 7)).copied()?,
             state & 8 != 0,
@@ -2754,6 +2826,17 @@ pub fn convert_to_angular(speed: f32) -> f32 {
 /// `KineticBlockEntityRenderer.getRotationOffsetForPosition` for a part
 /// turning about `axis` at `pos` (the cogs' half-tooth offset).
 pub fn rotation_offset(kind: Kind, axis: Axis, pos: Pos) -> f32 {
+    // PoweredShaftBlockEntity.getRotationAngleOffset: every other engine's
+    // crank a half turn on.
+    let own = if matches!(kind, Kind::PoweredShaft(_)) && axis.choose(pos) % 2 == 0 {
+        180.0
+    } else {
+        0.0
+    };
+    own + rotation_offset_of_cogs(kind, axis, pos)
+}
+
+fn rotation_offset_of_cogs(kind: Kind, axis: Axis, pos: Pos) -> f32 {
     let sum = Axis::ALL
         .iter()
         .map(|&a| if a == axis { 0 } else { a.choose(pos) })

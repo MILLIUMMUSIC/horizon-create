@@ -81,6 +81,31 @@ struct ShownTank {
     window: bool,
     creative: bool,
     fluid: FluidStack,
+    /// An active boiler (`BoilerData.write`), at the controller.
+    boiler: Option<ShownBoiler>,
+}
+
+/// A boiler as clients see it, for its gauges and the goggles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ShownBoiler {
+    engines: u8,
+    whistles: u8,
+    heat: u8,
+    passive: bool,
+    /// `waterSupply`'s bits.
+    supply: u32,
+}
+
+impl ShownBoiler {
+    fn data(self) -> super::create_boiler::Boiler {
+        super::create_boiler::Boiler::restored(
+            f32::from_bits(self.supply),
+            i32::from(self.heat),
+            self.passive,
+            i32::from(self.engines),
+            i32::from(self.whistles),
+        )
+    }
 }
 
 impl ShownTank {
@@ -97,6 +122,13 @@ impl ShownTank {
             window: part.window,
             creative: part.creative,
             fluid,
+            boiler: part.boiler.is_active().then_some(ShownBoiler {
+                engines: part.boiler.attached_engines.clamp(0, 255) as u8,
+                whistles: part.boiler.attached_whistles.clamp(0, 255) as u8,
+                heat: part.boiler.active_heat.clamp(0, 255) as u8,
+                passive: part.boiler.passive_heat,
+                supply: part.boiler.water_supply.to_bits(),
+            }),
         }
     }
     /// The tank's capacity (`getTotalTankSize` buckets of 8).
@@ -127,7 +159,7 @@ fn pending() -> MutexGuard<'static, Vec<(String, Pos, bool)>> {
 
 /// Blocks of ours outside the kinetics (the pump is a kinetic block).
 pub(super) fn is_ours(name: &str) -> bool {
-    name == PIPE || name == GLASS || name == ENCASED || name == SMART || is_tank_block(name)
+    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || is_tank_block(name)
 }
 
 pub(super) fn is_tank_block(name: &str) -> bool {
@@ -444,6 +476,9 @@ pub(super) fn valves_client_tick() {
 /// `EncasedPipeBlock.onWrenched`: `true` when `pos` was one of them. A pipe
 /// clicked along its axis passes.
 pub(super) fn wrench_pipe(game: &mut Game<'_>, pos: Pos, face: Dir) -> Option<bool> {
+    if let Some(done) = super::create_engine_glue::wrench(game, pos, face) {
+        return Some(done);
+    }
     if let Some(done) = wrench_smart(game, pos, face) {
         return Some(done);
     }
@@ -831,7 +866,8 @@ impl FluidAccess for Access<'_, '_> {
         }
         if is_tank(self.game, pos) {
             let fluid = self.tanks.controller_part(pos).map(|p| {
-                if p.tank.fluid.is_empty() {
+                // BoilerFluidHandler.getFluidInTank.
+                if p.tank.fluid.is_empty() || p.boiler.is_active() {
                     FluidStack::empty()
                 } else {
                     p.tank.fluid.with_amount(p.amount())
@@ -992,6 +1028,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
             dimension,
             tanks: &mut *tanks,
         };
+        let any_ours = changes.iter().any(|(_, ours)| *ours);
         for (pos, ours) in changes {
             if !ours {
                 // validateNeighbourChange: liquids changing don't count.
@@ -1006,7 +1043,13 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
             }
             fluids.block_changed(&mut world, pos);
         }
+        let forming = world.tanks.parts.values().any(|p| p.update_connectivity);
         world.tanks.tick();
+        // updateBoilerState: engines came or went, or the tanks changed shape.
+        if any_ours || forming {
+            evaluate_boilers(world.game, world.tanks);
+        }
+        boilers_tick(world.game, world.tanks);
         for &(pos, _, speed) in pumps {
             fluids.pump_speed(&mut world, pos, speed);
         }
@@ -1040,6 +1083,78 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str, pumps: &[(Pos, Di
             log::debug!("Create: fluids to {}: {e}", player.name);
         }
     }
+}
+
+/// `BoilerData.evaluate` for every tank controller, and `updateBoilerState`:
+/// a tank that becomes a boiler shuts its windows.
+fn evaluate_boilers(game: &Game<'_>, tanks: &mut Tanks) {
+    let controllers: Vec<Pos> = tanks.parts.iter().filter(|(p, t)| t.is_controller(**p)).map(|(p, _)| *p).collect();
+    for c in controllers {
+        let Some(part) = tanks.parts.get(&c) else {
+            continue;
+        };
+        let (width, height) = (part.width, part.height);
+        let mut engines = 0;
+        for x in 0..width {
+            for y in 0..height {
+                for z in 0..width {
+                    let p = [c[0] + x, c[1] + y, c[2] + z];
+                    if !is_tank(game, p) {
+                        continue;
+                    }
+                    for d in Dir::ALL {
+                        let n = d.normal();
+                        let at = [p[0] + n[0], p[1] + n[1], p[2] + n[2]];
+                        if super::create_engine_glue::engine_connected(game, at) == Some(d) {
+                            engines += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let Some(part) = tanks.parts.get_mut(&c) else {
+            continue;
+        };
+        let was = part.boiler.is_active();
+        part.boiler.attached_engines = engines;
+        if !was && part.boiler.is_active() {
+            part.window = false;
+        }
+        if was != part.boiler.is_active() {
+            tanks.changed.insert(c);
+        }
+    }
+}
+
+/// `BoilerData.tick` for every active boiler; its `updateTemperature` each tick
+/// (`needsHeatLevelUpdate` follows every block change under it).
+fn boilers_tick(game: &Game<'_>, tanks: &mut Tanks) {
+    for (c, part) in tanks.parts.iter_mut() {
+        if !part.boiler.is_active() || !part.is_controller(*c) {
+            continue;
+        }
+        let mut heats = Vec::new();
+        for x in 0..part.width {
+            for z in 0..part.width {
+                let Some(s) = block_state(game, [c[0] + x, c[1] - 1, c[2] + z]) else {
+                    continue;
+                };
+                let prop = |k: &str| s.properties.get(k).map(String::as_str);
+                heats.push(super::create_boiler::heater_heat(&s.name, prop("heat_level"), prop("lit")));
+            }
+        }
+        part.boiler.update_temperature(heats);
+        let (capacity, creative) = (part.tank.capacity, part.creative);
+        part.boiler.tick(capacity, creative);
+    }
+}
+
+/// `getEngineEfficiency` of the boiler the tank block at `pos` belongs to; none
+/// when it is no tank.
+pub(super) fn boiler_efficiency(dimension: &str, pos: Pos) -> Option<f32> {
+    let guard = state();
+    let part = guard.as_ref()?.tanks.get(dimension)?.controller_part(pos)?;
+    Some(part.boiler.engine_efficiency(part.total_size()))
 }
 
 /// A basin's block entity tick: its tanks, for clients
@@ -1189,7 +1304,11 @@ fn encode(dim: u8, full: bool, entries: &[(Pos, Option<Shown>)]) -> Vec<u8> {
             }
             out.push(t.width.clamp(0, 255) as u8);
             out.push(t.height.clamp(0, 255) as u8);
-            out.push(u8::from(t.window) | u8::from(t.creative) << 1);
+            out.push(u8::from(t.window) | u8::from(t.creative) << 1 | u8::from(t.boiler.is_some()) << 2);
+            if let Some(b) = t.boiler {
+                out.extend_from_slice(&[b.engines, b.whistles, b.heat, u8::from(b.passive)]);
+                out.extend_from_slice(&b.supply.to_le_bytes());
+            }
         }
         out.push(fluids.len().min(255) as u8);
         for fluid in fluids.iter().take(255) {
@@ -1249,8 +1368,23 @@ fn decode(data: &[u8]) -> Option<Decoded> {
                 window: t[14] & 1 != 0,
                 creative: t[14] & 2 != 0,
                 fluid: FluidStack::empty(),
+                boiler: None,
             });
+            let has_boiler = t[14] & 4 != 0;
             rest = &rest[15..];
+            if has_boiler {
+                let b = rest.get(..8)?;
+                if let Some(t) = tank.as_mut() {
+                    t.boiler = Some(ShownBoiler {
+                        engines: b[0],
+                        whistles: b[1],
+                        heat: b[2],
+                        passive: b[3] != 0,
+                        supply: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+                    });
+                }
+                rest = &rest[8..];
+            }
         }
         let mut ticks = -1;
         if kind == 3 {
@@ -1533,6 +1667,11 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
                 draw_tank_block(game, &tanks, pos, &t, origin, out);
                 // FluidTankRenderer: the controller draws the fluid, through
                 // its windows only.
+                if t.controller == pos
+                    && let Some(b) = t.boiler
+                {
+                    draw_boiler_gauges(game, pos, &t, b, corner, camera, packed, out);
+                }
                 if t.controller != pos || !t.window || t.fluid.is_empty() {
                     continue;
                 }
@@ -1566,6 +1705,128 @@ pub(super) fn draw(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_c
             draw_fluid_box(game, &fluid.fluid, b, origin, packed, out, [true; 6]);
         }
     }
+}
+
+/// `FluidTankRenderer.renderAsBoiler`: a gauge on each side that isn't covered
+/// (`BoilerData.updateOcclusion`), its dial at `gauge`.
+#[allow(clippy::too_many_arguments)]
+fn draw_boiler_gauges(
+    game: &Game<'_>,
+    pos: Pos,
+    t: &ShownTank,
+    b: ShownBoiler,
+    corner: glam::DVec3,
+    camera: glam::DVec3,
+    packed: u32,
+    out: &mut Vec<horizon_client::mesher::Vertex>,
+) {
+    let registry = game.pack.assets.registry;
+    let (Some(gauge), Some(dial)) =
+        (registry.default_state("create:hz_part_boiler_gauge"), registry.default_state("create:hz_part_boiler_gauge_dial"))
+    else {
+        return;
+    };
+    let size = t.width * t.width * t.height;
+    let target = b.data().gauge_target(size);
+    let progress = {
+        let mut guard = CLIENT_GAUGES.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = guard.get_or_insert_with(HashMap::new).entry(pos).or_insert((target, 0.0));
+        entry.0 = target;
+        entry.1
+    };
+    let width = t.width as f32;
+    let seed = horizon_core::random::position_seed(horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]));
+    let base = glam::Mat4::from_translation((corner - camera).as_vec3())
+        * glam::Mat4::from_translation(glam::Vec3::new(width / 2.0, 0.5, width / 2.0));
+    for d in [Dir::South, Dir::West, Dir::North, Dir::East] {
+        if boiler_side_occluded(game, pos, t.width, d) {
+            continue;
+        }
+        // yRot = -d.toYRot() - 90, as Direction.toYRot has them.
+        let y_rot = match d {
+            Dir::South => 0.0f32,
+            Dir::West => 90.0,
+            Dir::North => 180.0,
+            _ => 270.0,
+        };
+        let m = base
+            * glam::Mat4::from_rotation_y((-y_rot - 90.0).to_radians())
+            * glam::Mat4::from_translation(glam::Vec3::splat(-0.5))
+            * glam::Mat4::from_translation(glam::Vec3::new(width / 2.0 - 6.0 / 16.0, 0.0, 0.0));
+        game.block_model_vertices(gauge, seed, m, packed, false, out);
+        let pivot = glam::Vec3::new(0.0, 6.0 / 16.0, 8.0 / 16.0);
+        let needle = m
+            * glam::Mat4::from_translation(pivot)
+            * glam::Mat4::from_rotation_x((-145.0 * progress + 90.0).to_radians())
+            * glam::Mat4::from_translation(-pivot);
+        game.block_model_vertices(dial, seed, needle, packed, false, out);
+    }
+}
+
+/// `updateOcclusion`'s box: a flat slab just outside the middle of the side at
+/// the controller's height, 1.25 wide and 0.75 tall.
+fn boiler_side_occluded(game: &Game<'_>, pos: Pos, width: i32, d: Dir) -> bool {
+    let n = d.normal();
+    let half = width as f64 / 2.0;
+    let centre = [
+        f64::from(pos[0]) + half + f64::from(n[0]) * (half + 0.25),
+        f64::from(pos[1]) + 0.5,
+        f64::from(pos[2]) + half + f64::from(n[2]) * (half + 0.25),
+    ];
+    let reach = [
+        if n[0] != 0 { 0.125 } else { 0.625 },
+        0.375,
+        if n[2] != 0 { 0.125 } else { 0.625 },
+    ];
+    let low = [0, 1, 2].map(|k| centre[k] - reach[k]);
+    let high = [0, 1, 2].map(|k| centre[k] + reach[k]);
+    for x in low[0].floor() as i32..=high[0].floor() as i32 {
+        for y in low[1].floor() as i32..=high[1].floor() as i32 {
+            for z in low[2].floor() as i32..=high[2].floor() as i32 {
+                for b in game.block_collision_shape([x, y, z]).boxes() {
+                    let origin = [f64::from(x), f64::from(y), f64::from(z)];
+                    let (b_min, b_max) = (b.min_position(), b.max_position());
+                    let min = [b_min.x, b_min.y, b_min.z];
+                    let max = [b_max.x, b_max.y, b_max.z];
+                    if (0..3).all(|k| origin[k] + min[k] < high[k] && origin[k] + max[k] > low[k]) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Clients' boilers' gauges: their target and where the dial is.
+static CLIENT_GAUGES: Mutex<Option<HashMap<Pos, (f32, f32)>>> = Mutex::new(None);
+
+/// `gauge.tickChaser`: exponential at 0.125 a tick.
+pub(super) fn gauges_client_tick() {
+    let mut guard = CLIENT_GAUGES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(map) = guard.as_mut() {
+        for (target, dial) in map.values_mut() {
+            *dial += (*target - *dial) * 0.125;
+        }
+    }
+}
+
+/// The boiler the tank block at `pos` belongs to on this client, if active, and
+/// its size (`BoilerData.addToGoggleTooltip`).
+pub(super) fn client_boiler(dimension: u8, pos: Pos) -> Option<(super::create_boiler::Boiler, i32)> {
+    let guard = CLIENT.lock().unwrap_or_else(|e| e.into_inner());
+    let (dim, shown) = guard.as_ref()?;
+    if *dim != dimension {
+        return None;
+    }
+    let Shown::Tank(t) = shown.get(&pos)? else {
+        return None;
+    };
+    let c = match shown.get(&t.controller) {
+        Some(Shown::Tank(c)) => c,
+        _ => t,
+    };
+    Some((c.boiler?.data(), c.width * c.width * c.height))
 }
 
 fn packed_light(game: &Game<'_>, pos: Pos) -> u32 {

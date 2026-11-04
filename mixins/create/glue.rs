@@ -243,6 +243,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let mut crushing_wheels: Vec<(Pos, Axis, f32)> = Vec::new();
     let mut chain_gearshifts: Vec<(Pos, Kind)> = Vec::new();
     let mut valves: Vec<(Pos, f32)> = Vec::new();
+    let mut powered_shafts: Vec<(Pos, Axis, Option<Pos>)> = Vec::new();
     let mut turntables: Vec<(Pos, f32)> = Vec::new();
     let mut amounts: Vec<(Pos, i32)> = Vec::new();
     let save_now;
@@ -390,6 +391,12 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             {
                 chain_gearshifts.push((p, k));
             }
+            if let Some(e) = kinetics.get(p)
+                && let Kind::PoweredShaft(a) = e.kind
+                && level.is_loaded(p)
+            {
+                powered_shafts.push((p, a, e.engine));
+            }
             if matches!(kinetics.get(p).map(|e| e.kind), Some(Kind::FluidValve(..))) && level.is_loaded(p) {
                 valves.push((p, kinetics.speed_of(&level, p)));
             }
@@ -482,6 +489,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     for (p, speed) in valves {
         super::create_fluid_glue::valve_tick(game, p, speed);
     }
+    powered_shafts_tick(game, dimension, &powered_shafts);
     super::create_fluid_glue::level_tick(game, dimension, &pumps);
     super::create_arms::level_tick(game, dimension);
     super::create_actor_glue::breakers_tick(game, dimension, &drills);
@@ -733,6 +741,11 @@ pub(super) fn state_for_placement(
         if let Some(next) = level.native_state_with_property(state, "ceiling", ceiling) {
             *answer = Some(Some(next));
         }
+        return;
+    }
+    if s.name == super::create_engine_glue::ENGINE {
+        let clicked = Dir::nearest(context.face.normal());
+        *answer = Some(super::create_engine_glue::placement(level, state, pos, clicked, context.yaw, context.pitch));
         return;
     }
     if s.name == super::create_fluid_glue::SMART {
@@ -1354,6 +1367,7 @@ fn turntables_tick(game: &mut Game<'_>, dimension: &str, tables: &[(Pos, f32)]) 
 /// its box over a table's edge carries it round.
 pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
     super::create_fluid_glue::valves_client_tick();
+    super::create_fluid_glue::gauges_client_tick();
     let Some(p) = game.player.as_ref() else {
         return;
     };
@@ -1431,7 +1445,7 @@ fn try_encase(game: &mut Game<'_>, pos: Pos) -> bool {
 }
 
 /// `KineticBlockEntity.switchToBlockState` to `kind`'s block.
-fn set_kind(game: &mut Game<'_>, pos: Pos, kind: Kind) {
+pub(super) fn set_kind(game: &mut Game<'_>, pos: Pos, kind: Kind) {
     let Some(base) = game.pack.assets.registry.default_state(kind.block()) else {
         return;
     };
@@ -1607,6 +1621,12 @@ pub(super) fn from_client(game: &mut Game<'_>, player: u128, channel: &str, data
         }
         return;
     }
+    if value == TUNNEL_MODE_UP && block_name(game, pos) == super::create_engine_glue::ENGINE {
+        if let Some(line) = super::create_engine_glue::step_direction(game, pos) {
+            super::create_contraptions::tell_later(player, horizon_client::text::Text::literal(line.to_owned()));
+        }
+        return;
+    }
     if (value == TUNNEL_MODE_UP || value == TUNNEL_MODE_DOWN)
         && let Some(label) = super::create_redstone_glue::step_interval(game, pos, value == TUNNEL_MODE_UP)
     {
@@ -1743,6 +1763,16 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         let step = if steps > 0.0 { PISTON_MODE_UP } else { PISTON_MODE_DOWN };
         if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, step)) {
             log::debug!("Create: piston mode: {e}");
+        }
+        return;
+    }
+    // A steam engine's rotation direction, likewise.
+    if let Some(hit) = game.pick()
+        && super::create_engine_glue::hits_value_box(game, hit.pos, Dir::nearest(hit.face), hit.point)
+    {
+        *claimed = true;
+        if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(hit.pos, TUNNEL_MODE_UP)) {
+            log::debug!("Create: engine direction: {e}");
         }
         return;
     }
@@ -1897,8 +1927,75 @@ pub(super) fn from_server(channel: &str, data: &[u8]) {
     }
 }
 
+/// The kinetic block at `pos` as a client sees it.
+pub(super) fn client_view(pos: Pos) -> Option<View> {
+    client().as_ref()?.view.blocks.get(&pos).copied()
+}
+
+/// The kind of the block at `pos`, by its state.
+pub(super) fn kind_of(game: &Game<'_>, pos: Pos) -> Option<Kind> {
+    kind_at(game, pos)
+}
+
+/// A powered shaft as the engine's tick asks after it.
+pub(super) struct PoweredShaft {
+    pub axis: Axis,
+    pub engine: Option<Pos>,
+    pub efficiency: f32,
+    pub has_source: bool,
+    /// `getTheoreticalSpeed`.
+    pub speed: f32,
+}
+
+pub(super) fn powered_shaft(dimension: &str, pos: Pos) -> Option<PoweredShaft> {
+    let guard = server();
+    let e = guard.as_ref()?.dims.get(dimension)?.get(pos)?;
+    let Kind::PoweredShaft(axis) = e.kind else {
+        return None;
+    };
+    Some(PoweredShaft {
+        axis,
+        engine: e.engine,
+        efficiency: e.engine_efficiency,
+        has_source: e.source.is_some(),
+        speed: e.speed,
+    })
+}
+
+/// `PoweredShaftBlockEntity.update`.
+pub(super) fn update_engine(game: &mut Game<'_>, dimension: &str, shaft: Pos, engine: Pos, direction: i32, efficiency: f32) {
+    let mut guard = server();
+    let Some(kinetics) = guard.as_mut().and_then(|s| s.dims.get_mut(dimension)) else {
+        return;
+    };
+    let mut level = InPlace { game, destroyed: Vec::new() };
+    kinetics.update_engine(&mut level, shaft, engine, direction, efficiency);
+}
+
+/// `PoweredShaftBlock.tick` and `SteamEngineBlockEntity.remove`: a shaft whose
+/// engine went loses it and, with no other engine, goes back to a shaft.
+fn powered_shafts_tick(game: &mut Game<'_>, dimension: &str, shafts: &[(Pos, Axis, Option<Pos>)]) {
+    for &(p, axis, engine) in shafts {
+        if let Some(engine) = engine
+            && game.world.loaded(engine[0], engine[2])
+            && super::create_engine_glue::engine_at(game, engine).is_none()
+        {
+            let mut guard = server();
+            let Some(kinetics) = guard.as_mut().and_then(|s| s.dims.get_mut(dimension)) else {
+                continue;
+            };
+            let mut level = InPlace { game, destroyed: Vec::new() };
+            kinetics.remove_engine(&mut level, p);
+        }
+        let around_loaded = [[2, 0], [-2, 0], [0, 2], [0, -2]].iter().all(|o| game.world.loaded(p[0] + o[0], p[2] + o[1]));
+        if around_loaded && !super::create_engine_glue::shaft_still_valid(game, p, axis) {
+            set_kind(game, p, Kind::Shaft(axis));
+        }
+    }
+}
+
 /// `AnimationTickHolder.getRenderTime`, from the wall clock.
-fn render_time() -> f32 {
+pub(super) fn render_time() -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f32() * 20.0
 }
@@ -1996,6 +2093,9 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
     let mut scrolls: Vec<Option<(&'static str, String, f32)>> = Vec::new();
     match view.kind {
         Kind::Shaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
+        Kind::PoweredShaft(a) => {
+            want.push(("create:hz_powered_shaft", Some(("axis", a.name())), id, a, standard, 0.0))
+        }
         Kind::CrushingWheel(a) => {
             want.push(("create:hz_crushing_wheel", Some(("axis", a.name())), id, a, standard, 0.0))
         }
@@ -2520,6 +2620,7 @@ fn shift_uv(
 /// What depots, basins, chutes and belts carry.
 fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client::mesher::Vertex>) {
     super::create_machines::draw_depots(game, camera, out);
+    super::create_engine_glue::draw(game, camera, render_time(), out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);
@@ -2811,8 +2912,14 @@ pub(super) fn hud(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
         if c.view.dim != dim_code(game.dim.id()) {
             return;
         }
-        c.view.blocks.get(&hit.pos).copied()
+        // SteamEngineBlockEntity shows its shaft's numbers, and the shaft none
+        // of its own.
+        let at = super::create_engine_glue::goggle_shaft(game, hit.pos).unwrap_or(hit.pos);
+        c.view.blocks.get(&at).copied()
     };
+    if block_name(game, hit.pos) == super::create_engine_glue::POWERED_SHAFT {
+        return;
+    }
     let lines = match view {
         Some(view) => {
             let mut lines = super::create_arms::deployer_goggle_lines(game, hit.pos).unwrap_or_default();
@@ -2824,6 +2931,11 @@ pub(super) fn hud(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
             lines
         }
         None => match super::create_fluid_glue::client_fluids(dim_code(game.dim.id()), hit.pos) {
+            // FluidTankBlockEntity.addToGoggleTooltip: the boiler's, if it is one.
+            Some(_) if super::create_fluid_glue::client_boiler(dim_code(game.dim.id()), hit.pos).is_some() => {
+                let (b, size) = super::create_fluid_glue::client_boiler(dim_code(game.dim.id()), hit.pos).unwrap_or_default();
+                boiler_lines(&b, size)
+            }
             Some((tanks, count)) => fluid_lines(&tanks, count),
             None => match super::create_logistics::chute_goggle_lines(game, hit.pos)
                 .or_else(|| super::create_logistics::tunnel_goggle_lines(game, hit.pos))
@@ -2875,6 +2987,32 @@ fn value_tip(game: &Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
         game.native_text(batch, text, [x, y], *rgb, true);
         y += 12.0;
     }
+}
+
+/// `BoilerData.addToGoggleTooltip`, the bars in one colour each.
+fn boiler_lines(b: &super::create_boiler::Boiler, size: i32) -> Vec<(String, u32)> {
+    let bars = |n: i32| "|".repeat(n.max(0) as usize);
+    let heat = if b.passive_heat { 1 } else { b.active_heat };
+    let (for_size, for_water) = (b.max_for_size(size), b.max_for_water());
+    let mut lines = vec![
+        (format!("Boiler Status:  {}", b.status(size)), WHITE),
+        (format!(" Size....... {}", bars(for_size)), GRAY),
+        (format!(" Water... {}", bars(for_water)), GRAY),
+        (format!(" Heat...... {}", bars(heat)), GRAY),
+    ];
+    if b.attached_engines == 0 {
+        return lines;
+    }
+    lines.push((String::new(), WHITE));
+    if for_size > 0 && for_water == 0 && heat > 0 {
+        lines.push(("Water input rate".to_owned(), GRAY));
+        lines.push((format!(" {}mB / 10mB per Tick", b.water_supply), AQUA));
+        return lines;
+    }
+    lines.push(("Kinetic Stress Capacity:".to_owned(), GRAY));
+    let via = if b.attached_engines == 1 { "via 1 engine".to_owned() } else { format!("via {} engines", b.attached_engines) };
+    lines.push((format!(" {}su {via}", b.total_capacity(size)), AQUA));
+    lines
 }
 
 /// `IHaveGoggleInformation.containedFluidTooltip` for a fluid handler of
@@ -2981,7 +3119,7 @@ fn goggle_lines(view: &View) -> Vec<(String, u32)> {
             format!("{v:.1}su")
         }
     };
-    let capacity = view.kind.stress_capacity();
+    let capacity = view.generator_capacity();
     if capacity != 0.0 && view.speed != 0.0 {
         lines.push(("Generator Stats:".to_owned(), WHITE));
         lines.push(("Kinetic Stress Capacity:".to_owned(), GRAY));

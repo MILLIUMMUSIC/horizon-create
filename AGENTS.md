@@ -101,6 +101,9 @@ mod, basins' tanks in their block entity's data). Pipes and pumps tick from
 `glue::block_changed`.
 `create:arms` (A1: arm angles and held items, deployer cycles; `arms.rs`).
 
+Boiler and steam engine: rules in `boiler.rs`, Horizon's side in `engine_glue.rs`; a boiler lives in its tank's
+`TankPart`, ticks from `fluid_glue::level_tick`, and its engine drives a `Kind::PoweredShaft`.
+
 Recipes: `prepare_content.py` flattens subfolders (`pressing/x` →
 `pressing.x`, Horizon reads only the top folder); `machines.rs` reads
 `game.recipes()` directly (`find_recipe`), because Horizon's recipe helpers

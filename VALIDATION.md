@@ -1078,3 +1078,15 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   bucket clicked on its slot showed on the slope and the tank stayed at 3000 mB with the source refilled; a water bucket
   in the slot let it go on to 4000 mB.
   Not tried: placement on a wall or ceiling, against a pipe, the wrench's quarter turn, a filter with an empty hand.
+
+## Boiler and steam engine (macOS, offscreen)
+
+- A 1x1x4 tank fed through a pump from a creative tank, with an engine on its side and a shaft two blocks out (placed with a shaft
+  item on the engine, it was `powered_shaft[axis=z]`): at 16 RPM the goggles read 8 mB / 10 mB per Tick and `Idle`; at higher
+  pump speed, over magma, `Passive`, 2048 su via 1 engine; over a burner on a coal block `Lvl 1`, 16384 su. The piston and
+  linkage moved between frames and gauges showed on the open sides.
+- A second engine on the tank's top (`/setblock`, shaft along X): `via 2 engines`, 16384 su. After `save` and `quit` and a new launch both
+  engines and shafts were there with the same status; the kinetics file read speed 48 and efficiency 0.5.
+- Removing the engine turned its shaft back to `create:shaft`. The wheel on its value box said `Rotation Direction: Counter-Clockwise`.
+  Not tried: placing on a wall by the ceiling, the wrench on an engine or powered shaft, the shaft with another source turning the
+  direction round, a blaze burner seething, water running out while it turns, a multiblock boiler wider than one block.
