@@ -544,6 +544,16 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
 
+   The sequenced gearshift (`sequencer.rs`, `sequencer_glue.rs`, `Kind::SequencedGearshift`): up to five instructions (turn an angle, turn for a
+   distance, delay, await a pulse, end) at four speeds; a pulse runs them, `STATE` is the row and what comparators read,
+   the kinetics are detached and attached again with each row's modifier, a change of speed retimes the row and a stop ends it. The
+   context a row sets travels with the source (`copySequenceContextFrom`) and limits a mechanical bearing's angle and a piston's
+   offset (`sequencedAngleLimit`, `sequencedOffsetLimit`). The first screen of Create's own here (`native_mod_screen_open`,
+   channel `create:screens` as the click runs on the server's side): Create's `sequencer.png`, its inputs by the wheel with shift's steps, tooltips, the
+   confirm button; rows go to the server when it closes, by Escape too, each in one number over `create:values`. Decisions: the signal is read each tick rather than on
+   `neighborChanged` (the same, a tick sooner at most), with `hasNeighborSignal`; tooltips in one colour. Not yet: the limit on rope pulleys and gantries
+   (`limitMovement`), saving the context and limits across a reload, computers (no ComputerCraft here), turning a moved gearshift on a contraption (`transform`).
+
    The steam whistle (`whistle.rs`, `whistle_glue.rs`): placed only on a tank, it makes it a boiler; `POWERED` by redstone; with a
    heated boiler its mouth opens and wiggles and it sounds, at the pitch its extensions give. A whistle in hand on it adds to it
    (single, then double, up to six blocks), the wrench cycles its size from it or an extension, sneaking takes the top half off a

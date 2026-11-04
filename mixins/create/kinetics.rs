@@ -226,6 +226,16 @@ impl Kind {
             // RotatedPillarKineticBlock.AXIS
             Kind::Shaft(a) => Kind::Shaft(turn_axis(a)),
             Kind::PoweredShaft(a) => Kind::PoweredShaft(turn_axis(a)),
+            // SequencedGearshiftBlock.onWrenched, then HorizontalAxisKineticBlock.
+            Kind::SequencedGearshift(a, v) => {
+                if face.axis() == Axis::Y {
+                    Kind::SequencedGearshift(if a == Axis::X { Axis::Z } else { Axis::X }, v)
+                } else if a != face.axis() {
+                    Kind::SequencedGearshift(a, !v)
+                } else {
+                    self
+                }
+            }
             Kind::CrushingWheel(a) => Kind::CrushingWheel(turn_axis(a)),
             Kind::EncasedShaft(b, a) => Kind::EncasedShaft(b, turn_axis(a)),
             Kind::Flywheel(a) => Kind::Flywheel(turn_axis(a)),
@@ -335,6 +345,7 @@ impl Kind {
             | Kind::MechanicalPiston(f, ..)
             | Kind::Saw(f, _)
             | Kind::Gauge(_, f, _) => Some(("facing", f.name())),
+            Kind::SequencedGearshift(a, _) => Some(("axis", a.name())),
             Kind::GantryShaft(f) | Kind::GantryCarriage(f, _) => Some(("facing", f.name())),
             Kind::ElevatorPulley(f) => Some(("facing", f.name())),
             Kind::LargeWaterWheel(a) => Some(("axis", a.name())),
@@ -478,6 +489,9 @@ pub enum Kind {
     FluidValve(Dir, bool),
     /// `EjectorBlock`: its horizontal facing; the shaft runs across it.
     WeightedEjector(Dir),
+    /// `SequencedGearshiftBlock`: `HORIZONTAL_AXIS` and `VERTICAL`; its modifier
+    /// is `motor_speed`.
+    SequencedGearshift(Axis, bool),
     /// `PoweredShaftBlock`: its axis, driven by a steam engine; its direction
     /// is `motor_speed`.
     PoweredShaft(Axis),
@@ -545,6 +559,9 @@ impl Kind {
         }
         match name {
             "create:shaft" => axis().map(Kind::Shaft),
+            "create:sequenced_gearshift" => {
+                axis().map(|a| Kind::SequencedGearshift(a, prop("vertical") == Some("true")))
+            }
             "create:powered_shaft" => axis().map(Kind::PoweredShaft),
             "create:crushing_wheel" => axis().map(Kind::CrushingWheel),
             "create:flywheel" => axis().map(Kind::Flywheel),
@@ -627,6 +644,7 @@ impl Kind {
     pub fn block(self) -> &'static str {
         match self {
             Kind::Shaft(_) => "create:shaft",
+            Kind::SequencedGearshift(..) => "create:sequenced_gearshift",
             Kind::PoweredShaft(_) => "create:powered_shaft",
             Kind::CrushingWheel(_) => "create:crushing_wheel",
             Kind::Flywheel(_) => "create:flywheel",
@@ -714,6 +732,8 @@ impl Kind {
             Kind::EncasedCog(_, _, a, ..) => a,
             Kind::ChainDrive(c) | Kind::ChainGearshift(c, _) => c.axis,
             Kind::Turntable => Axis::Y,
+            Kind::SequencedGearshift(_, true) => Axis::Y,
+            Kind::SequencedGearshift(a, false) => a,
             Kind::WeightedEjector(f) => f.clockwise(Axis::Y).axis(),
             Kind::Millstone | Kind::MechanicalMixer | Kind::MechanicalArm => Axis::Y,
             Kind::Belt(b) => b.rotation_axis(),
@@ -755,6 +775,8 @@ impl Kind {
             | Kind::WindmillBearing(f)
             | Kind::Drill(f) => face == f.opposite(),
             Kind::MechanicalPump(_) | Kind::MechanicalCrafter(_) => false,
+            Kind::SequencedGearshift(_, true) => face.axis() == Axis::Y,
+            Kind::SequencedGearshift(a, false) => face.axis() == a,
             Kind::WeightedEjector(f) => face.axis() == f.clockwise(Axis::Y).axis(),
             Kind::MechanicalMixer | Kind::MechanicalArm => false,
             Kind::Belt(b) => b.has_shaft_towards(face),
@@ -884,6 +906,9 @@ pub struct Kinetic {
     pub motor_speed: i32,
     /// `ChainGearshiftBlockEntity.signal`.
     pub chain_signal: i32,
+    /// `sequenceContext`: for a turn of an angle (or else a distance), and
+    /// `relativeValue`.
+    pub sequence: Option<(bool, f64)>,
     /// `PoweredShaftBlockEntity.engineEfficiency` and `enginePos`.
     pub engine_efficiency: f32,
     pub engine: Option<Pos>,
@@ -981,11 +1006,16 @@ impl Kinetic {
             last_stress_applied: 0.0,
             last_capacity_provided: 0.0,
             reactivate_source: false,
-            motor_speed: MOTOR_DEFAULT_SPEED,
+            motor_speed: if matches!(kind, Kind::SequencedGearshift(..)) {
+                0
+            } else {
+                MOTOR_DEFAULT_SPEED
+            },
             chain_signal: 0,
             crank_in_use: 0,
             crank_backwards: false,
             flow_score: 0,
+            sequence: None,
             engine_efficiency: 0.0,
             engine: None,
             pressing: Pressing::default(),
@@ -1107,7 +1137,9 @@ impl Kinetics {
                     e.mixing.running_ticks.clamp(0, i16::MAX as i32) as i16
                 }
                 // The scroll value box shows the motor's setting.
-                Kind::CreativeMotor(_) | Kind::SpeedController(_) => e.motor_speed as i16,
+                Kind::CreativeMotor(_)
+                | Kind::SpeedController(_)
+                | Kind::SequencedGearshift(..) => e.motor_speed as i16,
                 // Its efficiency, for the goggles' capacity.
                 Kind::PoweredShaft(_) => (e.engine_efficiency * 10000.0) as i16,
                 // The wheel's wood, the belt's dye.
@@ -1214,6 +1246,11 @@ impl Kinetics {
             return;
         };
         self.set_network(level, pos, network);
+        // copySequenceContextFrom (the sequenced gearshift keeps its own).
+        if !matches!(self.e(pos).kind, Kind::SequencedGearshift(..)) {
+            let context = self.entities.get(&source).and_then(|s| s.sequence);
+            self.em(pos).sequence = context;
+        }
         // GeneratingKineticBlockEntity.setSource.
         if self.e(pos).kind.is_generator()
             && self.e(pos).reactivate_source
@@ -1232,6 +1269,7 @@ impl Kinetics {
         let e = self.em(pos);
         e.speed = 0.0;
         e.source = None;
+        e.sequence = None;
         self.set_network(level, pos, None);
         self.on_speed_changed(level, pos, previous);
     }
@@ -1625,6 +1663,13 @@ impl Kinetics {
         let e = self.e(pos);
         if !(e.has_source() || e.is_source()) {
             return 1.0;
+        }
+        // SequencedGearshiftBlockEntity.getRotationSpeedModifier.
+        if let Kind::SequencedGearshift(..) = e.kind {
+            return match e.source {
+                Some(source) if direction != Dir::nearest(sub(source, pos)) => e.motor_speed as f32,
+                _ => 1.0,
+            };
         }
         // SplitShaftBlockEntity.getRotationSpeedModifier: the side away from
         // the source is reversed by a powered gearshift, cut by a powered clutch.
@@ -2114,6 +2159,29 @@ impl Kinetics {
         e.flow_score = score;
         self.update_generated_rotation(level, pos);
     }
+    /// `SequencedGearshiftBlockEntity.run`: its modifier and context, detached
+    /// to attach again with them on its next tick.
+    pub fn set_sequencer(
+        &mut self,
+        level: &mut dyn Level,
+        pos: Pos,
+        modifier: i32,
+        context: Option<(bool, f64)>,
+        detach: bool,
+    ) {
+        if !self.has(pos) {
+            return;
+        }
+        if detach {
+            self.detach_kinetics(level, pos);
+        }
+        let e = self.em(pos);
+        e.motor_speed = modifier;
+        e.sequence = context;
+        if detach {
+            e.update_speed = true;
+        }
+    }
     /// `PoweredShaftBlockEntity.update`: the engine at `engine` drives the
     /// shaft at `pos`.
     pub fn update_engine(
@@ -2319,6 +2387,7 @@ impl Kinetics {
 fn kind_key(k: Kind) -> String {
     let state = match k {
         Kind::Shaft(a)
+        | Kind::SequencedGearshift(a, _)
         | Kind::PoweredShaft(a)
         | Kind::CrushingWheel(a)
         | Kind::Flywheel(a)
@@ -2594,6 +2663,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::Flywheel(a) => (31, axis(a)),
         Kind::SpeedController(a) => (35, axis(a)),
         Kind::PoweredShaft(a) => (37, axis(a)),
+        Kind::SequencedGearshift(a, v) => (39, axis(a) | u8::from(v) << 2),
         Kind::WeightedEjector(d) => (38, dir(d)),
         Kind::FluidValve(d, along) => (36, dir(d) | u8::from(along) << 3),
         Kind::Turntable => (32, 0),
@@ -2650,6 +2720,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         31 => Kind::Flywheel(axis?),
         35 => Kind::SpeedController(axis?),
         37 => Kind::PoweredShaft(axis?),
+        39 => Kind::SequencedGearshift(axis?, state & 4 != 0),
         38 => Kind::WeightedEjector(dir?),
         36 => Kind::FluidValve(
             Dir::ALL.get(usize::from(state & 7)).copied()?,

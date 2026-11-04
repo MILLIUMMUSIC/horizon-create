@@ -820,6 +820,13 @@ pub(super) fn state_for_placement(
     }
     // ChainDriveBlock.getStateForPlacement: its part from its neighbours, and
     // a gearshift's `powered` follows at its first tick.
+    if let Kind::SequencedGearshift(a, v) = placed {
+        let next = level
+            .native_state_with_property(state, "axis", a.name())
+            .and_then(|s| level.native_state_with_property(s, "vertical", if v { "true" } else { "false" }));
+        *answer = next.map(Some);
+        return;
+    }
     if let Kind::FluidValve(f, along) = placed {
         let next = level
             .native_state_with_property(state, "facing", f.name())
@@ -1013,6 +1020,7 @@ pub(super) fn has_analog_output(level: &super::GameLevel<'_>, state: BlockStateI
         || name == super::create_arms::VAULT
         || name == super::create_machines::DEPOT
         || name == super::create_ejector_glue::EJECTOR
+        || name == super::create_sequencer_glue::BLOCK
         || name == super::create_machines::BASIN
         || name == super::create_spout_glue::SPOUT
         || name == super::create_spout_glue::DRAIN
@@ -1038,6 +1046,9 @@ pub(super) fn analog_output(
     let max_stack = |id: &str| level.items.get(id).map_or(64, |i| i.max_stack.max(1));
     if super::create_fluid_glue::is_tank_block(name) {
         *output = super::create_fluid_glue::tank_analog(level_dimension_id(dimension), pos);
+    } else if name == super::create_sequencer_glue::BLOCK {
+        // SequencedGearshiftBlock.getAnalogOutputSignal: its STATE.
+        *output = s.properties.get("state").and_then(|v| v.parse().ok()).unwrap_or(0);
     } else if name == super::create_arms::VAULT {
         *output = super::create_arms::vault_analog(level, pos, &max_stack);
     } else if name == super::create_machines::DEPOT || name == super::create_machines::BASIN || name == super::create_ejector_glue::EJECTOR {
@@ -1377,10 +1388,13 @@ fn turntables_tick(game: &mut Game<'_>, dimension: &str, tables: &[(Pos, f32)]) 
 /// window's player: on a table its view turns (less toward the edge); only
 /// its box over a table's edge carries it round.
 pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
-    super::create_fluid_glue::valves_client_tick();
-    super::create_fluid_glue::gauges_client_tick();
-    super::create_ejector_glue::client_tick(game);
-    super::create_whistle_glue::client_tick(game);
+    if game.native_window() {
+        super::create_fluid_glue::valves_client_tick();
+        super::create_fluid_glue::gauges_client_tick();
+        super::create_ejector_glue::client_tick(game);
+        super::create_whistle_glue::client_tick(game);
+        super::create_sequencer_glue::client_tick(game);
+    }
     let Some(p) = game.player.as_ref() else {
         return;
     };
@@ -1590,6 +1604,9 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
                 set_kind(game, pos, turned);
             } else if let Kind::FluidValve(f, along) = turned {
                 super::create_fluid_glue::set_valve(game, pos, f, along);
+            } else if let Kind::SequencedGearshift(a, v) = turned {
+                game.native_set_block_property(pos, "axis", a.name());
+                game.native_set_block_property(pos, "vertical", if v { "true" } else { "false" });
             } else {
                 game.native_set_block_property(pos, key, value);
             }
@@ -1624,6 +1641,10 @@ pub(super) fn from_client(game: &mut Game<'_>, player: u128, channel: &str, data
     let c = pos.map(|v| f64::from(v) + 0.5);
     let d2 = (0..3).map(|k| (p.position[k] - c[k]).powi(2)).sum::<f64>();
     if d2 > VALUE_RANGE * VALUE_RANGE {
+        return;
+    }
+    if block_name(game, pos) == super::create_sequencer_glue::BLOCK && value & super::create_sequencer::CONFIG_FLAG != 0 {
+        super::create_sequencer_glue::configure(game, pos, value);
         return;
     }
     let max = super::create_kinetics::MAX_ROTATION_SPEED as i32;
@@ -1930,6 +1951,10 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
 
 /// `native_net_from_server`.
 pub(super) fn from_server(channel: &str, data: &[u8]) {
+    if channel == super::create_sequencer_glue::CHANNEL {
+        super::create_sequencer_glue::from_server(data);
+        return;
+    }
     if channel == super::create_machines::DEPOTS {
         super::create_machines::from_server(data);
         return;
@@ -1961,6 +1986,33 @@ pub(super) fn from_server(channel: &str, data: &[u8]) {
     let c = guard.get_or_insert_with(Client::default);
     if !c.view.apply(data) {
         log::debug!("Create: a bad kinetics message");
+    }
+}
+
+/// `getSpeed` and `getTheoreticalSpeed` of the kinetic block at `pos`.
+pub(super) fn speeds(game: &Game<'_>, dimension: &str, pos: Pos) -> (f32, f32) {
+    let theoretical = server().as_ref().and_then(|s| s.dims.get(dimension)).and_then(|k| k.get(pos)).map_or(0.0, |e| e.speed);
+    (with_kinetics(game, |k, level| k.speed_of(level, pos)), theoretical)
+}
+
+/// `sequenceContext.getEffectiveValue` of the block at `pos`, for a turn of an
+/// angle (or else a distance).
+pub(super) fn sequence_limit(dimension: &str, pos: Pos, angle: bool) -> Option<f64> {
+    let guard = server();
+    let e = guard.as_ref()?.dims.get(dimension)?.get(pos)?;
+    let (turn, relative) = e.sequence?;
+    (turn == angle).then(|| super::create_sequencer::effective(relative, e.speed))
+}
+
+/// `SequencedGearshiftBlockEntity.run`'s part in the kinetics.
+pub(super) fn set_sequencer(game: &mut Game<'_>, pos: Pos, modifier: i32, context: Option<(bool, f64)>, detach: bool) {
+    with_kinetics(game, |k, level| k.set_sequencer(level, pos, modifier, context, detach));
+}
+
+/// A client's value for the block at `pos`.
+pub(super) fn send_value(game: &mut Game<'_>, pos: Pos, value: i32) {
+    if let Err(e) = game.native_net_send_to_server(VALUES, &encode_value(pos, value)) {
+        log::debug!("Create: value: {e}");
     }
 }
 
@@ -2270,6 +2322,16 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             for side in Dir::ALL.into_iter().filter(|d| d.axis() == a) {
                 let away = view.source.is_some_and(|src| src != side);
                 let modifier = if away && powered { if gearshift { -1.0 } else { 0.0 } } else { 1.0 };
+                let angle = render_angle(view.kind, pos, view.speed * modifier, time);
+                want.push(("create:hz_part_shaft_half", None, rotate_to_face(side), a, angle, 0.0));
+            }
+        }
+        Kind::SequencedGearshift(..) => {
+            // SplitShaftRenderer, with `getModifier` on the side away from its source.
+            let a = view.kind.rotation_axis();
+            for side in Dir::ALL.into_iter().filter(|d| d.axis() == a) {
+                let away = view.source.is_some_and(|src| src != side);
+                let modifier = if away { f32::from(view.aux) } else { 1.0 };
                 let angle = render_angle(view.kind, pos, view.speed * modifier, time);
                 want.push(("create:hz_part_shaft_half", None, rotate_to_face(side), a, angle, 0.0));
             }

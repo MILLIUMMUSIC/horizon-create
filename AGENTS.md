@@ -69,6 +69,7 @@ Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 `create:contraptions` (C1: running pistons' offsets and speeds, their blocks when they change, then the glue,
 then turning bearings' angles and blocks, then running rope pulleys' lengths and loads, then moving gantries),
 `create:chassis` (client → server: a chassis' range scrolled with the wrench),
+`create:screens` (S1: the server tells a client to open a screen of Create's own),
 `create:outlines` (O1: an outline for a player's client, `outline.rs`, `glue::send_outline`).
 
 Contraptions: `contraption.rs` (rules: structure search, `PistonContraption`,

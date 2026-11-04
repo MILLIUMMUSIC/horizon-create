@@ -746,6 +746,7 @@ def fit_logistics(content, names):
     fit_steam_engine(content)
     fit_weighted_ejector(content)
     fit_steam_whistle(content)
+    fit_sequenced_gearshift(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1683,6 +1684,25 @@ def fit_steam_whistle(content):
         for shape, top in tops.items() for size in sizes}}
     decl.setdefault("properties", {})["light"] = 0
     write_json(blocks / "steam_whistle_extension.json", decl)
+
+
+# The sequenced gearshift: a chain's template (`axis`) with `state` and `vertical`;
+# a full cube, its shaft halves drawn turning.
+def fit_sequenced_gearshift(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    states = content / "assets" / "create" / "blockstates"
+    decl = read_json(blocks / "sequenced_gearshift.json") if (blocks / "sequenced_gearshift.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["state_properties"] = {"state": {"type": "enum", "values": ["0", "1", "2", "3", "4", "5"]},
+                                "vertical": {"type": "boolean"}}
+    decl["default_state"] = {"state": "0", "vertical": "false", "axis": "x"}
+    decl["shapes"] = {"default": [box(0, 0, 0, 16, 16, 16)]}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "sequenced_gearshift.json", decl)
+    original = read_json(states / "sequenced_gearshift.json")
+    parts = [{"when": dict(kv.split("=") for kv in key.split(",")), "apply": apply}
+             for key, apply in original["variants"].items()]
+    write_json(states / "sequenced_gearshift.json", {"multipart": parts})
 
 
 def fit_turntable(content):

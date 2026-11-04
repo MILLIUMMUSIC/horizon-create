@@ -1202,6 +1202,10 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             continue;
         }
         let mut piston = taken.remove(&pos).unwrap_or_default();
+        if piston.actuator.last_rpm != rpm {
+            // onSpeedChanged: a limit from a sequenced gearshift, if any.
+            piston.actuator.limit = super::create_glue::sequence_limit(dimension, pos, false).unwrap_or(-1.0);
+        }
         piston.actuator.speed(rpm);
         let anchor = piston
             .running
@@ -2880,6 +2884,10 @@ fn bearings_tick(game: &mut Game<'_>, dimension: &str, changed: &mut Vec<Pos>) {
             if windmill {
                 generated.push((pos, 0));
             }
+        }
+        if b.last_rpm != rpm {
+            // onSpeedChanged: a limit from a sequenced gearshift, if any.
+            b.limit = if windmill { None } else { super::create_glue::sequence_limit(dimension, pos, true) };
         }
         b.speed(rpm, windmill);
         let before = b.angle;

@@ -400,6 +400,15 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         Kind::MechanicalPump(_) => Kind::MechanicalPump(pump(ctx, around)),
         // SplitShaftBlock (gearshift, clutch): RotatedPillarKineticBlock's.
         Kind::SplitShaft(g, ..) => Kind::SplitShaft(g, rotated_pillar(ctx, around), false),
+        // SequencedGearshiftBlock.getStateForPlacement.
+        Kind::SequencedGearshift(..) => {
+            let a = rotated_pillar(ctx, around);
+            if a == Axis::Y {
+                Kind::SequencedGearshift(horizontal(ctx.yaw).axis(), true)
+            } else {
+                Kind::SequencedGearshift(a, false)
+            }
+        }
         Kind::FluidValve(..) => {
             let facing = directional(ctx, around);
             Kind::FluidValve(facing, valve_along_first(facing, ctx, around))

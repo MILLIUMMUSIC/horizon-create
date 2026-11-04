@@ -1106,3 +1106,9 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
   above it; goggles said `Pitch: D#`. A redstone block beside it: `powered=true`, the mouth open in the frame, `create:whistle` heard.
   Removed: closed. The wrench made it and the extension `large`. Taking the tank away took all three.
   Not tried: by ear (offscreen), its top half taken off by a sneaking wrench, a floor whistle, an unheated boiler keeping it silent.
+
+## Sequenced gearshift (macOS, offscreen)
+
+- A click opens its screen, drawn with Create's textures. The wheel changed the angle (93, then 180 with 90 steps), the direction to `<-` and a row to Delay with an End after it; tooltips listed the options. Confirm and Escape closed it. Reopened, it showed what was sent.
+- A motor under it, a bearing on it, oak stairs on top: with Turn 180 a pulse ran `state=1` for about 1.5 seconds (the expected 37 ticks at 16 RPM plus attaching) and the stairs came back `facing=west` from `east`, a half turn exactly.
+  Not tried: delays and await in a real sequence, a piston's distance, comparators, the speeds other than `->` turning things, a guest's screen.

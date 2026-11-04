@@ -1051,6 +1051,8 @@ pub struct Actuator {
     pub mode: u8,
     /// `getInitialOffset`: where the structure started.
     pub initial: i32,
+    /// `sequencedOffsetLimit`: how far a sequenced gearshift lets it go, or -1.
+    pub limit: f64,
 }
 
 impl Default for Actuator {
@@ -1060,6 +1062,7 @@ impl Default for Actuator {
             offset: 0.0,
             extension_length: 0,
             assemble_next_tick: true,
+            limit: -1.0,
             waiting: false,
             last_rpm: 0.0,
             mode: 0,
@@ -1074,7 +1077,13 @@ impl Actuator {
         let speed = convert_to_linear(rpm).clamp(-0.49, 0.49);
         let modifier = if facing.positive() { 1.0 } else { -1.0 }
             * if facing.axis() == Axis::Z { -1.0 } else { 1.0 };
-        (speed * -modifier).clamp(-self.offset, self.extension_length as f32 - self.offset)
+        let speed =
+            (speed * -modifier).clamp(-self.offset, self.extension_length as f32 - self.offset);
+        if self.limit >= 0.0 {
+            speed.clamp(-self.limit as f32, self.limit as f32)
+        } else {
+            speed
+        }
     }
 
     /// `getGridOffset`.
@@ -1170,6 +1179,9 @@ impl Actuator {
             return ActuatorStep::Idle;
         }
         let speed = self.movement_speed(rpm, facing);
+        if self.limit > 0.0 {
+            self.limit = (self.limit - f64::from(speed.abs())).max(0.0);
+        }
         let new = self.offset + speed;
         // moveAndCollideContraption: moved, then checked where it is.
         if speed != 0.0 {
@@ -2080,6 +2092,8 @@ pub struct Bearing {
     /// `RotationMode`: 0 always place when stopped, 1 only near the initial
     /// angle, 2 only when the anchor is destroyed.
     pub mode: u8,
+    /// `sequencedAngleLimit`: how far a sequenced gearshift lets it turn.
+    pub limit: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2160,7 +2174,12 @@ impl Bearing {
         if !self.running || stalled && !assembled {
             return BearingStep::Idle;
         }
-        self.angle = (self.angle + convert_to_angular(rpm)) % 360.0;
+        let mut angular = convert_to_angular(rpm);
+        if let Some(limit) = self.limit {
+            angular = angular.clamp(-limit as f32, limit as f32);
+            self.limit = Some((limit - f64::from(angular.abs())).max(0.0));
+        }
+        self.angle = (self.angle + angular) % 360.0;
         if assembled {
             BearingStep::Assembled
         } else {
@@ -2318,6 +2337,7 @@ mod tests {
             (2, 10.0, false),
         ] {
             let mut b = Bearing {
+                limit: None,
                 running: true,
                 angle,
                 assemble_next_tick: true,
@@ -3063,6 +3083,31 @@ mod tests {
         let locals: Vec<Pos> = c.blocks.iter().map(|b| b.local).collect();
         // The shaft below (anchoring) stays.
         assert_eq!(locals, vec![[0, 0, 0], [1, 0, 0]]);
+    }
+
+    #[test]
+    fn a_sequenced_gearshift_limits_a_bearing() {
+        let mut b = Bearing {
+            running: true,
+            assemble_next_tick: false,
+            limit: Some(10.0),
+            ..Bearing::default()
+        };
+        for _ in 0..3 {
+            b.tick(16.0, false, false, || false);
+        }
+        assert_eq!(b.angle, 10.0);
+        assert_eq!(b.limit, Some(0.0));
+        let mut a = Actuator {
+            running: true,
+            assemble_next_tick: false,
+            extension_length: 8,
+            limit: 1.0,
+            ..Actuator::default()
+        };
+        assert_eq!(a.movement_speed(-256.0, Dir::East), 0.49);
+        a.limit = 0.1;
+        assert!((a.movement_speed(-256.0, Dir::East) - 0.1).abs() < 1e-6);
     }
 
     #[test]
