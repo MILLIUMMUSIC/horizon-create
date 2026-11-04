@@ -159,7 +159,7 @@ fn pending() -> MutexGuard<'static, Vec<(String, Pos, bool)>> {
 
 /// Blocks of ours outside the kinetics (the pump is a kinetic block).
 pub(super) fn is_ours(name: &str) -> bool {
-    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || name == super::create_whistle_glue::WHISTLE || name == super::create_whistle_glue::EXTENSION || is_tank_block(name)
+    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || name == super::create_whistle_glue::WHISTLE || name == super::create_whistle_glue::EXTENSION || name == super::create_sticker_glue::BLOCK || is_tank_block(name)
 }
 
 pub(super) fn is_tank_block(name: &str) -> bool {
@@ -480,6 +480,9 @@ pub(super) fn wrench_pipe(game: &mut Game<'_>, pos: Pos, face: Dir) -> Option<bo
         return Some(done);
     }
     if let Some(done) = super::create_whistle_glue::wrench(game, pos) {
+        return Some(done);
+    }
+    if let Some(done) = super::create_sticker_glue::wrench(game, pos, face) {
         return Some(done);
     }
     if let Some(done) = wrench_smart(game, pos, face) {

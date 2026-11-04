@@ -745,6 +745,12 @@ pub(super) fn state_for_placement(
         }
         return;
     }
+    if s.name == super::create_sticker_glue::BLOCK {
+        if let Some(next) = super::create_sticker_glue::placement(level, state, context.yaw, context.pitch, context.sneaking) {
+            *answer = Some(Some(next));
+        }
+        return;
+    }
     if s.name == super::create_whistle_glue::WHISTLE {
         let clicked = Dir::nearest(context.face.normal());
         *answer = Some(super::create_whistle_glue::placement(level, state, pos, clicked, context.yaw));
@@ -1447,6 +1453,7 @@ pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
         super::create_whistle_glue::client_tick(game);
         super::create_sequencer_glue::client_tick(game);
         super::create_cuckoo_glue::client_tick(game);
+        super::create_sticker_glue::client_tick(game);
     }
     let Some(p) = game.player.as_ref() else {
         return;
@@ -2854,6 +2861,7 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_ejector_glue::draw(game, camera, render_time(), out);
     super::create_whistle_glue::draw(game, camera, render_time(), out);
     super::create_cuckoo_glue::draw(game, camera, render_time(), out);
+    super::create_sticker_glue::draw(game, camera, render_time(), out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);

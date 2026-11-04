@@ -1126,3 +1126,8 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 
 - A copper handle on a shaft to a bearing with stairs: a click turned it and the structure and put it back turned. A red dye made it `create:red_valve_handle`, drawn red, as the copper one is drawn copper.
   Not tried: the wheel on its value box, a sneak-click's other way, the exact angle at values other than 45.
+
+## Sticker (macOS, offscreen)
+
+- On a bearing, not extended: a turning structure took the sticker and left a block on it. Extended: both went and came back. A redstone block beside it set `extended=true`, with the head out in the frame.
+  Not tried: the wrench, retracting, on a piston.

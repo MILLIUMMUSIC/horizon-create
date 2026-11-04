@@ -340,6 +340,22 @@ impl StructureWorld for Scan<'_, '_> {
         if carpet {
             not_supportive = std::array::from_fn(|i| Dir::ALL[i] == Dir::Up);
         }
+        let mut sticker = None;
+        // StickerBlock in BlockMovementChecks: out, it holds what is before it (and
+        // that is carried); in, what is there isn't held up by it.
+        if &*f.name == super::create_sticker_glue::BLOCK
+            && let Some(s) = game.pack.assets.registry.state(id)
+            && let Some(facing) = s.properties.get("facing").and_then(|v| Dir::parse(v))
+        {
+            if s.properties.get("extended").is_some_and(|v| v == "true") {
+                let n = facing.normal();
+                let before = game.world.block(pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]);
+                attached = std::array::from_fn(|i| Dir::ALL[i] == facing && !game.world.is_air(before));
+                sticker = Some(facing);
+            } else {
+                not_supportive[facing as usize] = true;
+            }
+        }
         Facts {
             necessary,
             allowed,
@@ -359,6 +375,7 @@ impl StructureWorld for Scan<'_, '_> {
             chassis: chassis_at(game, pos, self.ranges.get(&pos).copied().unwrap_or(DEFAULT_RANGE)),
             sail: game.block_in_tag("create:windmill_sails", &f.name),
             magnet: &*f.name == MAGNET,
+            sticker,
         }
     }
     fn glue(&self, pos: Pos, dir: Dir) -> Option<usize> {

@@ -241,6 +241,14 @@ pub fn glueable_side(kind: ChassisKind, axis: Axis, face: Dir) -> Option<u8> {
     }
 }
 
+/// `StickerBlock.neighborChanged`: `POWERED`, and a rising edge flips `EXTENDED`.
+pub fn sticker_state(was_powered: bool, extended: bool, signal: bool) -> (bool, bool) {
+    if signal == was_powered {
+        return (was_powered, extended);
+    }
+    (signal, if signal { !extended } else { extended })
+}
+
 /// A chassis, as the structure search sees it: its block, axis, sticky
 /// bits and `ChassisBlockEntity.range`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,6 +380,8 @@ pub struct Facts {
     pub sail: bool,
     /// `AllBlocks.PULLEY_MAGNET`.
     pub magnet: bool,
+    /// An extended sticker: the way it holds on to the block before it.
+    pub sticker: Option<Dir>,
 }
 
 impl Facts {
@@ -689,9 +699,11 @@ pub fn search_structure<W: StructureWorld>(
             {
                 glue.push(g);
             }
+            // Contraption.moveBlock: an extended sticker brings what it holds.
+            let held = f.sticker == Some(dir) && !nf.not_supportive(dir.opposite());
             if !visited.contains(&next)
                 && !frontier.contains(&next)
-                && (stick || attached || pushed || glued.is_some())
+                && (stick || attached || pushed || held || glued.is_some())
             {
                 frontier.push_back(next);
             }
@@ -3108,6 +3120,14 @@ mod tests {
         assert_eq!(a.movement_speed(-256.0, Dir::East), 0.49);
         a.limit = 0.1;
         assert!((a.movement_speed(-256.0, Dir::East) - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_sticker_flips_on_a_rising_edge() {
+        assert_eq!(sticker_state(false, false, true), (true, true));
+        assert_eq!(sticker_state(true, true, false), (false, true));
+        assert_eq!(sticker_state(false, true, true), (true, false));
+        assert_eq!(sticker_state(true, true, true), (true, true));
     }
 
     #[test]

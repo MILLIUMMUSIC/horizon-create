@@ -292,6 +292,8 @@ PARTIALS = {
     "hose_magnet": "create:block/hose_pulley/pulley_magnet",
     "hose_half": "create:block/hose_pulley/rope_half",
     "hose_half_magnet": "create:block/hose_pulley/rope_half_magnet",
+    # StickerRenderer's head.
+    "sticker_head": "create:block/sticker/head",
     # FluidValveRenderer's pointer.
     "fluid_valve_pointer": "create:block/fluid_valve/pointer",
     # ArmRenderer's and DeployerRenderer's partials.
@@ -768,6 +770,7 @@ def fit_logistics(content, names):
     fit_cuckoo_clocks(content)
     fit_hose_pulley(content)
     fit_valve_handles(content)
+    fit_sticker(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1770,6 +1773,20 @@ def fit_valve_handles(content):
         write_json(blocks / f"{name}.json", decl)
         write_json(states / f"{name}.json", {"variants": {
             f"facing={f}": {"model": "create:block/hz_blank_valve_handle"} for f in FACINGS}})
+
+
+# The sticker: a chain's template with its own `facing`, `powered` (a lightning
+# rod's would give off a signal) and `extended`.
+def fit_sticker(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    decl = read_json(blocks / "sticker.json") if (blocks / "sticker.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["state_properties"] = {"facing": {"type": "enum", "values": list(FACINGS)}, "powered": {"type": "boolean"},
+                                "extended": {"type": "boolean"}}
+    decl["default_state"] = {"facing": "up", "powered": "false", "extended": "false"}
+    decl["shapes"] = {"default": [box(0, 0, 0, 16, 16, 16)]}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "sticker.json", decl)
 
 
 def fit_turntable(content):
