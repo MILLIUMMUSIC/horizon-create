@@ -202,6 +202,18 @@ name = "create_crusher_glue"
 source = "crusher_glue.rs"
 
 [[module]]
+id = "hose"
+file = "crates/horizon-client/src/game.rs"
+name = "create_hose"
+source = "hose.rs"
+
+[[module]]
+id = "hose_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_hose_glue"
+source = "hose_glue.rs"
+
+[[module]]
 id = "cuckoo"
 file = "crates/horizon-client/src/game.rs"
 name = "create_cuckoo"

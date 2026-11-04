@@ -370,6 +370,27 @@ pub fn place(kind: Kind, ctx: &Ctx, around: &dyn Around) -> Option<Kind> {
         }),
         // MechanicalPressBlock: towards a shaft beside it, else
         // HorizontalKineticBlock's facing the placer.
+        // HosePulleyBlock.getStateForPlacement: its shaft to a shaft beside it,
+        // else its pipe side to a pipe, else the way the placer looks.
+        Kind::HosePulley(_) => {
+            let shaft = preferred_side(around, &HORIZONTALS);
+            let pipe = || {
+                let mut side: Option<Dir> = None;
+                for d in HORIZONTALS {
+                    if around.pipe_connects(d) {
+                        if side.is_some_and(|s| s.axis() != d.axis()) {
+                            return None;
+                        }
+                        side = Some(d);
+                    }
+                }
+                side.map(Dir::opposite)
+            };
+            match shaft.or_else(pipe) {
+                Some(p) => Kind::HosePulley(p.clockwise(Axis::Y).opposite()),
+                None => Kind::HosePulley(horizontal(ctx.yaw).opposite()),
+            }
+        }
         // CuckooClockBlock.getStateForPlacement: its back to a shaft beside it.
         Kind::CuckooClock(_, m) => Kind::CuckooClock(
             preferred_side(around, &HORIZONTALS)

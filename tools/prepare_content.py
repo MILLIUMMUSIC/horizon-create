@@ -286,6 +286,12 @@ PARTIALS = {
     "cuckoo_right_door": "create:block/cuckoo_clock/right_door",
     "cuckoo_pig": "create:block/cuckoo_clock/pig",
     "cuckoo_creeper": "create:block/cuckoo_clock/creeper",
+    # HosePulleyRenderer's.
+    "hose_coil": "create:block/hose_pulley/hose_coil",
+    "hose_rope": "create:block/hose_pulley/rope",
+    "hose_magnet": "create:block/hose_pulley/pulley_magnet",
+    "hose_half": "create:block/hose_pulley/rope_half",
+    "hose_half_magnet": "create:block/hose_pulley/rope_half_magnet",
     # FluidValveRenderer's pointer.
     "fluid_valve_pointer": "create:block/fluid_valve/pointer",
     # ArmRenderer's and DeployerRenderer's partials.
@@ -755,6 +761,7 @@ def fit_logistics(content, names):
     fit_steam_whistle(content)
     fit_sequenced_gearshift(content)
     fit_cuckoo_clocks(content)
+    fit_hose_pulley(content)
     fit_redstone_logic(content)
     fit_speed_controller(content)
     fit_chain_drives(content)
@@ -1725,6 +1732,18 @@ def fit_cuckoo_clocks(content):
         decl["shapes"] = {"default": [box(1, 0, 1, 15, 19, 15)]}
         decl.setdefault("properties", {})["light"] = 0
         write_json(blocks / f"{name}.json", decl)
+
+
+# The hose pulley: a chain's template with its own `facing`, a full cube.
+def fit_hose_pulley(content):
+    blocks = content / "data" / "create" / "horizon" / "block"
+    decl = read_json(blocks / "hose_pulley.json") if (blocks / "hose_pulley.json").exists() else {}
+    decl["template"] = "minecraft:iron_chain"
+    decl["state_properties"] = {"facing": {"type": "enum", "values": ["north", "south", "west", "east"]}}
+    decl["default_state"] = {"facing": "north"}
+    decl["shapes"] = {"default": [box(0, 0, 0, 16, 16, 16)]}
+    decl.setdefault("properties", {})["light"] = 0
+    write_json(blocks / "hose_pulley.json", decl)
 
 
 def fit_turntable(content):

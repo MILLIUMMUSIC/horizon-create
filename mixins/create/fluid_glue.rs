@@ -618,6 +618,13 @@ pub(super) fn pipe_neighbour(level: &super::GameLevel<'_>, pos: Pos, d: Dir) -> 
         ENCASED => N::Encased(encased_sides(&s.properties)[d.opposite() as usize]),
         GLASS => glass_axis(&s.properties).map_or(N::Other, N::Glass),
         VALVE => valve_axis(&s.properties).map_or(N::Other, N::Valve),
+        super::create_hose_glue::BLOCK => {
+            if super::create_hose_glue::level_pipe_side(s.properties.get("facing").map(String::as_str), d.opposite()) {
+                N::Hose
+            } else {
+                N::Other
+            }
+        }
         // Along its axis, as a valve is to a pipe beside it.
         SMART => smart_axis(&s.properties).map_or(N::Other, N::Valve),
         n if is_tank_block(n) || n == super::create_machines::BASIN => N::Holder,
@@ -802,6 +809,9 @@ impl Access<'_, '_> {
     /// `op` on the fluid holder at `pos`: a tank, or a basin's tanks (kept in
     /// its block entity, written back unless simulating).
     fn with_handler<R>(&mut self, pos: Pos, simulate: bool, op: impl FnOnce(&mut dyn FluidHandler) -> R) -> Option<R> {
+        if block_name(self.game, pos).as_deref() == Some(super::create_hose_glue::BLOCK) {
+            return super::create_hose_glue::with_handler(self.game, pos, op);
+        }
         if self.tank(pos) {
             let c = self.tanks.controller(pos)?;
             let mut h = self.tanks.handler(pos)?;
@@ -850,11 +860,15 @@ impl FluidAccess for Access<'_, '_> {
         // FluidTankBlockEntity's and BasinBlockEntity's capabilities, on
         // every side; SpoutBlockEntity's on all but its bottom.
         is_tank(self.game, pos)
+            || super::create_hose_glue::has_pipe_side(self.game, pos, side)
             || is_basin(self.game, pos)
             || (side != Dir::Down && super::create_spout_glue::is_spout(self.game, pos))
             || (side != Dir::Up && super::create_spout_glue::is_drain(self.game, pos))
     }
     fn handler_tanks(&self, pos: Pos, side: Dir) -> Vec<FluidStack> {
+        if super::create_hose_glue::has_pipe_side(self.game, pos, side) {
+            return super::create_hose_glue::tanks(self.game, pos);
+        }
         if side != Dir::Up && super::create_spout_glue::is_drain(self.game, pos) {
             return match self.game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
                 Some(BlockEntity::Mod(m)) => vec![super::create_spout_glue::drain_tank(m).fluid],

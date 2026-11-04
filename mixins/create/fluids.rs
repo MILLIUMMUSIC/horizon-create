@@ -1980,13 +1980,18 @@ pub enum PipeNeighbour {
     Glass(Axis),
     /// A valve with this pipe axis.
     Valve(Axis),
+    /// A hose pulley's pipe side: it takes what comes, with a rim (not a drain).
+    Hose,
     Other,
 }
 
 /// `FluidPipeBlock.canConnectTo` the neighbour on side `d`.
 pub fn pipe_connects(n: PipeNeighbour, d: Dir) -> bool {
     match n {
-        PipeNeighbour::Pipe | PipeNeighbour::Holder | PipeNeighbour::Vanilla => true,
+        PipeNeighbour::Pipe
+        | PipeNeighbour::Holder
+        | PipeNeighbour::Hose
+        | PipeNeighbour::Vanilla => true,
         PipeNeighbour::Pump(f) => f.axis() == d.axis(),
         PipeNeighbour::Encased(open) => open,
         PipeNeighbour::Glass(a) | PipeNeighbour::Valve(a) => a == d.axis(),

@@ -1117,3 +1117,7 @@ on NeoForge (no oracle yet: values are compared by hand with Create's code).
 
 - Driven by a motor through a shaft at its back, its hands turned to 12 o'clock from another hour on `time set`. At noon the status counted chimes, pig sounds, chests opening and closing and the hat's ticking. The mysterious clock, at noon: the block and the shaft behind it gone 3 to 4 seconds later.
   Not tried: dusk's creeper, a dimension with no day.
+
+## Hose pulley (macOS, offscreen)
+
+- Over a 3 by 3 pool with its shaft to a motor and a pipe through a pump to a tank: the hose went down to the pool and in about 40 seconds the pool's blocks went, the tank filling. With the pump turned round the pool's nine blocks were all water again within 25 seconds, from the tank. Not tried: a large body, lava, the Nether, a reload, a tank's whole contents.

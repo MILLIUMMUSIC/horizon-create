@@ -2571,6 +2571,24 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
                 }
             }
         }
+        // HosePulleyRenderer: AbstractPulleyRenderer with its own parts.
+        Kind::HosePulley(_) => {
+            let a = view.kind.rotation_axis();
+            want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
+            want.push(("create:hz_part_hose_coil", None, rotate_to_face(Dir::positive_of(a)), a, 0.0, 0.0));
+            let offset = super::create_hose_glue::client_offset(pos);
+            let magnet = if offset > 0.25 { "create:hz_part_hose_magnet" } else { "create:hz_part_hose_half_magnet" };
+            want.push((magnet, None, id, a, 0.0, offset));
+            let f = offset % 1.0;
+            if offset > 0.75 && !(0.25..=0.75).contains(&f) {
+                want.push(("create:hz_part_hose_half", None, id, a, 0.0, if f > 0.75 { f - 1.0 } else { f }));
+            }
+            let mut i = 0.0;
+            while i < offset - 1.25 {
+                want.push(("create:hz_part_hose_rope", None, id, a, 0.0, offset - i - 1.0));
+                i += 1.0;
+            }
+        }
         // BearingRenderer: the shaft half behind, the top turned with the
         // structure (a windmill's wooden).
         Kind::MechanicalBearing(f) | Kind::WindmillBearing(f) => {

@@ -183,8 +183,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      burner), each fluid ingredient from one tank as `BasinRecipe.apply` does; the fluids drawn side by side as
      `BasinRenderer` does.
    - Not yet: fluids without a block in Horizon (Create's honey, chocolate, tea, builder's tea, milk, potions) and
-     their pipe effects (`OpenPipeEffectHandler`), brackets, particles and sounds, the
-     hose pulley, portable fluid interfaces. The goggles show a tank's and a basin's fluids and amounts
+     their pipe effects (`OpenPipeEffectHandler`), brackets, particles and sounds, portable fluid interfaces. The goggles show a tank's and a basin's fluids and amounts
      (`containedFluidTooltip`).
    Part 2, arm and deployer (**compiled and unit-tested only, not yet run in the game**; VALIDATION.md lists the
    checks):
@@ -543,6 +542,13 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    tag only differs for a valve left turning); a guest's wrench on a corner pipe counts as a click in the middle, as the
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, brackets, the `GLASS_PIPE` advancement.
+
+   The hose pulley (`hose.rs`, `hose_glue.rs`, `Kind::HosePulley`): its hose goes down by its speed to what can't be replaced, and with it still a pipe on its
+   one pipe side draws a pool from the top and far side in, or fills from the bottom and near side out, through `FluidDrainingBehaviour`, `FluidFillingBehaviour` and
+   `HosePulleyFluidHandler`: a 1500 mB tank, 1000 mB a block, sources only, what flows lost, water and lava (`create:bottomless/allow`) bottomless over 10000 blocks and
+   full bodies left unfilled above that (`fillInfinite` off), water boiled off in the Nether. Decisions: the searches aren't saved (`LastPos`, `AffectedArea`): they begin again after a reload, at the cost of one search; a queue scanned for its first entry rather
+   than a heap (the same order, slower only on huge pools). Not yet: `scheduleUpdatesInAffectedArea` and the blocks above losing their support (`canSurvive`), the
+   splash particles (`FluidSplashPacket`), the coil's scrolling texture, the goggles' hint on a bottomless body, the two advancements. Engine gap: Create's own fluids have no block here, so only water and lava (#6301, #5553).
 
    The cuckoo clocks (`cuckoo.rs`, `cuckoo_glue.rs`, `Kind::CuckooClock`): driven through its back, 1 su of stress, hands following the day (running
    wild where there is no day), a tick-tock, and at noon a pig, at dusk a creeper, out of the doors, with Create's sounds. The mysterious one goes off at its fiftieth

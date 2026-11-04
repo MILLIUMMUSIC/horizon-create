@@ -153,7 +153,7 @@ pub(super) fn block_entity(block: &str, entity: &mut Option<(String, Compound)>)
     if entity.is_none() && super::create_logistics::is_chute_block(block) {
         *entity = Some((super::create_logistics::CHUTE.to_owned(), Compound::new()));
     }
-    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || block == super::create_fluid_glue::SMART || block == super::create_engine_glue::ENGINE || block == super::create_ejector_glue::EJECTOR || block == super::create_whistle_glue::WHISTLE || block == super::create_sequencer_glue::BLOCK || super::create_cuckoo_glue::is_clock(block)) {
+    if entity.is_none() && (block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || block == super::create_fluid_glue::SMART || block == super::create_engine_glue::ENGINE || block == super::create_ejector_glue::EJECTOR || block == super::create_whistle_glue::WHISTLE || block == super::create_sequencer_glue::BLOCK || super::create_cuckoo_glue::is_clock(block) || block == super::create_hose_glue::BLOCK) {
         *entity = Some((block.to_owned(), Compound::new()));
     }
 }
@@ -163,7 +163,7 @@ pub(super) fn block_entity_ticks(block: &str, ticks: &mut bool) {
     if super::create_arms::block_entity_ticks(block) {
         *ticks = true;
     }
-    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || super::create_logistics::is_chute_block(block) || block == super::create_fluid_glue::SMART || block == super::create_engine_glue::ENGINE || block == super::create_ejector_glue::EJECTOR || block == super::create_whistle_glue::WHISTLE || block == super::create_sequencer_glue::BLOCK || super::create_cuckoo_glue::is_clock(block) {
+    if block == DEPOT || block == MILLSTONE || block == BASIN || block == BLAZE || block == LINK || block == super::create_spout_glue::SPOUT || block == super::create_spout_glue::DRAIN || block == super::create_crafter_glue::CRAFTER || block == super::create_crusher_glue::CONTROLLER || super::create_redstone_glue::is_ours(block) || is_saw(block) || super::create_logistics::is_chute_block(block) || block == super::create_fluid_glue::SMART || block == super::create_engine_glue::ENGINE || block == super::create_ejector_glue::EJECTOR || block == super::create_whistle_glue::WHISTLE || block == super::create_sequencer_glue::BLOCK || super::create_cuckoo_glue::is_clock(block) || block == super::create_hose_glue::BLOCK {
         *ticks = true;
     }
 }
@@ -816,6 +816,7 @@ pub(super) fn block_entity_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModB
         super::create_ejector_glue::EJECTOR => super::create_ejector_glue::tick(game, pos, entity),
         super::create_whistle_glue::WHISTLE => super::create_whistle_glue::tick(game, pos, entity),
         super::create_sequencer_glue::BLOCK => super::create_sequencer_glue::tick(game, pos, entity),
+        super::create_hose_glue::BLOCK => super::create_hose_glue::tick(game, pos, entity),
         n if super::create_cuckoo_glue::is_clock(n) => super::create_cuckoo_glue::tick(game, pos, entity),
         MILLSTONE => millstone_tick(game, pos, entity),
         b if is_saw(b) => saw_tick(game, pos, entity),
@@ -1753,6 +1754,7 @@ pub(super) fn take_depot_updates(game: &Game<'_>, dimension: &str, full: bool) -
                             && s.name != super::create_whistle_glue::WHISTLE
                             && s.name != super::create_sequencer_glue::BLOCK
                             && !super::create_cuckoo_glue::is_clock(&s.name)
+                            && s.name != super::create_hose_glue::BLOCK
                             && !super::create_logistics::is_chute_block(&s.name)
                             && !super::create_funnel::is_funnel(&s.name)
                     })
@@ -1882,7 +1884,7 @@ pub(super) fn draw_depots(
         }
         // These draw themselves, once this lock is let go.
         if super::create_engine_glue::engine_at(game, *pos).is_some() || super::create_ejector_glue::is_ejector(game, *pos) || super::create_whistle_glue::attached_at(game, *pos).is_some()
-            || game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2])).is_some_and(|s| s.name == super::create_sequencer_glue::BLOCK || super::create_cuckoo_glue::is_clock(&s.name)) {
+            || game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2])).is_some_and(|s| s.name == super::create_sequencer_glue::BLOCK || super::create_cuckoo_glue::is_clock(&s.name) || s.name == super::create_hose_glue::BLOCK) {
             continue;
         }
         if game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2])).is_some_and(|s| s.name == super::create_fluid_glue::SMART) {
