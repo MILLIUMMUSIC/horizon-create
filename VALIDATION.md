@@ -1,5 +1,24 @@
 # Validation
 
+## Compacting with the press (macOS, offscreen)
+
+On pin `cc5f7ff`, each press over a basin with a creative motor at 16, items thrown into the basin, results read by
+breaking the basin:
+
+- 18 iron ingots made 2 iron blocks, one press after the other (a crafting recipe through `canCompress`).
+- An egg, sugar and cinder flour made a blaze cake base; 12 snow blocks made 1 ice and left 3 (`create:compacting`).
+- 2 flint and gravel, with a lava bucket emptied into the basin, made andesite (a compacting recipe with a fluid).
+- 2 iron ingots stayed as they were, with nothing made.
+- Quit about 4 seconds into 18 ingots, saved in mode 2 (basin); after a reload it still made its 2 blocks.
+- Taking the basin away during a cycle gave nothing and no panic; a depot put under the same press still pressed an
+  ingot into a sheet.
+- Screenshots show the head going down into the basin.
+
+Not tried: a recipe needing heat (Create's compacting recipes have none; only a pack's could), output full, a speed
+change during a cycle, a LAN guest seeing the head, sounds (no audio). The rules follow Create 6.0.10 as ported from
+what is known of its classes; of the jar, only `Mode.BASIN`'s 1.375 and the press block's lack of a minimum speed were
+read here, from the class files' constants (no JVM on this machine).
+
 ## Metal girders and brackets (macOS, offscreen)
 
 On pin `cc5f7ff`, with a content mod rebuilt by that pin's `horizon-port-pack`, in creative:

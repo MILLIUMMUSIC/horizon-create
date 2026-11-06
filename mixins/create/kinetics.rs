@@ -1256,7 +1256,7 @@ impl Kinetics {
                 }
                 _ => -1,
             },
-            press_belt: e.pressing.mode == PressMode::Belt,
+            press_mode: e.pressing.mode,
         })
     }
     /// The changed entities since the last call; none for one that is gone.
@@ -2241,6 +2241,14 @@ impl Kinetics {
         self.dirty.insert(pos);
         Some(&mut e.pressing)
     }
+    /// `basinChecker` of the press at `pos`: whether it should look in its basin.
+    pub fn press_basin_check(&mut self, level: &dyn Level, pos: Pos) -> bool {
+        let speed = self.speed_of(level, pos);
+        self.entities
+            .get_mut(&pos)
+            .filter(|e| matches!(e.kind, Kind::MechanicalPress(_)))
+            .is_some_and(|e| e.pressing.basin_check(speed))
+    }
     /// `PressingBehaviour.tick` of the press at `pos`; clients hear of it
     /// while it runs and when it stops.
     pub fn tick_press(&mut self, level: &dyn Level, pos: Pos) -> Option<(PressStep, PressMode)> {
@@ -2473,7 +2481,7 @@ impl Kinetics {
                 e.flow_score,
                 u8::from(e.pressing.running),
                 e.pressing.running_ticks,
-                u8::from(e.pressing.mode == PressMode::Belt),
+                e.pressing.mode.code(),
                 u8::from(e.mixing.running),
                 e.mixing.running_ticks,
                 e.material,
@@ -2528,11 +2536,7 @@ impl Kinetics {
                 e.pressing.running = f[15] == "1";
                 e.pressing.running_ticks = int(16).unwrap_or(0);
                 e.pressing.prev_running_ticks = e.pressing.running_ticks;
-                e.pressing.mode = if f[17] == "1" {
-                    PressMode::Belt
-                } else {
-                    PressMode::World
-                };
+                e.pressing.mode = PressMode::from_code(f[17].parse().unwrap_or(0));
             }
             if f.len() >= 21 {
                 e.material = f[20].parse().unwrap_or(0);
@@ -2792,8 +2796,8 @@ pub struct View {
     /// By kind: a press's or a mixer's running ticks (-1 at rest), a
     /// creative motor's speed setting (its scroll value); -1 otherwise.
     pub aux: i16,
-    /// Whether a press reaches a depot.
-    pub press_belt: bool,
+    /// How far down a press reaches.
+    pub press_mode: PressMode,
 }
 
 impl View {
@@ -2990,9 +2994,9 @@ pub fn encode_update(dim: u8, full: bool, entries: &[(Pos, Option<View>)]) -> Ve
                 v.source.map_or(255, |d| d as u8),
                 v.stress,
                 v.capacity,
-                (v.aux, v.press_belt),
+                (v.aux, v.press_mode),
             ),
-            None => ((255, 0), 0.0, 255, 0.0, 0.0, (-1, false)),
+            None => ((255, 0), 0.0, 255, 0.0, 0.0, (-1, PressMode::World)),
         };
         out.push(tag);
         out.push(state);
@@ -3001,7 +3005,7 @@ pub fn encode_update(dim: u8, full: bool, entries: &[(Pos, Option<View>)]) -> Ve
         out.extend_from_slice(&stress.to_le_bytes());
         out.extend_from_slice(&capacity.to_le_bytes());
         out.extend_from_slice(&press.0.to_le_bytes());
-        out.push(u8::from(press.1));
+        out.push(press.1.code());
     }
     out
 }
@@ -3030,7 +3034,7 @@ pub fn decode_update(data: &[u8]) -> Option<Update> {
                 stress: float(&c[19..23]),
                 capacity: float(&c[23..27]),
                 aux: i16::from_le_bytes([c[27], c[28]]),
-                press_belt: c[29] != 0,
+                press_mode: PressMode::from_code(c[29]),
             });
             (pos, view)
         })
@@ -3668,7 +3672,7 @@ mod tests {
             stress: 128.0,
             capacity: 256.0,
             aux: -1,
-            press_belt: false,
+            press_mode: PressMode::World,
         };
         let entries = vec![
             ([1, -64, 3], Some(view(Kind::Shaft(Axis::Z), 16.0))),
@@ -3723,7 +3727,7 @@ mod tests {
             stress: 0.0,
             capacity: 0.0,
             aux: -1,
-            press_belt: false,
+            press_mode: PressMode::World,
         };
         // Time 20 at 16 rpm: 96 degrees, before the half-tooth offsets.
         let p = [1, 64, 1];
@@ -3781,7 +3785,15 @@ mod tests {
         let p = loaded.get([0, 64, 0]).unwrap().pressing;
         assert!(p.running && p.running_ticks == 60 && p.mode == PressMode::Belt);
         let v = loaded.view(&r.world, [0, 64, 0]).unwrap();
-        assert_eq!((v.aux, v.press_belt), (60, true));
+        assert_eq!((v.aux, v.press_mode), (60, PressMode::Belt));
+        r.k.pressing_mut([0, 64, 0])
+            .unwrap()
+            .start(PressMode::Basin);
+        let loaded = Kinetics::load(&r.k.save());
+        assert_eq!(
+            loaded.get([0, 64, 0]).unwrap().pressing.mode,
+            PressMode::Basin
+        );
     }
 
     #[test]

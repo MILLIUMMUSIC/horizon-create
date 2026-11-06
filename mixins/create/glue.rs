@@ -358,8 +358,11 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
         // PressingBehaviour.tick; what it asks of the world waits for the lock.
         for p in kinetics.presses() {
+            if kinetics.press_basin_check(&level, p) {
+                press_steps.push((p, PressStep::CheckBasin, PressMode::Basin));
+            }
             if let Some((step, mode)) = kinetics.tick_press(&level, p)
-                && matches!(step, PressStep::ScanWorld | PressStep::Press)
+                && matches!(step, PressStep::ScanWorld | PressStep::Press | PressStep::Completed)
             {
                 press_steps.push((p, step, mode));
             }
@@ -2432,12 +2435,7 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
             // down by the pressing cycle.
             let a = f.axis();
             want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0));
-            let mode = if view.press_belt {
-                PressMode::Belt
-            } else {
-                PressMode::World
-            };
-            let drop = press_head_offset(view.aux >= 0, mode, f32::from(view.aux));
+            let drop = press_head_offset(view.aux >= 0, view.press_mode, f32::from(view.aux));
             want.push(("create:hz_part_press_head", None, rotate_to_face(f), a, 0.0, drop));
         }
         Kind::Millstone => {

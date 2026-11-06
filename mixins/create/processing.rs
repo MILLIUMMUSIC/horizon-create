@@ -19,6 +19,8 @@ pub enum PressMode {
     World,
     /// An item on a depot (or belt) two blocks below.
     Belt,
+    /// A basin two blocks below (`MechanicalPressBlockEntity`'s compacting).
+    Basin,
 }
 
 impl PressMode {
@@ -26,6 +28,22 @@ impl PressMode {
         match self {
             PressMode::World => 1.0,
             PressMode::Belt => 19.0 / 16.0,
+            PressMode::Basin => 22.0 / 16.0,
+        }
+    }
+    /// As saved and sent to clients.
+    pub fn code(self) -> u8 {
+        match self {
+            PressMode::World => 0,
+            PressMode::Belt => 1,
+            PressMode::Basin => 2,
+        }
+    }
+    pub fn from_code(code: u8) -> PressMode {
+        match code {
+            1 => PressMode::Belt,
+            2 => PressMode::Basin,
+            _ => PressMode::World,
         }
     }
 }
@@ -41,6 +59,9 @@ pub enum PressStep {
     /// The cycle ended (`onPressingCompleted`).
     Completed,
     Moving,
+    /// `basinChecker` (`updateBasin`): look for a recipe in the basin below.
+    /// Asked by `basin_check`, not by `tick`.
+    CheckBasin,
 }
 
 /// `PressingBehaviour`'s state.
@@ -52,9 +73,37 @@ pub struct Pressing {
     pub running_ticks: i32,
     pub prev_running_ticks: i32,
     pub entity_scan_cooldown: i32,
+    /// `basinChecker.scheduleUpdate()`.
+    pub needs_update: bool,
+    /// The speed `onSpeedChanged` last saw.
+    pub last_speed: f32,
 }
 
 impl Pressing {
+    /// `BasinOperatingBlockEntity`'s `onSpeedChanged` and `DeferralBehaviour.tick`:
+    /// whether `updateBasin` should look in the basin now. It always answers
+    /// true, so the flag clears even when it is turning too little or running.
+    pub fn basin_check(&mut self, speed: f32) -> bool {
+        if speed != self.last_speed {
+            self.last_speed = speed;
+            self.needs_update = true;
+        }
+        let check = self.needs_update && speed != 0.0 && !self.running;
+        self.needs_update = false;
+        check
+    }
+    /// `MechanicalPressBlockEntity.startProcessingBasin`.
+    pub fn start_basin(&mut self) {
+        if self.running && self.running_ticks <= PRESS_CYCLE / 2 {
+            return;
+        }
+        self.start(PressMode::Basin);
+    }
+    /// `MechanicalPressBlockEntity.onBasinRemoved`.
+    pub fn basin_removed(&mut self) {
+        self.running = false;
+        self.running_ticks = 0;
+    }
     /// `getRunningTickSpeed`: 1 to 60 ticks of the cycle per game tick.
     pub fn running_tick_speed(speed: f32) -> i32 {
         if speed == 0.0 {
@@ -591,7 +640,38 @@ fn fluid_tag(tag: &str) -> Option<Vec<String>> {
     }
 }
 
+/// `MechanicalPressBlockEntity.canCompress`: a crafting recipe of 4 or 9 cells that
+/// all take the same (`ItemHelper.matchAllIngredients`); `ingredients` holds each
+/// cell's items, none for a blank one.
+pub fn can_compress(ingredients: &[Vec<String>]) -> bool {
+    matches!(ingredients.len(), 4 | 9) && ingredients.iter().all(|i| *i == ingredients[0])
+}
+
 impl BasinRecipe {
+    /// A crafting recipe as the press runs it in a basin, `ingredients` as
+    /// `can_compress` takes them.
+    pub fn compressed(
+        id: &str,
+        ingredients: Vec<Vec<String>>,
+        item: &str,
+        count: u32,
+    ) -> BasinRecipe {
+        BasinRecipe {
+            id: id.to_owned(),
+            ingredients,
+            results: vec![Output {
+                item: item.to_owned(),
+                count,
+                chance: 1.0,
+            }],
+            processing_time: 0,
+            heat: Heat::None,
+            fluid_ingredients: Vec::new(),
+            fluid_results: Vec::new(),
+            unsupported: false,
+        }
+    }
+
     /// What the basin can do without blaze burners: items and the fluids
     /// Horizon has.
     pub fn supported(&self) -> bool {
@@ -794,6 +874,102 @@ mod tests {
         // ticks down, one at the bottom, 15 up, and the tick that ends it.
         assert_eq!(Pressing::running_tick_speed(64.0), 8);
         assert_eq!(ticks, 32);
+    }
+
+    #[test]
+    fn a_press_looks_in_its_basin_when_told_or_when_its_speed_changes() {
+        let mut p = Pressing::default();
+        // Not turning: nothing to do, and nothing left to do later.
+        assert!(!p.basin_check(0.0));
+        p.needs_update = true;
+        assert!(!p.basin_check(0.0));
+        assert!(!p.needs_update);
+        // It starts turning.
+        assert!(p.basin_check(16.0));
+        assert!(!p.basin_check(16.0));
+        p.needs_update = true;
+        assert!(p.basin_check(16.0));
+        // Running, it doesn't look, and the request is dropped.
+        p.start_basin();
+        p.needs_update = true;
+        assert!(!p.basin_check(16.0));
+        assert!(!p.needs_update);
+    }
+
+    #[test]
+    fn a_press_over_a_basin_reaches_further_and_stops_when_it_goes() {
+        let mut p = Pressing::default();
+        p.start_basin();
+        assert!(p.running && p.mode == PressMode::Basin);
+        let mut presses = 0;
+        while p.running {
+            if p.tick(64.0) == PressStep::Press {
+                presses += 1;
+            }
+        }
+        assert_eq!(presses, 1);
+        assert!((press_head_offset(true, PressMode::Basin, 120.0) - 1.375).abs() < 1e-6);
+        // Going down it isn't restarted; coming back up it is.
+        p.start_basin();
+        p.running_ticks = 60;
+        p.start_basin();
+        assert_eq!(p.running_ticks, 60);
+        p.running_ticks = 180;
+        p.start_basin();
+        assert_eq!(p.running_ticks, 0);
+        p.running_ticks = 60;
+        p.basin_removed();
+        assert!(!p.running && p.running_ticks == 0);
+    }
+
+    #[test]
+    fn press_modes_keep_their_codes() {
+        for m in [PressMode::World, PressMode::Belt, PressMode::Basin] {
+            assert_eq!(PressMode::from_code(m.code()), m);
+        }
+    }
+
+    #[test]
+    fn only_full_squares_of_one_ingredient_compress() {
+        let iron = || vec!["minecraft:iron_ingot".to_owned()];
+        assert!(can_compress(&vec![iron(); 9]));
+        assert!(can_compress(&vec![iron(); 4]));
+        assert!(!can_compress(&vec![iron(); 8]));
+        assert!(!can_compress(&[iron()]));
+        let mut mixed = vec![iron(); 9];
+        mixed[4] = vec!["minecraft:gold_ingot".to_owned()];
+        assert!(!can_compress(&mixed));
+        // A hole in the middle (a furnace, a chest) is a blank cell.
+        let mut ring = vec![iron(); 9];
+        ring[4] = Vec::new();
+        assert!(!can_compress(&ring));
+        let r = BasinRecipe::compressed("iron_block", vec![iron(); 9], "minecraft:iron_block", 1);
+        assert!(r.supported());
+        assert_eq!(r.as_recipe().results[0].item, "minecraft:iron_block");
+    }
+
+    #[test]
+    fn compacting_recipes_read_as_basin_recipes() {
+        let r = parse_basin_recipe(
+            "create:compacting.andesite_from_flint",
+            &json!({"type": "create:compacting", "ingredients": [
+                {"item": "minecraft:flint"}, {"item": "minecraft:flint"}, {"item": "minecraft:gravel"},
+                {"type": "neoforge:single", "amount": 100, "fluid": "minecraft:lava"}],
+                "results": [{"id": "minecraft:andesite"}]}),
+        )
+        .unwrap();
+        assert!(r.supported());
+        assert_eq!(r.ingredients.len(), 3);
+        assert_eq!(r.fluid_ingredients[0].amount, 100);
+        // Create's chocolate has no fluid here yet.
+        let c = parse_basin_recipe(
+            "create:compacting.chocolate",
+            &json!({"type": "create:compacting", "ingredients": [
+                {"type": "neoforge:single", "amount": 250, "fluid": "create:chocolate"}],
+                "results": [{"id": "create:bar_of_chocolate"}]}),
+        )
+        .unwrap();
+        assert!(!c.supported());
     }
 
     #[test]

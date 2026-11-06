@@ -66,7 +66,9 @@ struct Machines {
     random: u64,
     /// `create:mixing` recipes, most ingredients first, with theirs read.
     basin_recipes: Option<std::sync::Arc<BasinRecipes>>,
-    /// Each mixer's `currentRecipe`, by id.
+    /// What a press runs in a basin, the same way.
+    press_recipes: Option<std::sync::Arc<BasinRecipes>>,
+    /// Each mixer's and press's `currentRecipe`, by id.
     mixing: HashMap<(String, Pos), String>,
     /// What each basin held last tick (`contentsChanged`).
     basins: HashMap<(String, Pos), Vec<(String, u32)>>,
@@ -1382,8 +1384,9 @@ pub(super) fn press_world_step(game: &mut Game<'_>, pos: Pos, step: PressStep, m
     }
     match step {
         PressStep::ScanWorld => {
-            // A depot two below takes the work (TransportedItemStackHandlerBehaviour).
-            if below2 {
+            // A depot two below takes the work (TransportedItemStackHandlerBehaviour),
+            // or a basin does (updateBasin).
+            if below2 || basin_below(game, pos).is_some() {
                 return;
             }
             let found = items_below(game, pos)
@@ -1432,8 +1435,120 @@ pub(super) fn press_world_step(game: &mut Game<'_>, pos: Pos, step: PressStep, m
             }
             game.dropped.retain(|d| d.stack.count > 0);
         }
+        PressStep::CheckBasin => press_check_basin(game, pos),
+        PressStep::Press if mode == PressMode::Basin => press_apply_basin(game, pos),
+        PressStep::Completed if mode == PressMode::Basin => {
+            // onPressingCompleted: press again while the recipe still matches.
+            let again = press_recipe_matches(game, pos);
+            super::create_glue::with_kinetics(game, |k, _| {
+                if let Some(p) = k.pressing_mut(pos) {
+                    if again {
+                        p.start_basin();
+                    } else {
+                        p.needs_update = true;
+                    }
+                }
+            });
+        }
         _ => {}
     }
+}
+
+/// `updateBasin` of the press at `pos`: the first recipe its basin can make
+/// (`getMatchingRecipes`) becomes `currentRecipe`, and it starts.
+fn press_check_basin(game: &mut Game<'_>, pos: Pos) {
+    let Some((_, mut items, mut tanks)) = basin_below(game, pos) else {
+        return;
+    };
+    if items.iter().all(Option::is_none) && tanks.is_empty() {
+        return;
+    }
+    let recipes = press_recipes(game);
+    let heat = burner_heat(game, [pos[0], pos[1] - 3, pos[2]]);
+    let Some((r, _)) = recipes
+        .iter()
+        .find(|r| super::create_blaze::heat_met(r.0.heat.requirement(), heat) && basin_apply(game, &mut items, &mut tanks, r, true))
+    else {
+        return;
+    };
+    let key = (game.dim.id().to_owned(), pos);
+    machines().get_or_insert_with(Machines::default).mixing.insert(key, r.id.clone());
+    super::create_glue::with_kinetics(game, |k, _| {
+        if let Some(p) = k.pressing_mut(pos) {
+            p.start_basin();
+        }
+    });
+}
+
+/// The press at `pos`'s `currentRecipe`, if the heat under its basin suits it.
+fn press_current_recipe(game: &Game<'_>, pos: Pos) -> Option<(std::sync::Arc<BasinRecipes>, usize)> {
+    let key = (game.dim.id().to_owned(), pos);
+    let id = machines().as_ref().and_then(|m| m.mixing.get(&key).cloned())?;
+    let recipes = press_recipes(game);
+    let at = recipes.iter().position(|(r, _)| r.id == id)?;
+    let heat = burner_heat(game, [pos[0], pos[1] - 3, pos[2]]);
+    super::create_blaze::heat_met(recipes[at].0.heat.requirement(), heat).then_some((recipes, at))
+}
+
+/// `matchBasinRecipe(currentRecipe)`.
+fn press_recipe_matches(game: &mut Game<'_>, pos: Pos) -> bool {
+    let Some((recipes, at)) = press_current_recipe(game, pos) else {
+        return false;
+    };
+    let Some((_, mut items, mut tanks)) = basin_below(game, pos) else {
+        return false;
+    };
+    basin_apply(game, &mut items, &mut tanks, &recipes[at], true)
+}
+
+/// `tryProcessInBasin`: `applyBasinRecipe` with the head at the bottom.
+fn press_apply_basin(game: &mut Game<'_>, pos: Pos) {
+    let Some((recipes, at)) = press_current_recipe(game, pos) else {
+        return;
+    };
+    let Some((basin, mut items, mut tanks)) = basin_below(game, pos) else {
+        return;
+    };
+    if basin_apply(game, &mut items, &mut tanks, &recipes[at], false) {
+        game.native_with_mod_block_entity(basin, |be| {
+            be.items = items;
+            super::create_fluid_glue::set_basin_tanks(be, &tanks);
+        });
+    }
+}
+
+/// `MechanicalPressBlockEntity.matchStaticFilters`: `create:compacting`, and crafting
+/// recipes that `canCompress` (not `_manual_only` ones), most ingredients first.
+fn press_recipes(game: &Game<'_>) -> std::sync::Arc<BasinRecipes> {
+    use horizon_client::crafting::Recipe as Crafting;
+    if let Some(r) = machines().as_ref().and_then(|m| m.press_recipes.clone()) {
+        return r;
+    }
+    let mut list = read_basin_recipes(game, "create:compacting");
+    for (name, recipe) in &game.recipes().crafting {
+        let (cells, result): (Vec<Option<&Ingredient>>, _) = match recipe {
+            Crafting::Shaped { cells, result, .. } => (cells.iter().map(Option::as_ref).collect(), result),
+            Crafting::Shapeless { ingredients, result } => (ingredients.iter().map(Some).collect(), result),
+            Crafting::Special(_) => continue,
+        };
+        let items: Vec<Vec<String>> = cells.iter().map(|c| c.map_or_else(Vec::new, |i| i.order.clone())).collect();
+        if name.ends_with("_manual_only") || !super::create_processing::can_compress(&items) {
+            continue;
+        }
+        // A cell of a mod's own kind, or a result with data, isn't one of these plain squares.
+        let Some(item) = result.item.as_deref().filter(|_| result.extra.is_none()) else {
+            continue;
+        };
+        if cells.iter().any(|c| c.is_none_or(|i| i.custom.is_some() || i.children.is_some())) {
+            continue;
+        }
+        let read = cells.iter().map(|c| c.cloned()).collect();
+        list.push((BasinRecipe::compressed(name, items, item, result.count), read));
+    }
+    list.sort_by_key(|(r, _)| std::cmp::Reverse(r.ingredients.len()));
+    let list = std::sync::Arc::new(list);
+    machines().get_or_insert_with(Machines::default).press_recipes = Some(list.clone());
+    list
 }
 
 /// Item entities on the ground in the block below the press, shrunk by an
@@ -1689,6 +1804,9 @@ pub(super) fn right_click(game: &mut Game<'_>, pos: Pos, face: [i32; 3]) -> bool
                 super::create_glue::with_kinetics(game, |k, _| {
                     if let Some(m) = k.mixing_mut(above) {
                         m.basin_removed();
+                    }
+                    if let Some(p) = k.pressing_mut(above) {
+                        p.basin_removed();
                     }
                 });
             }
@@ -2049,6 +2167,9 @@ fn basin_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
             if let Some(m) = k.mixing_mut(above) {
                 m.needs_update = true;
             }
+            if let Some(p) = k.pressing_mut(above) {
+                p.needs_update = true;
+            }
         });
     }
     note_depot(game, pos, &entity.items);
@@ -2087,10 +2208,19 @@ fn basin_recipes(game: &Game<'_>) -> std::sync::Arc<BasinRecipes> {
     if let Some(r) = machines().as_ref().and_then(|m| m.basin_recipes.clone()) {
         return r;
     }
-    let mut list: BasinRecipes = game
+    let mut list = read_basin_recipes(game, "create:mixing");
+    list.sort_by_key(|(r, _)| std::cmp::Reverse(r.ingredients.len()));
+    let list = std::sync::Arc::new(list);
+    machines().get_or_insert_with(Machines::default).basin_recipes = Some(list.clone());
+    list
+}
+
+/// The supported recipes of a basin recipe type, with their ingredients read.
+fn read_basin_recipes(game: &Game<'_>, kind: &str) -> BasinRecipes {
+    game
         .recipes()
         .custom
-        .get("create:mixing")
+        .get(kind)
         .map_or(&[][..], Vec::as_slice)
         .iter()
         .filter_map(|r| parse_basin_recipe(&r.id, &r.json))
@@ -2109,11 +2239,7 @@ fn basin_recipes(game: &Game<'_>) -> std::sync::Arc<BasinRecipes> {
             (r, ingredients)
         })
         .filter(|(_, i): &(BasinRecipe, Vec<Option<Ingredient>>)| i.iter().all(Option::is_some))
-        .collect();
-    list.sort_by_key(|(r, _)| std::cmp::Reverse(r.ingredients.len()));
-    let list = std::sync::Arc::new(list);
-    machines().get_or_insert_with(Machines::default).basin_recipes = Some(list.clone());
-    list
+        .collect()
 }
 
 /// `BasinRecipe.apply` on a basin's 18 slots: one item for each ingredient

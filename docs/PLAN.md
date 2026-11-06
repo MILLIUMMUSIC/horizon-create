@@ -57,6 +57,17 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      mixer (`allowShapelessInMixer`), potion brewing, the basin's filter slot, pouring out sideways (spouts: the
      template has no `facing`, so it keeps its outputs), its fluid tanks and their rendering. Basins draw their
      items as `BasinRenderer` places them (no ingredient spin yet).
+   - Compacting (`MechanicalPressBlockEntity`, `processing.rs`, `machines.rs::press_recipes`): a press with a basin two
+     below runs its 240-tick cycle in `PressingBehaviour.Mode.BASIN` (the head reaches 22/16 down, saved and sent to
+     clients), applying the recipe at the bottom and pressing again while it still matches. It looks in the basin when
+     the basin's contents change, every 200 ticks while it holds anything, and when its speed changes; it has no
+     minimum speed, as the mixer has. Recipes: `create:compacting`, and crafting recipes of 4 or 9 cells all taking the
+     same (`canCompress`, `allowShapedSquareInPress`'s default), not `_manual_only` ones, most ingredients first, by
+     the same `basin_apply` as the mixer's, with heat and fluids. A press over a basin doesn't scan the ground. Not yet:
+     chocolate and honey (`create:chocolate`, `c:honey`: no fluid here, #5553), the crafting remainders of a square
+     recipe, recipe serializers in `AUTOMATION_IGNORE` (only the `_manual_only` name is read), squares of a mod's own
+     ingredient kinds or results with data, `canSurvive` (a press can stand right on a basin here), `particleItems`'
+     particles, the `COMPACTING` and `TRACK_CRAFTING` advancements.
    - Value boxes: the creative motor's speed (`ScrollValueBehaviour`, `MotorValueBox` on its sides): looking at
      the box shows its value over the hotbar, the mouse wheel changes it (Create 0.5's steps: 1, 4, 16, 64; never
      0), sent on the mod channel `create:values` and checked by the server (reach, game mode, range). Create 6
@@ -440,7 +451,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    does; a mixer's basin over a burner meets `heated` and `superheated` mixing recipes). Not yet: the flame's
    scrolling texture, goggles and hats on the head, the head's easing and the particles, capturing a blaze with the
    empty burner (using an item on an entity), the lit blaze burner (soul fire) variant, the stock keeper's heat,
-   compacting recipes' heat with a press, blaze burners on contraptions, `FULL_BRIGHT` light on the head and rods.
+   blaze burners on contraptions, `FULL_BRIGHT` light on the head and rods.
    The clutch and gearshift (`Kind::SplitShaft`: `SplitShaftBlockEntity.getRotationSpeedModifier`,
    a powered gearshift reverses what is beyond it and a powered clutch cuts it; `powered` is their own state property,
    set from the redstone signal beside them, detached and attached again as `neighborChanged` does; their shaft
