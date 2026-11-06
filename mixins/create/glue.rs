@@ -205,6 +205,7 @@ pub(super) fn block_changed(
         return;
     };
     let ours = s.states.contains(&old.0) || s.states.contains(&new.0);
+    super::create_girder_glue::block_changed(level_dimension_id(dimension), [pos.x, pos.y, pos.z]);
     super::create_fluid_glue::block_changed(level_dimension_id(dimension), [pos.x, pos.y, pos.z], ours);
     if ours {
         s.pending
@@ -459,6 +460,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     if save_now {
         super::create_logistics::save_all();
         super::create_fluid_glue::save_all();
+        super::create_girder_glue::save_all();
     }
     super::create_logistics::belts_removed(game, &removed_belts);
     for (pos, value) in amounts {
@@ -488,6 +490,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     super::create_crusher_glue::level_tick(game, dimension, &crushing_wheels);
     chain_gearshifts_tick(game, dimension, &chain_gearshifts);
     super::create_bell_glue::level_tick(game, dimension);
+    super::create_girder_glue::level_tick(game, dimension);
     turntables_tick(game, dimension, &turntables);
     for (p, speed) in valves {
         super::create_fluid_glue::valve_tick(game, p, speed);
@@ -746,6 +749,15 @@ pub(super) fn state_for_placement(
         }
         return;
     }
+    if s.name == super::create_girder_glue::GIRDER {
+        *answer = Some(super::create_girder_glue::placement(level, state, pos, face));
+        return;
+    }
+    // BracketBlockItem.useOn: a bracket is never placed by itself.
+    if super::create_girder_glue::is_bracket_item(&s.name) {
+        *answer = Some(None);
+        return;
+    }
     if super::create_bell_glue::is_ours(&s.name) {
         *answer = Some(super::create_bell_glue::placement(level, state, pos, face, context.yaw));
         return;
@@ -921,6 +933,9 @@ pub(super) fn update_shape(
 ) {
     let d = Dir::nearest(direction.normal());
     if let Some(next) = super::create_fluid_glue::pipe_update_shape(level, state, pos, d) {
+        *new = Some(next);
+    }
+    if let Some(next) = super::create_girder_glue::update_shape(level, state, pos, d) {
         *new = Some(next);
     }
     if let Some(next) = super::create_bell_glue::update_shape(level, state, pos, d) {
@@ -1187,6 +1202,10 @@ fn right_click_hand(
     face: [i32; 3],
     canceled: &mut bool,
 ) {
+    if super::create_girder_glue::right_click(game, pos, face) || super::create_girder_glue::use_bracket(game, pos, face) {
+        *canceled = true;
+        return;
+    }
     if valve_handle_click(game, pos) || super::create_crate_glue::right_click(game, pos) || super::create_detector_glue::right_click(game, pos, face) || super::create_bell_glue::right_click(game, pos, face) {
         *canceled = true;
         return;
@@ -1485,6 +1504,7 @@ pub(super) fn turntable_client_tick(game: &mut Game<'_>) {
         super::create_sequencer_glue::client_tick(game);
         super::create_detector_glue::client_tick(game);
         super::create_bell_glue::client_tick(game);
+        super::create_girder_glue::client_tick(game);
         super::create_cuckoo_glue::client_tick(game);
         super::create_sticker_glue::client_tick(game);
         super::create_redstone_glue::bells_client_tick(game);
@@ -1589,6 +1609,14 @@ fn wrench(game: &mut Game<'_>, pos: Pos, face: [i32; 3], sneaking: bool) -> bool
     let mode = game.native_acting_player().map_or(0, |p| p.game_mode);
     if mode == 2 || mode == 3 {
         return false;
+    }
+    if !sneaking {
+        if super::create_girder_glue::wrench_bracket(game, pos) {
+            return true;
+        }
+        if let Some(done) = super::create_girder_glue::wrench(game, pos) {
+            return done;
+        }
     }
     let name = block_name(game, pos);
     let kind = kind_at(game, pos);
@@ -2053,6 +2081,7 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
     let closing = matches!(phase, WorldPhase::WorldCloseFinal | WorldPhase::WorldCloseFailed);
     super::create_logistics::world_phase(closing);
     super::create_fluid_glue::world_phase(closing);
+    super::create_girder_glue::world_phase(closing);
     super::create_arms::world_phase(closing);
     super::create_contraptions::world_phase(closing);
     let mut guard = server();
@@ -2071,6 +2100,10 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
 
 /// `native_net_from_server`.
 pub(super) fn from_server(channel: &str, data: &[u8]) {
+    if channel == super::create_girder_glue::CHANNEL {
+        super::create_girder_glue::from_server(data);
+        return;
+    }
     if channel == super::create_sequencer_glue::CHANNEL {
         super::create_sequencer_glue::from_server(data);
         super::create_detector_glue::from_server(data);
@@ -2352,7 +2385,7 @@ fn parts(game: &Game<'_>, c: &mut Client, pos: Pos, view: View, time: f32) -> Ve
         }
         // The casing stays in the chunk mesh; KineticBlockEntityRenderer's
         // shaft turns inside it.
-        Kind::EncasedShaft(_, a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
+        Kind::EncasedShaft(_, a) | Kind::GirderShaft(a) => want.push(("create:hz_shaft", Some(("axis", a.name())), id, a, standard, 0.0)),
         // EncasedCogRenderer: the shaftless cog, and a shaft half each way it
         // has a shaft (a large cog's at the shaft's own offset).
         Kind::EncasedCog(_, large, a, ..) => {
@@ -2906,6 +2939,7 @@ fn draw_items(game: &Game<'_>, camera: glam::DVec3, out: &mut Vec<horizon_client
     super::create_crate_glue::draw(game, camera, out);
     super::create_detector_glue::draw(game, camera, out);
     super::create_bell_glue::draw(game, camera, render_time(), out);
+    super::create_girder_glue::draw(game, camera, out);
     super::create_logistics::draw_belts(game, camera, out);
     super::create_fluid_glue::draw(game, camera, out);
     super::create_arms::draw(game, camera, out);

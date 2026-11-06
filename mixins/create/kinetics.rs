@@ -260,6 +260,7 @@ impl Kind {
             }
             Kind::CrushingWheel(a) => Kind::CrushingWheel(turn_axis(a)),
             Kind::EncasedShaft(b, a) => Kind::EncasedShaft(b, turn_axis(a)),
+            Kind::GirderShaft(a) => Kind::GirderShaft(turn_axis(a)),
             Kind::Flywheel(a) => Kind::Flywheel(turn_axis(a)),
             // HorizontalAxisKineticBlock: only from above or below.
             Kind::SpeedController(a) if face.axis() == Axis::Y => {
@@ -349,6 +350,7 @@ impl Kind {
             | Kind::Flywheel(a)
             | Kind::SpeedController(a)
             | Kind::EncasedShaft(_, a)
+            | Kind::GirderShaft(a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::Gearbox(a)
@@ -586,6 +588,8 @@ pub enum Kind {
     ChainGearshift(super::create_chain::Chain, bool),
     /// `EncasedShaftBlock`: brass (or andesite) casing, its axis.
     EncasedShaft(bool, Axis),
+    /// `GirderEncasedShaftBlock`: its `HORIZONTAL_AXIS`.
+    GirderShaft(Axis),
     /// `EncasedCogwheelBlock`: brass, large, its axis, `TOP_SHAFT` (its
     /// positive side) and `BOTTOM_SHAFT`.
     EncasedCog(bool, bool, Axis, bool, bool),
@@ -623,6 +627,7 @@ impl Kind {
             }),
             "create:andesite_encased_shaft" => axis().map(|a| Kind::EncasedShaft(false, a)),
             "create:brass_encased_shaft" => axis().map(|a| Kind::EncasedShaft(true, a)),
+            "create:metal_girder_encased_shaft" => axis().map(Kind::GirderShaft),
             "create:andesite_encased_cogwheel"
             | "create:brass_encased_cogwheel"
             | "create:andesite_encased_large_cogwheel"
@@ -709,6 +714,7 @@ impl Kind {
             Kind::ChainGearshift(..) => "create:adjustable_chain_gearshift",
             Kind::EncasedShaft(false, _) => "create:andesite_encased_shaft",
             Kind::EncasedShaft(true, _) => "create:brass_encased_shaft",
+            Kind::GirderShaft(_) => "create:metal_girder_encased_shaft",
             Kind::EncasedCog(false, false, ..) => "create:andesite_encased_cogwheel",
             Kind::EncasedCog(true, false, ..) => "create:brass_encased_cogwheel",
             Kind::EncasedCog(false, true, ..) => "create:andesite_encased_large_cogwheel",
@@ -774,6 +780,7 @@ impl Kind {
             | Kind::Flywheel(a)
             | Kind::SpeedController(a)
             | Kind::EncasedShaft(_, a)
+            | Kind::GirderShaft(a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::Gearbox(a)
@@ -821,6 +828,7 @@ impl Kind {
             | Kind::Flywheel(a)
             | Kind::SpeedController(a)
             | Kind::EncasedShaft(_, a)
+            | Kind::GirderShaft(a)
             | Kind::Cogwheel(a)
             | Kind::LargeCogwheel(a)
             | Kind::SplitShaft(_, a, _)
@@ -2553,6 +2561,7 @@ fn kind_key(k: Kind) -> String {
         | Kind::Flywheel(a)
         | Kind::SpeedController(a)
         | Kind::EncasedShaft(_, a)
+        | Kind::GirderShaft(a)
         | Kind::Cogwheel(a)
         | Kind::LargeCogwheel(a)
         | Kind::Gearbox(a)
@@ -2824,6 +2833,7 @@ fn kind_code(k: Kind) -> (u8, u8) {
         Kind::MechanicalCrafter(d) => (27, dir(d)),
         Kind::CrushingWheel(a) => (28, axis(a)),
         Kind::EncasedShaft(b, a) => (29, axis(a) | u8::from(b) << 2),
+        Kind::GirderShaft(a) => (44, axis(a)),
         Kind::Flywheel(a) => (31, axis(a)),
         Kind::SpeedController(a) => (35, axis(a)),
         Kind::PoweredShaft(a) => (37, axis(a)),
@@ -2903,6 +2913,7 @@ fn kind_from_code(tag: u8, state: u8) -> Option<Kind> {
         32 => Kind::Turntable,
         33 => Kind::ChainDrive(chain_from_code(state)?),
         34 => Kind::ChainGearshift(chain_from_code(state)?, state & 32 != 0),
+        44 => Kind::GirderShaft(Axis::ALL.get(usize::from(state & 3)).copied()?),
         29 => Kind::EncasedShaft(
             state & 4 != 0,
             Axis::ALL.get(usize::from(state & 3)).copied()?,
@@ -3405,6 +3416,23 @@ mod tests {
             Kind::EncasedCog(false, false, Axis::Z, true, false).wrenched(Dir::Up),
             Kind::EncasedCog(false, false, Axis::X, false, true)
         );
+    }
+
+    #[test]
+    fn a_girder_encased_shaft_passes_rotation_along_its_axis() {
+        let g = Kind::GirderShaft(Axis::Z);
+        assert!(g.has_shaft_towards(Dir::North) && g.has_shaft_towards(Dir::South));
+        assert!(!g.has_shaft_towards(Dir::East) && !g.has_shaft_towards(Dir::Up));
+        assert_eq!(parse_kind_key(&kind_key(g)), Some(g));
+        let (tag, state) = kind_code(g);
+        assert_eq!(kind_from_code(tag, state), Some(g));
+        let mut r = Rig::new();
+        r.place([0, 64, 0], Kind::CreativeMotor(Dir::South));
+        r.place([0, 64, 1], Kind::GirderShaft(Axis::Z));
+        r.place([0, 64, 2], Kind::Shaft(Axis::Z));
+        r.ticks(2);
+        assert_eq!(r.speed([0, 64, 1]).abs(), 16.0);
+        assert_eq!(r.speed([0, 64, 2]).abs(), 16.0);
     }
 
     #[test]

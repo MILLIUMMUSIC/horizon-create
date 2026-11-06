@@ -256,6 +256,18 @@ name = "create_bell_glue"
 source = "bell_glue.rs"
 
 [[module]]
+id = "girder"
+file = "crates/horizon-client/src/game.rs"
+name = "create_girder"
+source = "girder.rs"
+
+[[module]]
+id = "girder_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_girder_glue"
+source = "girder_glue.rs"
+
+[[module]]
 id = "detector"
 file = "crates/horizon-client/src/game.rs"
 name = "create_detector"

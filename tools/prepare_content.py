@@ -1842,6 +1842,54 @@ def fit_small_blocks(content):
             {"facing": "north", "open": "false"},
             {"property": "facing", "values": {f: [box(*turned(b, opposite[f])) for b in hatch] for f in horizontals}})
     to_multipart("item_hatch")
+    # Metal girders: a chain's template and `axis`, with Create's own properties and
+    # `brace_*` (ConnectedGirderModel's side brackets) and `pole_up`, `pole_down`
+    # (GirderCTBehaviour, the vertical sheet of `girder_pole_side`) worked out by
+    # the native mod. No models or items of their own beyond those.
+    model_dir = content / "assets" / "create" / "models" / "block" / "metal_girder"
+    pole = read_json(model_dir / "block_pole.json")
+    for up in (False, True):
+        for down in (False, True):
+            variant = json.loads(json.dumps(pole))
+            variant["textures"]["2"] = "create:block/girder_pole_side_connected"
+            index = (1 if up else 0) + (2 if down else 0)
+            ox, oy = (index % 2) * 8, (index // 2) * 8
+            for side in ("north", "east", "south", "west"):
+                u0, v0, u1, v1 = variant["elements"][0]["faces"][side]["uv"]
+                variant["elements"][0]["faces"][side]["uv"] = [ox + u0 / 2, oy + v0 / 2, ox + u1 / 2, oy + v1 / 2]
+            write_json(model_dir / f"hz_pole_{index}.json", variant)
+    beam_x, beam_z = box(0, 2, 4, 16, 14, 12), box(4, 2, 0, 12, 14, 16)
+    girder_shapes = {"false,false": [box(4, 0, 4, 12, 16, 12)], "true,false": [beam_x], "false,true": [beam_z],
+                     "true,true": [box(3, 0, 3, 13, 16, 13), beam_x, beam_z]}
+    girder_props = {name: boolean for name in ("x", "z", "top", "bottom", "brace_north", "brace_south", "brace_west",
+                                               "brace_east", "pole_up", "pole_down")}
+    declare("metal_girder", girder_props, {name: "false" for name in girder_props},
+            {"properties": ["x", "z"], "values": girder_shapes})
+    girder_state = read_json(states / "metal_girder.json")
+    parts = [p for p in girder_state["multipart"] if p["apply"]["model"] != "create:block/metal_girder/block_pole"]
+    for up in (False, True):
+        for down in (False, True):
+            index = (1 if up else 0) + (2 if down else 0)
+            parts.append({"when": {"x": "false", "z": "false", "pole_up": str(up).lower(), "pole_down": str(down).lower()},
+                          "apply": {"model": f"create:block/metal_girder/hz_pole_{index}"}})
+    for side in ("north", "south", "west", "east"):
+        parts.append({"when": {f"brace_{side}": "true"}, "apply": {"model": f"create:block/metal_girder/bracket_{side}"}})
+    write_json(states / "metal_girder.json", {"multipart": parts})
+    pole_x, pole_z = box(0, 5, 5, 16, 11, 11), box(5, 5, 0, 11, 11, 16)
+    encased_decl = {"z": [beam_x, pole_z], "x": [beam_z, pole_x]}
+    declare("metal_girder_encased_shaft", {"top": boolean, "bottom": boolean}, {"top": "false", "bottom": "false"},
+            {"property": "axis", "values": {**encased_decl, "y": encased_decl["x"]}})
+    encased = read_json(blocks / "metal_girder_encased_shaft.json")
+    encased["item"] = False
+    write_json(blocks / "metal_girder_encased_shaft.json", encased)
+    # Brackets have no state of their own in the world: their blockstates are what
+    # the native mod draws on the shaft or pipe holding one.
+    for name in ("metal_bracket", "wooden_bracket"):
+        declare(name, {"facing": {"type": "enum", "values": list(FACINGS)},
+                       "axis_along_first": boolean,
+                       "type": {"type": "enum", "values": ["pipe", "cog", "shaft"]}},
+                {"facing": "up", "axis_along_first": "false", "type": "shaft"}, {"default": []})
+        to_multipart(name)
     # The peculiar and haunted bells (AbstractBellBlock), their shapes by facing
     # and attachment; the bell itself is a part the native mod swings.
     bell_body = (3, 1, 3, 13, 13, 13)

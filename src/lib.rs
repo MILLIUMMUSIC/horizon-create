@@ -42,6 +42,8 @@ pub mod create_fluids;
 pub mod create_funnel;
 #[path = "../mixins/create/gauge.rs"]
 pub mod create_gauge;
+#[path = "../mixins/create/girder.rs"]
+pub mod create_girder;
 #[path = "../mixins/create/hose.rs"]
 pub mod create_hose;
 #[path = "../mixins/create/kinetics.rs"]

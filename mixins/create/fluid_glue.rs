@@ -159,7 +159,7 @@ fn pending() -> MutexGuard<'static, Vec<(String, Pos, bool)>> {
 
 /// Blocks of ours outside the kinetics (the pump is a kinetic block).
 pub(super) fn is_ours(name: &str) -> bool {
-    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || name == super::create_whistle_glue::WHISTLE || name == super::create_whistle_glue::EXTENSION || name == super::create_sticker_glue::BLOCK || name == super::create_crate_glue::CRATE || name == super::create_crate_glue::HATCH || super::create_detector_glue::is_ours(name) || is_tank_block(name)
+    name == PIPE || name == GLASS || name == ENCASED || name == SMART || name == super::create_engine_glue::ENGINE || name == super::create_whistle_glue::WHISTLE || name == super::create_whistle_glue::EXTENSION || name == super::create_sticker_glue::BLOCK || name == super::create_crate_glue::CRATE || name == super::create_crate_glue::HATCH || super::create_detector_glue::is_ours(name) || name == super::create_girder_glue::GIRDER || is_tank_block(name)
 }
 
 pub(super) fn is_tank_block(name: &str) -> bool {
@@ -622,6 +622,12 @@ pub(super) fn pipe_neighbour(level: &super::GameLevel<'_>, pos: Pos, d: Dir) -> 
         return N::Other;
     };
     match s.name.as_str() {
+        // canConnectTo: a pipe with a bracket stays as it is, joined only along it.
+        PIPE if super::create_girder_glue::bracket_at(super::create_glue::level_dimension_id(level.dimension), p).is_some()
+            && super::create_fluids::PipeBlock::Pipe(pipe_sides(&s.properties)).straight_axis() != Some(d.axis()) =>
+        {
+            N::Other
+        }
         PIPE => N::Pipe,
         PUMP => s.properties.get("facing").and_then(|f| Dir::parse(f)).map_or(N::Other, N::Pump),
         ENCASED => N::Encased(encased_sides(&s.properties)[d.opposite() as usize]),
@@ -670,6 +676,10 @@ pub(super) fn pipe_update_shape(
         return with_attachments(level, state, pos);
     }
     if s.name != PIPE {
+        return None;
+    }
+    // updateBlockState: a bracket holds a pipe as it is.
+    if super::create_girder_glue::bracket_at(super::create_glue::level_dimension_id(level.dimension), pos).is_some() {
         return None;
     }
     let open = super::create_fluids::update_pipe(pipe_sides(&s.properties), direction, Some(direction.opposite()), |d| {
@@ -1565,6 +1575,30 @@ pub(super) fn inbound_flows(game: &Game<'_>, pos: Pos) -> Option<Vec<FluidStack>
             .map(|f| f.fluid.clone())
             .collect(),
     )
+}
+
+/// What can hold a bracket among pipes (`FluidPipeBlockEntity`, not encased, and
+/// `StraightPipeBlockEntity`): `getStraightPipeAxis`.
+pub(super) fn bracket_pipe_axis(game: &Game<'_>, pos: Pos) -> Option<Option<Axis>> {
+    let name = block_state(game, pos)?.name.clone();
+    if name != PIPE && name != GLASS {
+        return None;
+    }
+    Some(pipe_block(game, pos)?.straight_axis())
+}
+
+/// `tryRemoveBracket` on a fluid pipe: it joins what is around it again.
+pub(super) fn pipe_after_bracket(game: &mut Game<'_>, pos: Pos) {
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    let Some(s) = block_state(game, pos).filter(|s| s.name == PIPE) else {
+        return;
+    };
+    let preferred = super::create_fluids::PipeBlock::Pipe(pipe_sides(&s.properties)).straight_axis().map_or(Dir::Up, Dir::positive_of);
+    let next = game.with_level(|_, level, _| pipe_update_shape(level, id, pos, preferred));
+    if let Some(next) = next.filter(|n| *n != id) {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, next, super::native_hooks::flags::UPDATE_ALL);
+    }
 }
 
 /// What keeps a `FluidTransportBehaviour`, by its block's name.

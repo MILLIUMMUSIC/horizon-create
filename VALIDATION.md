@@ -1,5 +1,23 @@
 # Validation
 
+## Metal girders and brackets (macOS, offscreen)
+
+On pin `cc5f7ff`, with a content mod rebuilt by that pin's `horizon-port-pack`, in creative:
+
+- A girder placed on the floor is a pole; one clicked with a girder grew a pole above it, the two showing `pole_up` and
+  `pole_down`. One placed against a stone's side is a beam along that axis with `brace_west`, and three clicks extended it.
+- A shaft used on a beam made it `metal_girder_encased_shaft[axis=z]`. With a creative motor on one side it turned at 16
+  and passed 16 to a shaft on the other (saved kinetics). The wrench made it a beam again, and on a beam toggled `bottom`.
+- A metal bracket clicked onto the top of a shaft above a beam set the beam's `top`. A wooden one on a straight copper
+  pipe held it (no `east` connection when a pipe was set beside it).
+- Brackets are in `create_brackets_*.txt` after quitting. One still there after a reload dropped as an item when its
+  shaft was removed, and its line went.
+- Screenshots show poles, a beam with its wall bracket, the crossing, the encased shaft and the brackets drawn.
+
+Not tried: a beam joining another across, a cross's `axis` after the wrench, the wrench's outline, a pair toggled together,
+the extension's 12-block limit, cogwheels with brackets, taking a bracket off with the wrench, survival's costs and
+returned items, LAN guests, sounds (no audio), recipes. Create's classes were not read again for this check.
+
 ## Horizon pin moved to cc5f7ff (macOS, offscreen)
 
 The port builds against Horizon main `cc5f7ff` (2026-11-06) and horizon-mixins `ddd9700` with every mixin applied

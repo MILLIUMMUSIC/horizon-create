@@ -70,7 +70,8 @@ Channels: `create:kinetics` (format K3: speeds, sources, stress, `aux`),
 then turning bearings' angles and blocks, then running rope pulleys' lengths and loads, then moving gantries),
 `create:chassis` (client → server: a chassis' range scrolled with the wrench),
 `create:screens` (S1, T1: the server tells a client to open a screen of Create's own: sequenced gearshift, threshold switch),
-`create:outlines` (O1: an outline for a player's client, `outline.rs`, `glue::send_outline`).
+`create:outlines` (O1: an outline for a player's client, `outline.rs`, `glue::send_outline`),
+`create:brackets` (B1: the brackets of the player's dimension, `girder_glue.rs`).
 
 Contraptions: `contraption.rs` (rules: structure search, `PistonContraption`,
 the linear actuator) and `contraptions.rs` (Horizon's side: blocks taken out
