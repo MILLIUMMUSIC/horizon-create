@@ -231,7 +231,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
      the client between updates. Punching, a mob in the block in front takes the fist's 1 plus the held item's
      attack damage (`player.attack`, through Horizon's mob hooks; no armour, knockback, enchantments or tool wear,
      its drops falling where it dies). Not yet: other item uses and blocks' own uses, using items on entities
-     (feeding, shearing), fist bumps, sandpaper polishing and sequenced assembly, the
+     (feeding, shearing), fist bumps, sandpaper polishing, the
      crafting remainder of a damaged tool, hoppers into it (no block entity), sounds and particles. The goggles show its mode and held item with its count above the kinetic lines (`DeployerBlockEntity.addToGoggleTooltip`).
    Part 3, brass funnel and belt tunnels (**a brass tunnel on a belt with two depots beside it was run in the game: its cross shape, flaps and the distribution to both depots; the brass funnel and the rest are compiled and unit-tested only**; VALIDATION.md
    lists the in-game checks):
@@ -468,7 +468,7 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    Horizon has, a glass bottle with water into a water bottle, an empty bucket into a water or lava bucket), the
    result held as `convertToAndLeaveHeld`; the tank's fluid, the stream and the nozzle's three bits squeezing as
    `SpoutRenderer` draws them. Not yet: `BlockSpoutingBehaviour` (filling blocks below: other mods' only),
-   sequenced assembly's filling steps, potion and tea fluids (no fluid in Horizon), the food advancements, spouts on contraptions. Comparators read its fill (`levelOfSmartFluidTank`). Its splash (20 particles) and the falling
+   potion and tea fluids (no fluid in Horizon), the food advancements, spouts on contraptions. Comparators read its fill (`levelOfSmartFluidTank`). Its splash (20 particles) and the falling
    particles while it pours are sent from the server; Create's `FluidParticleData` draws the fluid's texture, which
    Horizon's particles can't, so the fluid block's own particle stands in (decision: the closest Create look).
    The mechanical crafter (`crafter.rs`, `crafter_glue.rs`: `MechanicalCrafterBlock`, `MechanicalCrafterBlockEntity`,
@@ -555,6 +555,8 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
    tag only differs for a valve left turning); a guest's wrench on a corner pipe counts as a click in the middle, as the
    native hook has no click point for them. Not yet: the casing's connected textures on encased pipes, waterlogging of
    these blocks, the `GLASS_PIPE` advancement.
+
+   Sequenced assembly (`sequenced.rs`, `sequenced_glue.rs`): `create:sequenced_assembly` recipes read with their steps (a recipe with a step of another type, or a fluid Horizon doesn't have, is left out). An item's step and progress are its own `create:sequenced_assembly` component, registered through `native_component_types`, so they are saved and travel with the stack. A press, a deployer, a saw and a spout each ask first whether the item's next step is theirs (`SequencedAssemblyRecipe.getRecipe`), and the step's result is the item advanced (`advance`, `enforceNextResult`): the transitional item with its step, or at the end one of the results by weight (`rollResult`). The transitional items don't stack (`SequencedAssemblyItem`, `max_stack_size` 1), show `getBarWidth`'s and `getBarColor`'s bar through `native_item_bar`, and `addToTooltip`'s lines through `native_tooltip`. `create:track` and `create:controls` are declared as plain items by `prepare_content.py` (horizon-port-pack leaves their blocks out), so the track recipe has its result and quests can ask for them: they place nothing until trains. Not yet: the sequence shown in a recipe viewer, the advancements.
 
    Metal girders and brackets (`girder.rs`, `girder_glue.rs`, `Kind::GirderShaft`, `create:brackets`): a girder placed on a block's top or bottom is a pole and on its side a beam along that axis (`getStateForPlacement`), joining what is around it (`updateState`, `updateShape`, `isConnected`). A girder in hand on a girder extends it up to 12 blocks (`GirderPlacementHelper`), a shaft on one encases it (`GirderEncasedShaftBlock`, a kinetic block whose shaft turns inside), and the wrench takes that shaft back or toggles a beam's top or bottom, alone or with the girder beside it (`GirderWrenchBehavior`, its outline shown). Metal and wooden brackets go on shafts, cogwheels and straight pipes (`BracketBlockItem`, `BracketedBlockEntityBehaviour`): they are kept in `girder_glue.rs` and saved in `data/create_brackets_*.txt`, not block entity data, drawn from their own blockstate, taken off with the wrench, dropped when the block holding them changes, and a bracket holds its pipe as it is. A girder joins a bracket on the next block that faces away from it (`isFacingBracket`). Decision: `brace_*` (`ConnectedGirderModel`'s side brackets) and `pole_up`, `pole_down` (`GirderCTBehaviour`, picked from `girder_pole_side_connected`) are properties of the block, worked out by the native mod, as no model data reaches a baked block. Not yet: attaching to nixie tubes, placards and flap displays (not ported, so never seen), brackets moved on contraptions.
 

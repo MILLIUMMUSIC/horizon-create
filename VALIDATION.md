@@ -1,5 +1,24 @@
 # Validation
 
+## Sequenced assembly (macOS, offscreen)
+
+On pin `cc5f7ff`, on a flat belt with a creative motor at 16 and machines over it, each with its own motor:
+
+- Two deployers holding iron nuggets, then a press: a stone slab came off the end as `create:track` (track's recipe).
+- A spout given lava in its data, then two presses: powdered obsidian came off as `create:sturdy_sheet`.
+- With the second deployer and the press taken away, slabs came off as `create:incomplete_track`, carrying
+  `{id:"create:sequenced_assembly.track",progress:0.33333334f,step:1}`; three of them in three slots, not stacked.
+- Its tooltip reads "Recipe Sequence", "Progress: 1/3", "Next: Deploy Iron Nugget", "-> Process in Press", in their
+  colours, and the slot draws its bar.
+- After quitting and reloading it kept the component; dropped on the restored line it came off as `create:track`.
+- `/give` knows `create:track` and `create:controls`.
+
+Not tried: the precision mechanism's 5 loops and its weighted junk results, a `create:cutting` step (no recipe of
+Create's has one: only a pack's), a depot instead of a belt, a held item with `keep_held_item`, a LAN guest, the items
+in a survival crafting chain, the bar's colours exactly. Unit tests cover loops and weights. The rules follow Create
+6.0.10 as ported from what is known of its classes; of the jar, method names and the bar's constants were read here
+from the class files (no JVM on this machine).
+
 ## Compacting with the press (macOS, offscreen)
 
 On pin `cc5f7ff`, each press over a basin with a creative motor at 16, items thrown into the basin, results read by

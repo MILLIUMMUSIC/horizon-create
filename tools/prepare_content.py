@@ -469,6 +469,16 @@ def carry(jar, resources, port_pack, work):
 
 
 def fit(content):
+    # SequencedAssemblyItem: `stacksTo(1)`, each carrying its own step.
+    for name in ("incomplete_precision_mechanism", "incomplete_track", "unprocessed_obsidian_sheet"):
+        path = content / "data" / "create" / "horizon" / "item" / f"{name}.json"
+        decl = read_json(path)
+        decl["max_stack_size"] = 1
+        write_json(path, decl)
+    # Trains can't run yet (docs/PLAN.md, milestone 6), so horizon-port-pack leaves these
+    # blocks out; as plain items, a sequenced assembly's result and recipes can name them.
+    for name in ("track", "controls"):
+        write_json(content / "data" / "create" / "horizon" / "item" / f"{name}.json", {"template": "minecraft:stick"})
     blocks = content / "data" / "create" / "horizon" / "block"
     states = content / "assets" / "create" / "blockstates"
     models = content / "assets" / "create" / "models" / "block"

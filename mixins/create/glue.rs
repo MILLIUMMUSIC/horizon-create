@@ -2085,6 +2085,7 @@ pub(super) fn world_phase(phase: super::native_lifecycle::WorldPhase) {
     super::create_logistics::world_phase(closing);
     super::create_fluid_glue::world_phase(closing);
     super::create_girder_glue::world_phase(closing);
+    super::create_sequenced_glue::world_phase();
     super::create_arms::world_phase(closing);
     super::create_contraptions::world_phase(closing);
     let mut guard = server();

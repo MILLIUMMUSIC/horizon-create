@@ -256,6 +256,18 @@ name = "create_bell_glue"
 source = "bell_glue.rs"
 
 [[module]]
+id = "sequenced"
+file = "crates/horizon-client/src/game.rs"
+name = "create_sequenced"
+source = "sequenced.rs"
+
+[[module]]
+id = "sequenced_glue"
+file = "crates/horizon-client/src/game.rs"
+name = "create_sequenced_glue"
+source = "sequenced_glue.rs"
+
+[[module]]
 id = "girder"
 file = "crates/horizon-client/src/game.rs"
 name = "create_girder"
@@ -499,6 +511,36 @@ bindings = [
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "face", ty = "[i32; 3]", value = "face" },
   { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
+]
+
+[[injection]]
+id = "component-types"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_component_types"
+helper = "component_types.rs"
+bindings = [
+  { name = "types", ty = "&mut Vec<String>", value = "&mut *types" },
+]
+
+[[injection]]
+id = "item-bar"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_item_bar"
+helper = "item_bar.rs"
+bindings = [
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "bar", ty = "&mut Option<(i32, u32)>", value = "&mut *bar" },
+]
+
+[[injection]]
+id = "item-tooltip"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_tooltip"
+helper = "item_tooltip.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "lines", ty = "&mut Vec<(horizon_client::text::Text, u32)>", value = "&mut *lines" },
 ]
 
 [[injection]]

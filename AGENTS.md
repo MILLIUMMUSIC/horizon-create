@@ -109,6 +109,9 @@ Boiler and steam engine: rules in `boiler.rs`, Horizon's side in `engine_glue.rs
 Weighted ejector: rules in `ejector.rs`, Horizon's side in `ejector_glue.rs`; its depot slots, state and flying items
 are in its block entity, sent in `create:depots` with its lid (`client_view`).
 
+Sequenced assembly: rules in `sequenced.rs`, Horizon's side in `sequenced_glue.rs`; press, deployer, saw and spout ask
+it before their own recipes, and an item's step is its `create:sequenced_assembly` component.
+
 Recipes: `prepare_content.py` flattens subfolders (`pressing/x` →
 `pressing.x`, Horizon reads only the top folder); `machines.rs` reads
 `game.recipes()` directly (`find_recipe`), because Horizon's recipe helpers

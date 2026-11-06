@@ -128,12 +128,17 @@ fn spout_at(game: &Game<'_>, pos: Pos) -> Option<(FluidTank, i32)> {
 /// `FillingBySpout.canItemBeFilled`: a filling recipe takes it (whatever
 /// fluid), or `GenericItemFilling` can.
 fn can_be_filled(game: &Game<'_>, stack: &ItemStack) -> bool {
-    filling_recipes(game).iter().any(|(_, i)| i.test(stack)) || generic_can_fill(&stack.item)
+    super::create_sequenced_glue::is_step(game, stack, super::create_sequenced::StepKind::Filling)
+        || filling_recipes(game).iter().any(|(_, i)| i.test(stack))
+        || generic_can_fill(&stack.item)
 }
 
 /// `FillingBySpout.getRequiredAmountForItem`: the first recipe for the item
 /// whose fluid ingredient takes the tank's fluid, else the generic amount.
 fn required_amount(game: &Game<'_>, stack: &ItemStack, fluid: &FluidStack) -> Option<i32> {
+    if let Some(amount) = super::create_sequenced_glue::filling_amount(game, stack, fluid) {
+        return Some(amount);
+    }
     for (r, i) in filling_recipes(game).iter() {
         let f = &r.fluid_ingredients[0];
         if i.test(stack) && !fluid.is_empty() && f.fluids.contains(&fluid.fluid) {
@@ -147,6 +152,9 @@ fn required_amount(game: &Game<'_>, stack: &ItemStack, fluid: &FluidStack) -> Op
 /// `required` of `fluid` (a recipe's first result, or the generic fill).
 fn fill_item(game: &Game<'_>, required: i32, stack: &ItemStack, fluid: &FluidStack) -> Option<ItemStack> {
     let to_fill = fluid.with_amount(required);
+    if let Some(result) = super::create_sequenced_glue::filled(game, stack, &to_fill) {
+        return result;
+    }
     for (r, i) in filling_recipes(game).iter() {
         if i.test(stack) && r.fluid_ingredients[0].test(&to_fill) {
             return super::create_machines::roll_recipe(&r.as_recipe()).into_iter().next();

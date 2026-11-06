@@ -15,6 +15,7 @@ use super::create_fan::{
     transported_step,
 };
 use super::create_kinetics::{Axis, Dir, Kind, Pos};
+use super::create_sequenced::StepKind;
 use super::create_processing::{
     BASIN_SLOTS, BasinRecipe, MixStep, PRESS_CYCLE, PressMode, PressStep, Recipe,
     apply_processing_on, basin_insert_slot, basin_take, basin_take_fluids, ingredient_json, millstone_speed,
@@ -909,6 +910,20 @@ fn depot_tick(game: &mut Game<'_>, pos: Pos, entity: &mut ModBlockEntity) {
     note_depot(game, pos, &entity.items);
 }
 
+/// `MechanicalPressBlockEntity.getRecipe`: a step of sequenced assembly, or a pressing recipe.
+fn can_press(game: &Game<'_>, stack: &ItemStack) -> bool {
+    super::create_sequenced_glue::is_step(game, stack, StepKind::Pressing) || find_recipe(game, "create:pressing", stack).is_some()
+}
+
+/// What one item of `stack` becomes under a press.
+fn pressed(game: &Game<'_>, stack: &ItemStack) -> Option<Vec<ItemStack>> {
+    if let Some(results) = super::create_sequenced_glue::advance(game, stack, StepKind::Pressing) {
+        return Some(results);
+    }
+    let recipe = find_recipe(game, "create:pressing", stack)?;
+    Some(with_remainder(game, &stack.item, roll(&recipe)))
+}
+
 /// The press at `press_pos`: its speed and pressing state.
 fn press_at(game: &Game<'_>, press_pos: Pos) -> Option<(f32, super::create_processing::Pressing)> {
     super::create_glue::with_kinetics(game, |k, level| {
@@ -926,7 +941,7 @@ pub(super) fn press_received(game: &Game<'_>, press_pos: Pos, held: &ItemStack) 
         false
     } else if pressing.running {
         true
-    } else if find_recipe(game, "create:pressing", held).is_some() {
+    } else if can_press(game, held) {
         super::create_glue::with_kinetics(game, |k, _| {
             if let Some(p) = k.pressing_mut(press_pos) {
                 p.start(PressMode::Belt);
@@ -953,10 +968,9 @@ pub(super) fn press_held(game: &Game<'_>, press_pos: Pos, held: &ItemStack) -> O
     if pressing.running_ticks != PRESS_CYCLE / 2 {
         return Some((true, None));
     }
-    let Some(recipe) = find_recipe(game, "create:pressing", held) else {
+    let Some(results) = pressed(game, held) else {
         return Some((false, None));
     };
-    let results = with_remainder(game, &held.item, roll(&recipe));
     let left = (held.count > 1).then(|| {
         let mut l = held.clone();
         l.count -= 1;
@@ -1271,6 +1285,19 @@ fn filtered(recipes: Vec<Recipe>, filter: Option<&str>) -> Vec<Recipe> {
     }
 }
 
+/// `SawBlockEntity.getRecipes`: a step of sequenced assembly if its result passes the
+/// filter, else the cutting recipes.
+fn saw_recipes(game: &Game<'_>, entity: &ModBlockEntity, input: &ItemStack) -> Vec<Recipe> {
+    let filter = saw_filter(entity);
+    let assembly = super::create_sequenced_glue::cutting(game, input).into_iter().collect();
+    let assembly = filtered(assembly, filter.as_deref());
+    if assembly.is_empty() {
+        filtered(find_recipes(game, "create:cutting", input), filter.as_deref())
+    } else {
+        assembly
+    }
+}
+
 fn saw_reset(entity: &mut ModBlockEntity) {
     put_float(&mut entity.nbt, "ProcessingTime", -1.0);
     put_float(&mut entity.nbt, "RecipeTime", 0.0);
@@ -1283,7 +1310,7 @@ fn saw_start(game: &Game<'_>, entity: &mut ModBlockEntity) {
     let Some(input) = entity.items[0].clone() else {
         return;
     };
-    let recipes = filtered(find_recipes(game, "create:cutting", &input), saw_filter(entity).as_deref());
+    let recipes = saw_recipes(game, entity, &input);
     put_bool(&mut entity.nbt, "AppliedRecipe", false);
     if recipes.is_empty() {
         put_float(&mut entity.nbt, "ProcessingTime", 10.0);
@@ -1306,7 +1333,7 @@ fn saw_apply(game: &Game<'_>, entity: &mut ModBlockEntity) {
     let Some(input) = entity.items[0].clone() else {
         return;
     };
-    let recipes = filtered(find_recipes(game, "create:cutting", &input), saw_filter(entity).as_deref());
+    let recipes = saw_recipes(game, entity, &input);
     if recipes.is_empty() {
         return;
     }
@@ -1327,8 +1354,14 @@ fn saw_apply(game: &Game<'_>, entity: &mut ModBlockEntity) {
             list.push(stack);
         }
     };
+    let assembly = super::create_sequenced_glue::cutting(game, &input).is_some();
     for _ in 0..input.count {
-        for out in roll(recipe) {
+        let outs = if assembly {
+            super::create_sequenced_glue::advance(game, &input, StepKind::Cutting).unwrap_or_default()
+        } else {
+            roll(recipe)
+        };
+        for out in outs {
             add(&mut list, out);
         }
     }
@@ -1391,7 +1424,7 @@ pub(super) fn press_world_step(game: &mut Game<'_>, pos: Pos, step: PressStep, m
             }
             let found = items_below(game, pos)
                 .into_iter()
-                .any(|i| find_recipe(game, "create:pressing", &game.dropped[i].stack).is_some());
+                .any(|i| can_press(game, &game.dropped[i].stack));
             if found {
                 super::create_glue::with_kinetics(game, |k, _| {
                     if let Some(p) = k.pressing_mut(pos) {
@@ -1408,11 +1441,10 @@ pub(super) fn press_world_step(game: &mut Game<'_>, pos: Pos, step: PressStep, m
                     }
                 });
                 let stack = game.dropped[i].stack.clone();
-                let Some(recipe) = find_recipe(game, "create:pressing", &stack) else {
+                let Some(results) = pressed(game, &stack) else {
                     continue;
                 };
                 let at = game.dropped[i].position;
-                let results = with_remainder(game, &stack.item, roll(&recipe));
                 if stack.count == 1 {
                     // RecipeApplier.applyRecipeOn(itemEntity): it becomes the
                     // first result, the others drop beside it.

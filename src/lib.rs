@@ -60,6 +60,8 @@ pub mod create_processing;
 pub mod create_redstone;
 #[path = "../mixins/create/saw.rs"]
 pub mod create_saw;
+#[path = "../mixins/create/sequenced.rs"]
+pub mod create_sequenced;
 #[path = "../mixins/create/sequencer.rs"]
 pub mod create_sequencer;
 #[path = "../mixins/create/sounds.rs"]

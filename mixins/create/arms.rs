@@ -2609,6 +2609,9 @@ fn find_deploying(
     target: &ItemStack,
     held: &ItemStack,
 ) -> Option<DeployingRecipe> {
+    if let Some(step) = super::create_sequenced_glue::deploying(game, target, held) {
+        return Some(step);
+    }
     deploying_recipes(game)
         .iter()
         .find(|(_, t, h)| {
@@ -2714,6 +2717,7 @@ pub(super) fn deployer_held(
         }
         HeldStep::Apply => {
             let recipe = recipe?;
+            let assembly = held.as_ref().and_then(|h| super::create_sequenced_glue::deployed(game, item, h));
             let results: Vec<ItemStack> = {
                 let mut guard = state();
                 let s = guard.get_or_insert_with(Arms::default);
@@ -2728,7 +2732,10 @@ pub(super) fn deployer_held(
                 .map(|(id, count)| ItemStack::new(&id, count))
                 .collect()
             };
-            let results = super::create_machines::with_remainder(game, &item.item, results);
+            let results = match assembly {
+                Some(results) => results,
+                None => super::create_machines::with_remainder(game, &item.item, results),
+            };
             let left = (item.count > 1).then(|| with_count(item, item.count - 1));
             // The held item is used (`keep_held_item`, damage, or one less).
             let held_stack = held?;
