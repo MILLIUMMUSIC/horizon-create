@@ -1,8 +1,8 @@
 {
-  "horizon_revision": "674948d0826adfd2807f8dd7b57a9ef9c4f19c09",
+  "horizon_revision": "cc5f7ff23901c104fcdd3f11c9c1ee4e47d557dd",
   "source_sha256": {
-    "crates/horizon-client/src/game.rs": "ca3e4868868d40a7f610d996098b662947bae0ba208ab374efdeafcf97c64caf",
-    "crates/horizon-client/src/game/native_hooks.rs": "ebdacd725862572d04f595f0b8020f33f18f1d1785beaade306ca6c01d90b53b",
+    "crates/horizon-client/src/game.rs": "4364a189255d79312cf3f21f0c5f452c005a0611dbb7e160b3da241d63c0851b",
+    "crates/horizon-client/src/game/native_hooks.rs": "60e432ce46682aefce7c92d844ccbc3a8e872645f187ef1eba7c5bd724ba542a",
     "crates/horizon-client/src/game/transient_blocks.rs": "4d888a3bc6bc2d2f9eff080878ac40ffa35083f6fccc04f0e7cbddb8beb92116"
   },
   "horizon_repository": "https://github.com/horizon-rust/horizon",

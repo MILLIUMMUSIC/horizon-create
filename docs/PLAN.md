@@ -407,16 +407,18 @@ Registrate (registration). Horizon is Minecraft 26.3 in Rust: no JVM, so every l
       the item handler), the deployer's pole and hand drawn on a moving structure, schematics. The deployer's filter works (`DeployerItemHandler.isItemValid`, a held item it doesn't take goes to the overflow, a taken held item isn't extracted; set by a click on a side face with the item, saved with its state) and is drawn on its two filter sides (`DeployerFilterSlot`'s item, without the value box's frame).
    5. Minecart contraptions (cart assembler): **blocked on the engine**, not done: they need mod entities riding
       vanilla carts and a moving group of blocks bound to an entity; upstream: horizon-rust/horizon#5556 (fake
-      players, mod entity types, moving groups of blocks, open) and #5212 / #6300 (mod entity types from code, open).
-6. **Trains**: track graph, signals, stations, schedules. **Blocked on the engine** (checked 2026-11-04): a carriage
+      players, mod entity types, moving groups of blocks, open). #5212 is closed for thrown entity types only;
+      #6300 (blocks, items and block entity types from code) is closed too.
+6. **Trains**: track graph, signals, stations, schedules. **Blocked on the engine** (checked 2026-11-06): a carriage
    is a contraption entity that runs on tracks across chunks with its own collision and bogeys that follow curved
-   track blocks, and trains need mod entity types (#5556, #5212, #6300, all open), curved track shapes keyed by
-   more than a template's properties (#5550, open); the station and schedule screens could use the pin's
-   `native_screen*` hooks (found 2026-11-04, see below). Not started; the
-   track graph and signal rules could be written as pure modules but nothing of them could be seen or used without
-   the carriage entity, so they wait for it.
-7. **Everything else**: Ponder scenes (an offscreen scene renderer and a free-cursor screen: the pin has
-   `native_screen*` hooks, but no scene renderer; treated as engine-blocked until one exists, no issue), schematics
+   track blocks, and trains need moving groups of blocks and mod entity types beyond thrown ones (#5556, open;
+   #5212 was closed for thrown types only, and the carrier entities of #9230 were closed unmerged). Closed since the
+   last check, not yet tried for tracks: #5550 (`render_shape`, `occludes`), #6300 (types from code). On the pin and
+   not used yet: `native_force_chunk` (#9226, chunk tickets); the station and schedule screens could use the
+   `native_screen*` hooks. Not started; the track graph and signal rules could be written as pure modules but nothing
+   of them could be seen or used without the carriage entity, so they wait for it.
+7. **Everything else**: Ponder scenes (a free-cursor screen through `native_screen*`; the pin now has
+   `native_draw_scene`, #9229, for block scenes in a screen, not tried yet), schematics
    and the schematicannon (screens through `native_screen*`, to be looked at), decoration
    sets, Create's compatibility with other mods (**blocked on the engine**: no shared capabilities, #1040 for item
    storage only, nothing for fluids or energy). The rest of this milestone is ported item by item below; what is
@@ -686,6 +688,19 @@ Decision (2026-11-03, revised the same day at the user's request): the pin moved
 `674948d` (2026-11-03) and horizon-mixins `ddd9700`; every mixin applied unchanged (one API change: `Ingredient` is a
 struct, `.order` for its listed items). The workarounds the closed issues above replace are reworked onto the new
 hooks before the remaining "Not yet" items are ported.
+
+Decision (2026-11-06): the pin moved to Horizon main `cc5f7ff` (2026-11-06), about 4000 commits on; horizon-mixins
+stays at `ddd9700`. Every mixin applied unchanged and no port code had to change. `cc5f7ff` is the commit before #10304:
+that merge left `raids.rs` calling `mob_to_nbt` with its old arguments, so main didn't build until a later fix.
+
+On the new pin and not used yet (each may replace a workaround or a "Not yet" above; none is tried): `destroy_block`,
+`set_break_progress` and `use_as_player` (#9223: drills, saws, harvesters, deployers using items), `native_draw_text`,
+`BlockEntityDraw::spin` and `native_block_face_sprite` (#9228: display boards, shafts turning without a call per frame,
+copycats), `native_draw_scene` (#9229: Ponder), `native_fluid_flow` and a mod's own fluids in tanks (#9227; still no
+source or flowing blocks or buckets of them), `native_force_chunk` (#9226), `native_container_accepts` (#9225: a
+millstone taking only what it has a recipe for), `native_world_submit` and `native_world_primitives` (#9661, #9568:
+value box text and outlines), `native_layer_definitions` (#10435: entity model layers from code), and #9221 lists the
+API another Create port (TheLion102009's) asked for. Still open: #5548, #5553, #5556, #6301, #7488.
 
 
 - A mod-drawn screen outside a container menu, with a free cursor: Create 6's value settings board (hold right

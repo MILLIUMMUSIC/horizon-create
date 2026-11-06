@@ -1,5 +1,22 @@
 # Validation
 
+## Horizon pin moved to cc5f7ff (macOS, offscreen)
+
+The port builds against Horizon main `cc5f7ff` (2026-11-06) and horizon-mixins `ddd9700` with every mixin applied
+unchanged; `tools/horizon.py check` and `build` pass, with the content mod and the prepared resources of the earlier
+pin (not rebuilt). Run on a copy of the rigs' world:
+
+- It loads with no panic and draws; the kinetics' saved block list is the same after a save, and a reload loads it.
+- A press over a depot made an iron sheet from an ingot, before and after the reload, also on a rig built by `setblock`.
+- A mixer over a basin made 2 andesite alloy from andesite and nuggets.
+- A flat belt laid between two shafts with the connector carried a cobblestone to its far end and dropped it.
+- A mechanical piston with two poles and a gold block ran as a contraption and placed the block when its motor went.
+- Holding a haunted bell draws its souls; they go once it's put away.
+
+Not repeated on this pin: arms, deployers, funnels, tunnels and chutes, fluids (pipes, pumps, tanks), bearings, pulleys
+and gantries, drills and other actors, crafters, redstone blocks, screens, sounds (the game ran without audio), LAN
+guests. Earlier sections were made on earlier pins.
+
 ## Horizon pin moved to 674948d (macOS, offscreen)
 
 The port builds against Horizon main `674948d` (2026-11-03) and horizon-mixins `ddd9700` with every mixin applied
